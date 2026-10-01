@@ -1,37 +1,33 @@
-name: Build & Publish Binaries
+name: Build Binaries (Nuitka)
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
-    inputs:
-      publish_pypi:
-        description: "Also publish to PyPI"
-        type: boolean
-        default: false
 
 permissions:
   contents: write
-  id-token: write
 
 jobs:
   build:
     name: Build (${{ matrix.os }})
     strategy:
       fail-fast: false
+      max-parallel: 5
       matrix:
         include:
-          - os: macos-latest          # Apple Silicon
+          - os: macos-latest
             target: macos-arm64
-          - os: macos-13              # Intel Mac
+          - os: macos-13
             target: macos-x64
-          - os: ubuntu-latest         # Linux x86_64
+          - os: ubuntu-latest
             target: linux-x64
-          - os: ubuntu-24.04-arm      # Linux ARM64
+          - os: ubuntu-24.04-arm
             target: linux-arm64
-          - os: windows-latest        # Windows x64
+          - os: windows-latest
             target: windows-x64
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -40,65 +36,60 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install neuralos pydantic pyinstaller pymysql boxlite
-        continue-on-error: true    # boxlite may fail on some platforms
+        run: |
+          pip install neuralos pydantic pymysql nuitka
+          pip install -e .
 
-      - name: Build binary
+      - name: Build with Nuitka
         shell: bash
         run: |
-          pyinstaller --onefile --name neuralosd \
-            --paths src \
-            --hidden-import neuralosd \
-            --hidden-import neuralosd.probe \
-            --hidden-import neuralosd.router \
-            --hidden-import neuralosd.instance \
-            --hidden-import neuralosd.chains \
-            --hidden-import neuralosd.meta \
-            --hidden-import neuralosd.hitl \
-            --hidden-import neuralosd.lint \
-            --hidden-import neuralosd.cli \
-            --hidden-import neuralosd.engine \
-            --hidden-import neuralosd.registry \
-            --hidden-import neuralosd.memory \
-            --hidden-import neuralosd.scheduler \
-            --hidden-import neuralosd.metrics \
-            --hidden-import neuralosd.adapters \
-            --hidden-import neuralosd.backends \
-            --hidden-import neuralosd.backends.boxlite_backend \
-            --hidden-import neuralosd.backends.msb_backend \
-            --hidden-import needle \
-            --hidden-import pydantic \
-            --hidden-import pydantic.deprecated \
-            --collect-all needle \
-            --collect-all neuralosd \
-            --collect-submodules pydantic \
+          python -m nuitka \
+            --onefile \
+            --output-dir=dist \
+            --output-filename=neuralosd \
+            --include-package=neuralosd \
+            --include-package=needle \
+            --include-package=pydantic \
+            --include-package-data=needle \
+            --include-package-data=neuralosd \
+            --nofollow-import-to=*.tests \
+            --nofollow-import-to=*.torch \
+            --nofollow-import-to=*.matplotlib \
+            --nofollow-import-to=*.tkinter \
             entry_point.py
 
-      - name: Smoke test binary
+      - name: Rename binary
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
-            ./dist/neuralosd.exe --help || true
+            mv dist/entry_point.exe dist/neuralosd-${{ matrix.target }}.exe 2>/dev/null || true
           else
-            chmod +x dist/neuralosd
-            ./dist/neuralosd --help || true
+            mv dist/entry_point.bin dist/neuralosd-${{ matrix.target }} 2>/dev/null || \
+            mv dist/entry_point dist/neuralosd-${{ matrix.target }} 2>/dev/null || true
+          fi
+          ls -lh dist/neuralosd* || true
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          BINARY=$(find dist -name "neuralosd*" -type f | head -1)
+          if [ -n "$BINARY" ]; then
+            echo "binary: $BINARY ($(du -h "$BINARY" | cut -f1))"
+          else
+            echo "no binary found"; exit 1
           fi
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: neuralosd-${{ matrix.target }}
           path: dist/neuralosd*
 
   release:
-    name: Create Release
+    name: Release
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
           path: dist/
@@ -106,9 +97,7 @@ jobs:
       - name: List binaries
         run: ls -lh dist/
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
           files: dist/neuralosd*
           generate_release_notes: true
-          draft: false
