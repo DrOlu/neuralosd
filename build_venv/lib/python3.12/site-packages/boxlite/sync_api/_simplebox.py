@@ -1,0 +1,277 @@
+"""
+SyncSimpleBox - Synchronous wrapper for SimpleBox.
+
+Provides a synchronous API for box operations.
+Async-only metadata retrieval is not exposed.
+"""
+
+import asyncio
+import logging
+from typing import TYPE_CHECKING, Optional
+
+from ..exec import ExecResult
+
+if TYPE_CHECKING:
+    from ._box import SyncBox
+    from ._boxlite import SyncBoxlite
+
+logger = logging.getLogger("boxlite.sync_simplebox")
+
+__all__ = ["SyncSimpleBox"]
+
+
+class SyncSimpleBox:
+    """
+    Synchronous wrapper for SimpleBox.
+
+    Provides synchronous methods for executing commands in a BoxLite container.
+    Uses SyncBox internally which handles async bridging via greenlet.
+    ``SimpleBox.info()`` remains available only on the async API.
+
+    Usage (standalone - recommended):
+        with SyncSimpleBox(image="python:slim") as box:
+            result = box.exec("ls", "-la")
+            print(result.stdout)
+
+    Usage (with explicit runtime):
+        with SyncBoxlite.default() as runtime:
+            with SyncSimpleBox(image="python:slim", runtime=runtime) as box:
+                result = box.exec("ls", "-la")
+                print(result.stdout)
+    """
+
+    def __init__(
+        self,
+        image: str | None = None,
+        rootfs_path: str | None = None,
+        memory_mib: int | None = None,
+        cpus: int | None = None,
+        runtime: Optional["SyncBoxlite"] = None,
+        name: str | None = None,
+        auto_remove: bool = True,
+        reuse_existing: bool = False,
+        **kwargs,
+    ):
+        """
+        Create a SyncSimpleBox.
+
+        Args:
+            image: Container image to use (e.g., "python:slim", "ubuntu:latest")
+            rootfs_path: Path to local OCI layout directory (overrides image if provided)
+            memory_mib: Memory limit in MiB (default: system default)
+            cpus: Number of CPU cores (default: system default)
+            runtime: Optional SyncBoxlite runtime. If None, creates default runtime.
+            name: Optional unique name for the box
+            auto_remove: Remove box when stopped (default: True)
+            reuse_existing: If True and a box with the given name already exists,
+                reuse it instead of raising an error (default: False)
+            **kwargs: Additional BoxOptions parameters
+
+        Either `image` or `rootfs_path` must be provided.
+        """
+        if not image and not rootfs_path:
+            raise ValueError("Either 'image' or 'rootfs_path' must be provided")
+
+        from ..boxlite import BoxOptions
+        from ._boxlite import SyncBoxlite
+
+        # Handle optional runtime
+        if runtime is None:
+            runtime = SyncBoxlite.default()
+            self._owns_runtime = True
+        else:
+            self._owns_runtime = False
+
+        self._runtime = runtime
+
+        # Create box options
+        self._box_opts = BoxOptions(
+            image=image,
+            rootfs_path=rootfs_path,
+            cpus=cpus,
+            memory_mib=memory_mib,
+            auto_remove=auto_remove,
+            **kwargs,
+        )
+
+        # Store for lazy creation in __enter__
+        self._name = name
+        self._reuse_existing = reuse_existing
+        self._box: SyncBox | None = None
+        self._created: bool | None = None
+
+    def __enter__(self) -> "SyncSimpleBox":  # noqa: PYI034 - typing.Self needs 3.11+; project supports 3.10+
+        """Enter context - starts runtime if owned, then creates or reuses box.
+
+        When a name is provided, attempts to get an existing box first.
+        This enables persistence across sessions with auto_remove=False.
+        """
+        # Start runtime if we own it
+        if self._owns_runtime:
+            self._runtime.start()
+
+        # Create or reuse box via runtime
+        if self._reuse_existing:
+            self._box, self._created = self._runtime.get_or_create(
+                self._box_opts, name=self._name
+            )
+        else:
+            self._box = self._runtime.create(self._box_opts, name=self._name)
+            self._created = True
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Exit context - stops the box, then stops runtime if owned."""
+        # Stop the box (SyncBox.stop() is already sync)
+        if self._box is not None:
+            self._box.stop()
+
+        # Stop runtime if we own it
+        if self._owns_runtime:
+            self._runtime.stop()
+
+    @property
+    def id(self) -> str:
+        """Get the box ID."""
+        return self._box.id
+
+    @property
+    def name(self) -> str | None:
+        """Get the box name (if set)."""
+        return self._box.name
+
+    @property
+    def created(self) -> bool | None:
+        """Whether this box was newly created (True) or an existing box was reused (False).
+
+        Returns None if the box hasn't been started yet.
+        """
+        return self._created
+
+    def exec(
+        self,
+        cmd: str,
+        *args: str,
+        env: dict[str, str] | None = None,
+        user: str | None = None,
+        timeout: float | None = None,
+        cwd: str | None = None,
+    ) -> ExecResult:
+        """
+        Execute a command in the box synchronously.
+
+        Args:
+            cmd: Command to run (e.g., "ls", "python")
+            *args: Command arguments (e.g., "-l", "-a")
+            env: Environment variables as dict
+            user: User to run as (format: <name|uid>[:<group|gid>], like docker exec --user).
+                  If None, uses the container's default user from image config.
+            timeout: Execution timeout in seconds (default: no timeout).
+            cwd: Working directory inside the container (default: container's configured workdir).
+
+        Returns:
+            ExecResult with exit_code, stdout, and stderr
+
+        Example:
+            result = box.exec("ls", "-la")
+            print(f"Exit code: {result.exit_code}")
+            print(f"Output: {result.stdout}")
+        """
+        # Run the entire exec+collect as a single async operation through
+        # the greenlet bridge. This avoids the deadlock that occurs with
+        # sequential sync iteration (stdout then stderr), where filling one
+        # pipe buffer blocks the process while we're reading the other.
+        arg_list = list(args) if args else None
+        env_list = list(env.items()) if env else None
+
+        # Access the underlying async Box directly
+        async_box = self._box._box
+
+        async def _exec_and_collect():
+            execution = await async_box.exec(
+                cmd, arg_list, env_list, user=user, timeout_secs=timeout, cwd=cwd
+            )
+
+            stdout_lines = []
+            stderr_lines = []
+
+            try:
+                stdout_stream = execution.stdout()
+            except Exception as e:  # noqa: BLE001 - native binding call; fall back to no stdout stream
+                logger.error(f"take stdout err: {e}")
+                stdout_stream = None
+
+            try:
+                stderr_stream = execution.stderr()
+            except Exception as e:  # noqa: BLE001 - native binding call; fall back to no stderr stream
+                logger.error(f"take stderr err: {e}")
+                stderr_stream = None
+
+            async def collect_stdout():
+                if not stdout_stream:
+                    return
+                try:
+                    async for line in stdout_stream:
+                        if isinstance(line, bytes):
+                            stdout_lines.append(line.decode("utf-8", errors="replace"))
+                        else:
+                            stdout_lines.append(line)
+                except Exception as e:  # noqa: BLE001 - stream collection must not crash exec(); partial output is acceptable
+                    logger.error(f"collecting stdout err: {e}")
+
+            async def collect_stderr():
+                if not stderr_stream:
+                    return
+                try:
+                    async for line in stderr_stream:
+                        if isinstance(line, bytes):
+                            stderr_lines.append(line.decode("utf-8", errors="replace"))
+                        else:
+                            stderr_lines.append(line)
+                except Exception as e:  # noqa: BLE001 - stream collection must not crash exec(); partial output is acceptable
+                    logger.error(f"collecting stderr err: {e}")
+
+            await asyncio.gather(collect_stdout(), collect_stderr())
+
+            error_message = None
+            try:
+                exec_result = await execution.wait()
+                exit_code = exec_result.exit_code
+                error_message = exec_result.error_message
+            except Exception as e:  # noqa: BLE001 - native binding call; report failure via exit_code instead of raising
+                logger.error(f"failed to wait execution: {e}")
+                exit_code = -1
+
+            return ExecResult(
+                exit_code=exit_code,
+                stdout="".join(stdout_lines),
+                stderr="".join(stderr_lines),
+                error_message=error_message,
+            )
+
+        return self._runtime._sync(_exec_and_collect())
+
+    def tunnel(self, port: int):
+        """Establish and return a one-shot tunnel for a port inside this box."""
+        if self._box is None:
+            raise RuntimeError(
+                "Box not started. Use 'with SyncSimpleBox(...) as box:' first."
+            )
+        return self.network.tunnel(port)
+
+    @property
+    def network(self):
+        """Get the box-scoped network handle."""
+        if self._box is None:
+            raise RuntimeError(
+                "Box not started. Use 'with SyncSimpleBox(...) as box:' first."
+            )
+        return self._box.network
+
+    def stop(self) -> None:
+        """Stop the box (preserves state for restart)."""
+        self._box.stop()
+
+    def metrics(self):
+        """Get box metrics (CPU, memory usage)."""
+        return self._box.metrics()

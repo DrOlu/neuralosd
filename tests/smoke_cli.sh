@@ -82,7 +82,7 @@ if [ "$UP" = "1" ] && kill -0 $SPID 2>/dev/null; then
   check "serve /ask" 'row_count' "$r"
   kill $SPID 2>/dev/null || true
 else
-  echo "  ✗ serve failed to start"; head -5 serve.log; fail=$((fail+1))
+  echo "  ✗ serve failed to start"; echo "----- serve.log -----"; cat serve.log; echo "---------------------"; fail=$((fail+1))
 fi
 
 echo
