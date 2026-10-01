@@ -5,6 +5,64 @@ import sys
 from typing import Optional
 
 
+# Missing-module -> (human label, pip package). Used to turn a bare
+# "No module named 'pymysql'" into an actionable message. A probe's data
+# layer may import any of these lazily at call time.
+_MODULE_HINTS = {
+    "pymysql": ("the MySQL driver", "pymysql"),
+    "MySQLdb": ("the MySQL driver (mysqlclient)", "mysqlclient"),
+    "mysql": ("the MySQL connector", "mysql-connector-python"),
+    "psycopg2": ("the PostgreSQL driver", "psycopg2-binary"),
+    "psycopg": ("the PostgreSQL driver", "psycopg[binary]"),
+    "pyodbc": ("the ODBC / SQL Server driver", "pyodbc"),
+    "oracledb": ("the Oracle driver", "oracledb"),
+    "cx_Oracle": ("the Oracle driver", "cx_Oracle"),
+    "sqlalchemy": ("SQLAlchemy", "sqlalchemy"),
+    "pandas": ("pandas", "pandas"),
+    "openpyxl": ("the Excel reader", "openpyxl"),
+    "requests": ("the HTTP client", "requests"),
+    "boxlite": ("the BoxLite sandbox backend", "boxlite"),
+    "microsandbox": ("the Microsandbox backend", "microsandbox"),
+    "needle": ("the on-device neuralOS model", "neuralos"),
+    "pydantic": ("Pydantic", "pydantic"),
+}
+
+
+def _is_frozen() -> bool:
+    """True inside a Nuitka / PyInstaller standalone build."""
+    if getattr(sys, "frozen", False):
+        return True
+    try:
+        return bool(__compiled__)  # type: ignore[name-defined]  # noqa: F821
+    except NameError:
+        return False
+
+
+def _missing_module_help(missing: str, source: str) -> str:
+    root = (missing or "").split(".")[0] or "<unknown>"
+    hint = _MODULE_HINTS.get(root)
+    out = [f"error: {source} needs the Python module '{missing}',",
+           "       which is not available in this environment.", ""]
+    if _is_frozen():
+        out += [
+            "You are running the standalone binary. It embeds the neuralosd",
+            "framework, the docs, the skills, pydantic and the on-device model —",
+            "but a frozen binary is sealed: you cannot pip install into it.",
+            "",
+        ]
+    if hint:
+        label, pkg = hint
+        out += [f"'{missing}' is {label}. Install it where neuralosd can see it:",
+                "", f"    pip install {pkg}"]
+        if root in ("boxlite", "microsandbox", "needle"):
+            out.append("    pip install 'neuralosd[all]'      # everything at once")
+    else:
+        out += ["Install the missing module:", "", f"    pip install {root}"]
+    out += ["", "Or switch to the full install:  pip install 'neuralosd[all]'",
+            "See:  neuralosd docs usage"]
+    return "\n".join(out)
+
+
 def load_instance(instance_dir: str, with_model: bool = False):
     """Load an :class:`~neuralosd.instance.Instance` from a directory.
 
@@ -51,6 +109,10 @@ def load_instance(instance_dir: str, with_model: bool = False):
     sys.modules[modname] = mod
     try:
         spec.loader.exec_module(mod)
+    except ModuleNotFoundError as e:
+        # A probe (or its bridge) imports a driver/model the environment
+        # doesn't have. Give an actionable message instead of a traceback.
+        raise SystemExit(_missing_module_help(getattr(e, "name", ""), probes_py))
     except Exception as e:  # noqa: BLE001
         raise SystemExit(f"error: failed to load {probes_py}: {e}")
 
@@ -70,15 +132,17 @@ def load_instance(instance_dir: str, with_model: bool = False):
 
 
 def _build_model_fallback(probes):
-    """Best-effort model fallback using the on-device neuralOS/needle model.
+    """Model fallback using the on-device neuralOS/needle model.
 
-    Returns None when the model runtime is unavailable so the deterministic
-    fast path still works.
+    Only called when the caller explicitly asked for it (``--model``). If the
+    model runtime is missing, this is a hard error — the user asked for the
+    model and silently ignoring it would be worse than failing.
     """
     try:
         import needle  # noqa: F401
-    except Exception:  # noqa: BLE001
-        return None
+    except ModuleNotFoundError as e:
+        raise SystemExit(_missing_module_help(
+            getattr(e, "name", "needle") or "needle", "the --model flag"))
 
     def _fallback(question: str, menu):
         try:
