@@ -36,7 +36,12 @@ case "$VARIANT" in
     ;;
   msb)
     python -c "import microsandbox" 2>/dev/null || { echo "microsandbox not importable"; exit 1; }
-    EXTRA="--include-package=microsandbox --include-package-data=microsandbox $NOFOLLOW_BOX"
+    # --include-package-data does not reliably pull the executable
+    # _bundled/bin/msb(.exe) and its sibling libs (seen on Windows). Copy the
+    # whole _bundled tree explicitly so the runtime is always present.
+    MSB_BUNDLED=$(python -c "import microsandbox,os;print(os.path.join(os.path.dirname(microsandbox.__file__),'_bundled'))")
+    echo "bundling msb runtime from: $MSB_BUNDLED"
+    EXTRA="--include-package=microsandbox --include-package-data=microsandbox --include-data-dir=$MSB_BUNDLED=microsandbox/_bundled $NOFOLLOW_BOX"
     ;;
   *)
     echo "unknown variant: $VARIANT (expected base|boxlite|msb)"; exit 1
