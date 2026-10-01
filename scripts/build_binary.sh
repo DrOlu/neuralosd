@@ -36,12 +36,22 @@ case "$VARIANT" in
     ;;
   msb)
     python -c "import microsandbox" 2>/dev/null || { echo "microsandbox not importable"; exit 1; }
-    # --include-package-data does not reliably pull the executable
-    # _bundled/bin/msb(.exe) and its sibling libs (seen on Windows). Copy the
-    # whole _bundled tree explicitly so the runtime is always present.
-    MSB_BUNDLED=$(python -c "import microsandbox,os;print(os.path.join(os.path.dirname(microsandbox.__file__),'_bundled'))")
-    echo "bundling msb runtime from: $MSB_BUNDLED"
-    EXTRA="--include-package=microsandbox --include-package-data=microsandbox --include-data-dir=$MSB_BUNDLED=microsandbox/_bundled $NOFOLLOW_BOX"
+    # The msb CLI + libs live in microsandbox/_bundled/{bin,lib}. Three
+    # Nuitka facts learned the hard way:
+    #   - --include-package-data does NOT pull the executables/.dll;
+    #   - --include-data-dir is a silent no-op (Nuitka 4.2.2);
+    #   - an absolute C:\ path is mangled by Git Bash on Windows.
+    # So: stage _bundled to a RELATIVE dir, then copy with explicit globs.
+    rm -rf _msb_stage
+    python - <<'PY'
+import os, shutil, microsandbox
+d = os.path.join(os.path.dirname(microsandbox.__file__), "_bundled")
+shutil.copytree(d, "_msb_stage")
+print("staged msb runtime from", d)
+PY
+    EXTRA="--include-package=microsandbox --include-package-data=microsandbox $NOFOLLOW_BOX"
+    [ -d _msb_stage/bin ] && EXTRA="$EXTRA --include-data-files=_msb_stage/bin/*=microsandbox/_bundled/bin/"
+    [ -d _msb_stage/lib ] && EXTRA="$EXTRA --include-data-files=_msb_stage/lib/*=microsandbox/_bundled/lib/"
     ;;
   *)
     echo "unknown variant: $VARIANT (expected base|boxlite|msb)"; exit 1
