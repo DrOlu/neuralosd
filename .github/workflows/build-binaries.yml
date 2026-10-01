@@ -159,40 +159,10 @@ jobs:
           [ -n "$BIN" ] || { echo "no msb binary"; exit 0; }
           chmod +x "$BIN" 2>/dev/null || true
           mkdir -p diaginst
-          cat > diaginst/probes.py <<'PY'
-from neuralosd import probe
-@probe(description="diag", triggers=["diag"])
-def diag():
-    import os, sys
-    out = {"sys.executable": sys.executable,
-           "frozen": getattr(sys, "frozen", None),
-           "compiled": "__compiled__" in globals()}
-    try:
-        import microsandbox
-        d = os.path.dirname(os.path.abspath(microsandbox.__file__))
-        out["microsandbox.__file__"] = microsandbox.__file__
-        bb = os.path.join(d, "_bundled", "bin")
-        out["_bundled/bin exists"] = os.path.isdir(bb)
-        out["_bundled/bin"] = os.listdir(bb) if os.path.isdir(bb) else None
-        lb = os.path.join(d, "_bundled", "lib")
-        out["_bundled/lib"] = os.listdir(lb) if os.path.isdir(lb) else None
-        out["pkg dir listing"] = sorted(os.listdir(d))[:25]
-    except Exception as e:
-        out["microsandbox import error"] = repr(e)
-    try:
-        from neuralosd.backends import msb_backend
-        out["candidates"] = msb_backend._candidate_paths()
-        out["resolved"] = msb_backend.msb_binary()
-    except Exception as e:
-        out["backend error"] = repr(e)
-    try:
-        out["exe dir"] = sorted(os.listdir(os.path.dirname(sys.executable)))[:25]
-    except Exception as e:
-        out["exe dir error"] = repr(e)
-    return out
-PROBES = [diag]
-PY
-          "$(pwd)/$BIN" ask --instance-dir diaginst "diag" 2>&1 | head -60
+          cp tests/diagnose_msb_probes.py diaginst/probes.py
+          echo "----- msb bundle diagnostic -----"
+          "$(pwd)/$BIN" ask --instance-dir diaginst "diag" 2>&1 | head -60 || true
+          echo "---------------------------------"
 
       - name: Rename with target suffix
         shell: bash
