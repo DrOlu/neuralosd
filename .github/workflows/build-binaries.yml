@@ -6,33 +6,53 @@ on:
   workflow_dispatch:
     inputs:
       only:
-        description: "Only build this target (blank = all)"
+        description: "Only build this target (blank = all): macos-arm64, macos-x64, linux-x64, linux-arm64, windows-x64"
         default: ""
 
 permissions:
   contents: write
 
 jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - id: set
+        run: |
+          ALL='[
+            {"os":"macos-latest","target":"macos-arm64"},
+            {"os":"macos-13","target":"macos-x64"},
+            {"os":"ubuntu-latest","target":"linux-x64"},
+            {"os":"ubuntu-24.04-arm","target":"linux-arm64"},
+            {"os":"windows-latest","target":"windows-x64"}
+          ]'
+          ONLY="${{ github.event.inputs.only }}"
+          if [ -n "$ONLY" ]; then
+            MATRIX=$(python3 -c "
+import json,sys
+allm=json.loads('''$ALL''')
+only='$ONLY'
+sel=[m for m in allm if m['target']==only]
+if not sel:
+    print('unknown target: '+only, file=sys.stderr); sys.exit(1)
+print(json.dumps({'include':sel}))
+")
+          else
+            MATRIX=$(python3 -c "import json; print(json.dumps({'include':json.loads('''$ALL''')}))")
+          fi
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "building: $MATRIX"
+
   build:
-    name: Build (${{ matrix.os }})
+    name: Build (${{ matrix.target }})
+    needs: setup
     strategy:
       fail-fast: false
       max-parallel: 5
-      matrix:
-        include:
-          - os: macos-latest
-            target: macos-arm64
-          - os: macos-13
-            target: macos-x64
-          - os: ubuntu-latest
-            target: linux-x64
-          - os: ubuntu-24.04-arm
-            target: linux-arm64
-          - os: windows-latest
-            target: windows-x64
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
-    if: ${{ github.event.inputs.only == '' || matrix.target == github.event.inputs.only }}
     steps:
       - uses: actions/checkout@v4
 
@@ -69,18 +89,18 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
-            mv dist/entry_point.exe dist/neuralosd-${{ matrix.target }}.exe 2>/dev/null || true
+            mv dist/neuralosd.exe "dist/neuralosd-${{ matrix.target }}.exe" 2>/dev/null || true
           else
-            mv dist/entry_point dist/neuralosd-${{ matrix.target }} 2>/dev/null || \
-            mv dist/entry_point.bin dist/neuralosd-${{ matrix.target }} 2>/dev/null || true
+            mv dist/neuralosd "dist/neuralosd-${{ matrix.target }}" 2>/dev/null || \
+            mv dist/neuralosd.bin "dist/neuralosd-${{ matrix.target }}" 2>/dev/null || true
           fi
-          ls -lh dist/neuralosd* || true
+          ls -lh dist/neuralosd-* || true
 
       - name: Smoke test binary
         shell: bash
         run: |
-          BINARY=$(find dist -name "neuralosd*" -type f | head -1)
-          if [ -z "$BINARY" ]; then echo "no binary found"; exit 1; fi
+          BINARY=$(find dist -maxdepth 1 -type f -name "neuralosd-*" | head -1)
+          if [ -z "$BINARY" ]; then echo "no binary found"; ls -la dist; exit 1; fi
           chmod +x "$BINARY" 2>/dev/null || true
           echo "binary: $BINARY ($(du -h "$BINARY" | cut -f1))"
           bash tests/smoke_cli.sh "$(pwd)/$BINARY"
@@ -88,7 +108,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: neuralosd-${{ matrix.target }}
-          path: dist/neuralosd*
+          path: dist/neuralosd-*
 
   release:
     name: Release
@@ -104,6 +124,7 @@ jobs:
         run: ls -lh dist/
 
       - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: dist/neuralosd*
+          files: dist/neuralosd-*
           generate_release_notes: true
