@@ -72,7 +72,7 @@ jobs:
       - name: Install BoxLite
         if: contains(needs.setup.outputs.variants, 'boxlite')
         continue-on-error: true
-        run: pip install boxlite
+        run: pip install "boxlite>=0.10.0"
 
       - name: Build boxlite binary
         if: contains(needs.setup.outputs.variants, 'boxlite')
@@ -85,7 +85,7 @@ jobs:
       - name: Install Microsandbox
         if: contains(needs.setup.outputs.variants, 'msb')
         continue-on-error: true
-        run: pip install microsandbox
+        run: pip install "microsandbox>=0.7.0"
 
       - name: Build msb binary
         if: contains(needs.setup.outputs.variants, 'msb')

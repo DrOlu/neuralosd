@@ -96,12 +96,34 @@ class TestHITL:
         result = store.confirm(token)
         assert result.get("deleted") is True
 
-    def test_confirm_expired(self):
+    def test_confirm_expired(self, monkeypatch):
+        # Deterministic: drive a fake clock instead of relying on wall-clock
+        # resolution (on Windows time.time() can return the same tick twice,
+        # so `ttl=0` made this pass or fail at random).
+        import neuralosd.hitl as hitl
         from neuralosd import ConfirmStore
-        store = ConfirmStore(ttl=0)  # instant expiry
-        pending = store.create(lambda: {}, {}, "test")
+
+        now = {"t": 1000.0}
+        monkeypatch.setattr(hitl.time, "time", lambda: now["t"])
+
+        store = ConfirmStore(ttl=5)
+        pending = store.create(lambda: {}, {}, "test")   # stamped at t=1000
+        now["t"] = 1010.0                                # jump past the ttl
         result = store.confirm(pending["confirm_token"])
         assert "error" in result
+
+    def test_confirm_within_ttl(self, monkeypatch):
+        import neuralosd.hitl as hitl
+        from neuralosd import ConfirmStore
+
+        now = {"t": 1000.0}
+        monkeypatch.setattr(hitl.time, "time", lambda: now["t"])
+
+        store = ConfirmStore(ttl=60)
+        pending = store.create(lambda: {"ok": True}, {}, "test")
+        now["t"] = 1030.0                                # still inside ttl
+        result = store.confirm(pending["confirm_token"])
+        assert result.get("ok") is True
 
 
 # ── Lint ──────────────────────────────────────────────────────────────────
