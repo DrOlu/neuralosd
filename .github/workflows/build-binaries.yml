@@ -121,6 +121,13 @@ jobs:
       - name: Verify each variant carries exactly its backend
         shell: bash
         run: |
+          # The build env has boxlite/microsandbox installed (to build the
+          # variants). The msb backend also honours a PATH `msb`, so the BASE
+          # binary would legitimately find the host one. Uninstall them first
+          # so each binary is judged on what it actually carries.
+          pip uninstall -y boxlite microsandbox >/dev/null 2>&1 || true
+          hash -r 2>/dev/null || true
+          echo "host msb after uninstall: $(command -v msb || echo none)"
           # Every built variant must report exactly the right availability:
           #   base    -> neither
           #   boxlite -> boxlite only
