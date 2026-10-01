@@ -66,33 +66,48 @@ r="$(run backends)"
 check "backends list" 'boxlite' "$r"
 
 # 7. serve + HTTP
-# Dynamic port + process-tree cleanup: a Nuitka onefile binary runs the real
-# server in a CHILD of the pid we launch, so killing the parent alone leaves
-# the child holding the port and poisons the next variant's run.
-PORT=$(( 30000 + ($$ % 20000) ))
-"$NS" serve --instance-dir ./inst --port "$PORT" >serve.log 2>&1 &
-SPID=$!
+# Two hazards this guards against:
+#  - a Nuitka onefile runs the real server in a CHILD of the pid we launch,
+#    so killing the parent leaves the child holding the port;
+#  - the port must sit BELOW the OS ephemeral range (Linux 32768-60999,
+#    macOS 49152-65535) or the kernel may have already handed it to an
+#    outgoing connection, giving 'Address already in use'.
+# So: pick a non-ephemeral port, retry a few on failure, and always tear
+# the whole listener down afterwards.
+SPID=""
+PORT=""
 
 cleanup_serve() {
-  kill "$SPID" 2>/dev/null || true
-  # kill whatever is actually listening on the port (the onefile child)
-  if command -v lsof >/dev/null 2>&1; then
-    for p in $(lsof -ti "tcp:$PORT" 2>/dev/null); do kill "$p" 2>/dev/null || true; done
-  elif command -v fuser >/dev/null 2>&1; then
-    fuser -k "$PORT/tcp" >/dev/null 2>&1 || true
+  [ -n "$SPID" ] && kill "$SPID" 2>/dev/null || true
+  if [ -n "$PORT" ]; then
+    if command -v lsof >/dev/null 2>&1; then
+      for p in $(lsof -ti "tcp:$PORT" 2>/dev/null); do kill "$p" 2>/dev/null || true; done
+    elif command -v fuser >/dev/null 2>&1; then
+      fuser -k "$PORT/tcp" >/dev/null 2>&1 || true
+    fi
+    for _ in $(seq 1 15); do
+      curl -s --max-time 1 "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1 || break
+      sleep 1
+    done
   fi
-  # wait until the port is genuinely free before returning
-  for _ in $(seq 1 15); do
-    curl -s --max-time 1 "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1 || break
-    sleep 1
-  done
 }
 
+BASE=$(( 18000 + ($$ % 2000) ))   # 18000-19999: below every ephemeral range
 UP=0
-for _ in $(seq 1 30); do
-  sleep 1
-  if curl -s --max-time 1 "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; then UP=1; break; fi
+for i in 0 1 2 3 4 5 6 7; do
+  PORT=$(( BASE + i ))
+  "$NS" serve --instance-dir ./inst --port "$PORT" >serve.log 2>&1 &
+  SPID=$!
+  for _ in $(seq 1 20); do
+    sleep 1
+    if curl -s --max-time 1 "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; then UP=1; break; fi
+    kill -0 "$SPID" 2>/dev/null || break   # server died (e.g. port in use)
+  done
+  [ "$UP" = "1" ] && break
+  cleanup_serve
+  SPID=""
 done
+
 if [ "$UP" = "1" ] && kill -0 "$SPID" 2>/dev/null; then
   r="$(curl -s "http://127.0.0.1:$PORT/healthz" 2>/dev/null || true)"
   check "serve /healthz" '"ok": true' "$r"
