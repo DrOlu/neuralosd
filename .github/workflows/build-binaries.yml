@@ -54,11 +54,15 @@ jobs:
       - name: Build with Nuitka
         shell: bash
         run: |
+          VERSION=$(python -c "import tomllib,sys; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "building neuralosd $VERSION"
           python -m nuitka \
             --onefile \
             --onefile-cache-mode=cached \
             --company-name=Hyperspace \
             --product-name=neuralosd \
+            --product-version="$VERSION" \
+            --file-version="$VERSION" \
             --output-dir=dist \
             --output-filename=neuralosd \
             --include-package=neuralosd \
