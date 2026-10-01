@@ -8,6 +8,9 @@ on:
       only:
         description: "Only build this target (blank = all): macos-arm64, macos-x64, linux-x64, linux-arm64, windows-x64"
         default: ""
+      variants:
+        description: "Variants to build (comma list): base,boxlite,msb"
+        default: "base,boxlite,msb"
 
 permissions:
   contents: write
@@ -17,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set.outputs.matrix }}
+      variants: ${{ steps.set.outputs.variants }}
     steps:
       - id: set
         run: |
@@ -28,7 +32,11 @@ jobs:
             MATRIX=$(python3 -c "import json,sys; a=json.loads(sys.argv[1]); s=[m for m in a if m['target']==sys.argv[2]]; sys.exit('unknown target: '+sys.argv[2]) if not s else print(json.dumps({'include':s}))" "$ALL" "$ONLY")
           fi
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
-          echo "building: $MATRIX"
+          V='${{ github.event.inputs.variants }}'
+          [ -z "$V" ] && V="base,boxlite,msb"
+          echo "variants=$V" >> "$GITHUB_OUTPUT"
+          echo "targets: $MATRIX"
+          echo "variants: $V"
 
   build:
     name: Build (${{ matrix.target }})
@@ -38,7 +46,7 @@ jobs:
       max-parallel: 5
       matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -46,57 +54,94 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
+      - name: Install base dependencies
         run: |
           pip install neuralos pydantic pymysql nuitka
           pip install -e .
 
-      - name: Build with Nuitka
-        shell: bash
-        run: |
-          VERSION=$(python -c "import tomllib,sys; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          echo "building neuralosd $VERSION"
-          python -m nuitka \
-            --onefile \
-            --onefile-cache-mode=cached \
-            --company-name=Hyperspace \
-            --product-name=neuralosd \
-            --product-version="$VERSION" \
-            --file-version="$VERSION" \
-            --output-dir=dist \
-            --output-filename=neuralosd \
-            --include-package=neuralosd \
-            --include-package=neuralosd._cmd \
-            --include-package=needle \
-            --include-package=pydantic \
-            --include-package-data=needle \
-            --include-package-data=neuralosd \
-            --nofollow-import-to=*.tests \
-            --nofollow-import-to=*.torch \
-            --nofollow-import-to=*.matplotlib \
-            --nofollow-import-to=*.tkinter \
-            --assume-yes-for-downloads \
-            entry_point.py
+      - name: Unit tests
+        run: pytest tests/ -q
 
-      - name: Rename binary
+      - name: Build base binary
+        if: contains(needs.setup.outputs.variants, 'base')
         shell: bash
         run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            mv dist/neuralosd.exe "dist/neuralosd-${{ matrix.target }}.exe" 2>/dev/null || true
-          else
-            mv dist/neuralosd "dist/neuralosd-${{ matrix.target }}" 2>/dev/null || \
-            mv dist/neuralosd.bin "dist/neuralosd-${{ matrix.target }}" 2>/dev/null || true
-          fi
-          ls -lh dist/neuralosd-* || true
+          VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          bash scripts/build_binary.sh base neuralosd "$VERSION"
 
-      - name: Smoke test binary
+      - name: Install BoxLite
+        if: contains(needs.setup.outputs.variants, 'boxlite')
+        continue-on-error: true
+        run: pip install boxlite
+
+      - name: Build boxlite binary
+        if: contains(needs.setup.outputs.variants, 'boxlite')
+        continue-on-error: true
         shell: bash
         run: |
-          BINARY=$(find dist -maxdepth 1 -type f -name "neuralosd-*" | head -1)
-          if [ -z "$BINARY" ]; then echo "no binary found"; ls -la dist; exit 1; fi
-          chmod +x "$BINARY" 2>/dev/null || true
-          echo "binary: $BINARY ($(du -h "$BINARY" | cut -f1))"
-          bash tests/smoke_cli.sh "$(pwd)/$BINARY"
+          VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          bash scripts/build_binary.sh boxlite neuralosd-boxlite "$VERSION" || echo "BOX_BUILD_SKIPPED=true" >> "$GITHUB_ENV"
+
+      - name: Install Microsandbox
+        if: contains(needs.setup.outputs.variants, 'msb')
+        continue-on-error: true
+        run: pip install microsandbox
+
+      - name: Build msb binary
+        if: contains(needs.setup.outputs.variants, 'msb')
+        continue-on-error: true
+        shell: bash
+        run: |
+          VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          bash scripts/build_binary.sh msb neuralosd-msb "$VERSION" || echo "MSB_BUILD_SKIPPED=true" >> "$GITHUB_ENV"
+
+      - name: List built binaries
+        shell: bash
+        run: ls -lh dist/ || true
+
+      - name: Smoke test every built binary
+        shell: bash
+        run: |
+          shopt -s nullglob
+          bins=(dist/neuralosd dist/neuralosd-boxlite dist/neuralosd-msb)
+          [ -x dist/neuralosd.exe ] && bins+=(dist/neuralosd.exe)
+          [ -x dist/neuralosd-boxlite.exe ] && bins+=(dist/neuralosd-boxlite.exe)
+          [ -x dist/neuralosd-msb.exe ] && bins+=(dist/neuralosd-msb.exe)
+          found=0
+          for b in "${bins[@]}"; do
+            if [ -f "$b" ]; then
+              found=1
+              echo "===== smoke: $b ====="
+              chmod +x "$b" 2>/dev/null || true
+              bash tests/smoke_cli.sh "$(pwd)/$b" || { echo "SMOKE FAILED: $b"; exit 1; }
+            fi
+          done
+          [ "$found" = "1" ] || { echo "no binaries built"; exit 1; }
+
+      - name: Verify bundled backend in each variant
+        shell: bash
+        run: |
+          check() { # binary, backend
+            [ -f "$1" ] || { echo "  (no $1)"; return 0; }
+            out=$("$1" backends 2>&1 || true)
+            echo "$out"
+            if echo "$out" | grep -q "$2.*available"; then
+              echo "  ✓ $1 bundles $2"
+            else
+              echo "  ✗ $1 does NOT report $2 available"; exit 1
+            fi
+          }
+          check dist/neuralosd-boxlite boxlite
+          check dist/neuralosd-msb msb
+
+      - name: Rename with target suffix
+        shell: bash
+        run: |
+          for b in dist/neuralosd dist/neuralosd-boxlite dist/neuralosd-msb; do
+            if [ -f "$b" ]; then mv "$b" "$b-${{ matrix.target }}"; fi
+            if [ -f "$b.exe" ]; then mv "$b.exe" "$b-${{ matrix.target }}.exe"; fi
+          done
+          ls -lh dist/
 
       - uses: actions/upload-artifact@v4
         with:

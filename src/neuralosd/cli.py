@@ -147,10 +147,17 @@ def main():
         import neuralosd as _mod
         print(_mod.docs(getattr(a, "topic", None)))
     elif a.command == "backends":
-        print("Available backends:")
-        print("  boxlite — persistent microVM boxes (pip install boxlite)")
-        print("  msb     — Microsandbox sandboxes (msb CLI)")
+        from .backends import available_backends
+        av = available_backends()
+        print("Sandbox backends:")
+        for _name in ("boxlite", "msb"):
+            _ok = av.get(_name, False)
+            _mark = "available" if _ok else "not installed"
+            print(f"  {_name:<8} [{_mark}]")
         print("\nBoth use the same probe contract. Switch by configuration.")
+        if not any(av.values()):
+            print("\nInstall one:  pip install 'neuralosd[boxlite]'  or  "
+                  "pip install 'neuralosd[msb]'")
 
 
 if __name__ == "__main__":
