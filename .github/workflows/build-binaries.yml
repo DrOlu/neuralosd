@@ -20,7 +20,7 @@ jobs:
     steps:
       - id: set
         run: |
-          ALL='[{"os":"macos-latest","target":"macos-arm64"},{"os":"macos-13","target":"macos-x64"},{"os":"ubuntu-latest","target":"linux-x64"},{"os":"ubuntu-24.04-arm","target":"linux-arm64"},{"os":"windows-latest","target":"windows-x64"}]'
+          ALL='[{"os":"macos-latest","target":"macos-arm64"},{"os":"macos-15-intel","target":"macos-x64"},{"os":"ubuntu-latest","target":"linux-x64"},{"os":"ubuntu-24.04-arm","target":"linux-arm64"},{"os":"windows-latest","target":"windows-x64"}]'
           ONLY='${{ github.event.inputs.only }}'
           if [ -z "$ONLY" ]; then
             MATRIX="{\"include\":$ALL}"
