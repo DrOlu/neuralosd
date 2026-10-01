@@ -17,17 +17,19 @@ VARIANT="${1:?usage: build_binary.sh <base|boxlite|msb> <outname> <version>}"
 OUTNAME="${2:?outname required}"
 VERSION="${3:-0.0.0}"
 
-EXTRA=()
+# NOTE: a plain string (not an array) so this works on bash 3.2 (macOS)
+# under `set -u`, where expanding an empty array is an error.
+EXTRA=""
 case "$VARIANT" in
   base)
     ;;
   boxlite)
     python -c "import boxlite" 2>/dev/null || { echo "boxlite not importable"; exit 1; }
-    EXTRA+=(--include-package=boxlite --include-package-data=boxlite)
+    EXTRA="--include-package=boxlite --include-package-data=boxlite"
     ;;
   msb)
     python -c "import microsandbox" 2>/dev/null || { echo "microsandbox not importable"; exit 1; }
-    EXTRA+=(--include-package=microsandbox --include-package-data=microsandbox)
+    EXTRA="--include-package=microsandbox --include-package-data=microsandbox"
     ;;
   *)
     echo "unknown variant: $VARIANT (expected base|boxlite|msb)"; exit 1
@@ -46,7 +48,7 @@ python -m nuitka \
   --include-package=pydantic \
   --include-package-data=needle \
   --include-package-data=neuralosd \
-  "${EXTRA[@]}" \
+  $EXTRA \
   --company-name=Hyperspace \
   --product-name="neuralosd-$VARIANT" \
   --product-version="$VERSION" \
