@@ -56,11 +56,11 @@ jobs:
 
       - name: Install base dependencies
         run: |
-          pip install neuralos pydantic pymysql nuitka
+          pip install neuralos pydantic pymysql nuitka pytest
           pip install -e .
 
       - name: Unit tests
-        run: pytest tests/ -q
+        run: python -m pytest tests/ -q
 
       - name: Build base binary
         if: contains(needs.setup.outputs.variants, 'base')
