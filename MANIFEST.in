@@ -1,0 +1,5 @@
+include src/neuralosd/docs/*.md
+include src/neuralosd/skills/*.md
+include src/neuralosd/skills/*.sh
+include src/neuralosd/skills/*.py
+recursive-include src/neuralosd *.json *.toml
