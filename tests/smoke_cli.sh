@@ -66,24 +66,44 @@ r="$(run backends)"
 check "backends list" 'boxlite' "$r"
 
 # 7. serve + HTTP
-"$NS" serve --instance-dir ./inst --port 8897 >serve.log 2>&1 &
+# Dynamic port + process-tree cleanup: a Nuitka onefile binary runs the real
+# server in a CHILD of the pid we launch, so killing the parent alone leaves
+# the child holding the port and poisons the next variant's run.
+PORT=$(( 30000 + ($$ % 20000) ))
+"$NS" serve --instance-dir ./inst --port "$PORT" >serve.log 2>&1 &
 SPID=$!
+
+cleanup_serve() {
+  kill "$SPID" 2>/dev/null || true
+  # kill whatever is actually listening on the port (the onefile child)
+  if command -v lsof >/dev/null 2>&1; then
+    for p in $(lsof -ti "tcp:$PORT" 2>/dev/null); do kill "$p" 2>/dev/null || true; done
+  elif command -v fuser >/dev/null 2>&1; then
+    fuser -k "$PORT/tcp" >/dev/null 2>&1 || true
+  fi
+  # wait until the port is genuinely free before returning
+  for _ in $(seq 1 15); do
+    curl -s --max-time 1 "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1 || break
+    sleep 1
+  done
+}
+
 UP=0
 for _ in $(seq 1 30); do
   sleep 1
-  if curl -s --max-time 1 http://127.0.0.1:8897/healthz >/dev/null 2>&1; then UP=1; break; fi
+  if curl -s --max-time 1 "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; then UP=1; break; fi
 done
-if [ "$UP" = "1" ] && kill -0 $SPID 2>/dev/null; then
-  r="$(curl -s http://127.0.0.1:8897/healthz 2>/dev/null || true)"
+if [ "$UP" = "1" ] && kill -0 "$SPID" 2>/dev/null; then
+  r="$(curl -s "http://127.0.0.1:$PORT/healthz" 2>/dev/null || true)"
   check "serve /healthz" '"ok": true' "$r"
-  r="$(curl -s -X POST http://127.0.0.1:8897/ask \
+  r="$(curl -s -X POST "http://127.0.0.1:$PORT/ask" \
         -H 'Content-Type: application/json' \
         -d '{"question":"how many rows"}' 2>/dev/null || true)"
   check "serve /ask" 'row_count' "$r"
-  kill $SPID 2>/dev/null || true
 else
   echo "  ✗ serve failed to start"; echo "----- serve.log -----"; cat serve.log; echo "---------------------"; fail=$((fail+1))
 fi
+cleanup_serve
 
 echo
 echo "smoke: $pass passed, $fail failed"
