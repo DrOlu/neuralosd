@@ -56,6 +56,7 @@ jobs:
             --nofollow-import-to=*.torch \
             --nofollow-import-to=*.matplotlib \
             --nofollow-import-to=*.tkinter \
+            --assume-yes-for-downloads \
             entry_point.py
 
       - name: Rename binary
@@ -64,8 +65,8 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then
             mv dist/entry_point.exe dist/neuralosd-${{ matrix.target }}.exe 2>/dev/null || true
           else
-            mv dist/entry_point.bin dist/neuralosd-${{ matrix.target }} 2>/dev/null || \
-            mv dist/entry_point dist/neuralosd-${{ matrix.target }} 2>/dev/null || true
+            mv dist/entry_point dist/neuralosd-${{ matrix.target }} 2>/dev/null || \
+            mv dist/entry_point.bin dist/neuralosd-${{ matrix.target }} 2>/dev/null || true
           fi
           ls -lh dist/neuralosd* || true
 
