@@ -93,6 +93,8 @@ def main():
     p_diff.add_argument("--menu", default=None)
 
     # backends
+    p_docs = sub.add_parser("docs", help="Read bundled documentation")
+    p_docs.add_argument("topic", nargs="?", default=None)
     sub.add_parser("backends", help="List available sandbox backends")
 
     a = ap.parse_args()
@@ -136,6 +138,9 @@ def main():
     elif a.command == "diff":
         from . import _cmd_diff
         _cmd_diff.run(a)
+    elif a.command == "docs":
+        import neuralosd as _mod
+        print(_mod.docs(getattr(a, "topic", None)))
     elif a.command == "backends":
         print("Available backends:")
         print("  boxlite — persistent microVM boxes (pip install boxlite)")

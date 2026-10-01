@@ -1,10 +1,31 @@
+import os
+
 """neuralosd — deterministic-first agentic runtime for neuralOS.
 
 One pip install. Two sandbox backends (BoxLite, Microsandbox). Any data
 source. Offline. On CPU. With verification gates, audit trail, and
 deterministic routing.
 """
-__version__ = "1.0.0"
+__version__ = "1.0.1"
+
+_DOCS = {
+    "usage": "neuralOS usage and operations guide",
+    "architecture": "architectural and design manual",
+    "cookbook": "agentic cookbook — complete recipes",
+    "reference": "API reference — every class, function, parameter",
+}
+
+
+def docs(topic: str = None) -> str:
+    """Read bundled neuralOS documentation. Topics: usage, architecture, cookbook, reference."""
+    docs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs")
+    if topic is None:
+        return "\n".join(f"  {k:15s} {v}" for k, v in _DOCS.items())
+    if topic not in _DOCS:
+        return f"unknown topic: {topic!r}. Available: {', '.join(_DOCS)}"
+    path = os.path.join(docs_dir, f"{topic}.md")
+    with open(path, encoding="utf-8") as f:
+        return f.read()
 
 from .probe import probe, enum_arg, pattern_arg, int_arg, ProbeMeta
 from .router import Router, NoResults
