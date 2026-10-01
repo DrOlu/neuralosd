@@ -17,10 +17,17 @@ def _fake_msb(path, executable=False):
 
 
 def _isolate(monkeypatch, tmp_path):
-    """Make PATH + interpreter look empty so only the bundled path decides."""
+    """Make PATH, the interpreter dir, and the real microsandbox invisible,
+    so only an explicitly-provided bundled path can decide.
+
+    Setting sys.modules['microsandbox'] = None makes `import microsandbox`
+    raise ImportError even when the package is genuinely installed (which it
+    is in CI, where we build the msb variant), keeping these tests
+    environment-independent.
+    """
     monkeypatch.setattr(mb.shutil, "which", lambda n: None)
     monkeypatch.setattr(mb.sys, "executable", str(tmp_path / "python"))
-    monkeypatch.delitem(sys.modules, "microsandbox", raising=False)
+    monkeypatch.setitem(sys.modules, "microsandbox", None)
 
 
 def test_msb_binary_prefers_path(monkeypatch, tmp_path):

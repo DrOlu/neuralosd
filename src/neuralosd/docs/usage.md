@@ -25,17 +25,22 @@ and operating neuralOS instances. Every command is copy-paste ready.
 
 ### Option A — single-file binary (no Python needed)
 
-Every tagged release ships standalone binaries. The Python runtime, the
-neuralosd framework, the four documentation volumes and the bundled skills
-are all embedded in one file.
+Every tagged release ships standalone Nuitka binaries in three variants. The
+Python runtime, the neuralosd framework, the four documentation volumes and
+the bundled skills are all embedded in one file.
 
-| Platform | Asset |
-|---|---|
-| macOS Apple Silicon | `neuralosd-macos-arm64` |
-| macOS Intel | `neuralosd-macos-x64` |
-| Linux x86_64 | `neuralosd-linux-x64` |
-| Linux ARM64 | `neuralosd-linux-arm64` |
-| Windows x64 | `neuralosd-windows-x64.exe` |
+| Variant | Asset | Adds |
+|---|---|---|
+| base | `neuralosd-<platform>` | framework + docs + skills + model |
+| boxlite | `neuralosd-boxlite-<platform>` | + BoxLite microVM engine |
+| msb | `neuralosd-msb-<platform>` | + Microsandbox `msb` runtime |
+
+Platforms: `macos-arm64`, `macos-x64`, `linux-x64`, `linux-arm64`,
+`windows-x64` (`.exe`). Verify what a binary carries with `neuralosd backends`.
+
+Availability: base everywhere; boxlite on macOS-arm64 + Linux; msb on
+macOS-arm64 + Linux + Windows. (No upstream wheel for the rest — boxlite has
+no Windows/Intel-macOS build, microsandbox no Intel-macOS build.)
 
 ```bash
 # macOS Apple Silicon
