@@ -12,7 +12,7 @@ def run(a):
     golden_path = os.path.join(inst_dir, "golden.json")
     if not os.path.isfile(golden_path):
         raise SystemExit(f"error: no golden.json in {inst_dir}")
-    with open(golden_path) as f:
+    with open(golden_path, encoding="utf-8") as f:
         golden = json.load(f)
 
     ok = bad = 0

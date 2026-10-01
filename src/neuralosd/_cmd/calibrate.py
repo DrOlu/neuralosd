@@ -14,7 +14,7 @@ def run(a):
     golden_path = a.golden
     if not os.path.isfile(golden_path):
         raise SystemExit(f"error: no golden file: {golden_path}")
-    with open(golden_path) as f:
+    with open(golden_path, encoding="utf-8") as f:
         golden = json.load(f)
 
     # instance dir is the golden file's directory (or cwd)
@@ -35,7 +35,7 @@ def run(a):
 
     out = {"instance": inst.name,
            "gates": {name: round(score, 3) for name, score in sorted(best.items())}}
-    with open(a.out, "w") as f:
+    with open(a.out, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=2)
     print(json.dumps(out, indent=2))
     print(f"\ncalibration written to {a.out}", file=__import__("sys").stderr)

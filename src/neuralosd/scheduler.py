@@ -30,7 +30,7 @@ class Scheduler:
 
     def _save(self):
         with self._lock:
-            json.dump(self.entries, open(self.schedules_file, "w"),
+            json.dump(self.entries, open(self.schedules_file, "w", encoding="utf-8"),
                       indent=2, ensure_ascii=False)
 
     def add(self, name: str, every_s: int, instance: str, question: str):
@@ -75,7 +75,7 @@ class Scheduler:
             out = os.path.join(self.out_dir, f"{e['name']}.json")
             json.dump({"name": e["name"], "ts": time.time(),
                        "question": e["question"], "result": env},
-                      open(out, "w"), indent=1, ensure_ascii=False,
+                      open(out, "w", encoding="utf-8"), indent=1, ensure_ascii=False,
                       default=str)
             print(f"[scheduler] ran {e['name']} -> {out}", flush=True)
         except Exception as exc:

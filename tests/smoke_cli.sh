@@ -36,7 +36,7 @@ East,Widget,200,2400.00
 West,Gadget,45,540.00
 CSV
 run init --source sales.csv --name sales --out ./inst >/dev/null
-check "init created probes.py" "" "$(ls ./inst/probes.py 2>/dev/null || echo MISSING)"
+if [ -f ./inst/probes.py ]; then echo "  ✓ init created probes.py"; pass=$((pass+1)); else echo "  ✗ init created probes.py"; fail=$((fail+1)); fi
 
 # 2. ask — deterministic routing
 r="$(run ask --instance-dir ./inst 'how many rows')"

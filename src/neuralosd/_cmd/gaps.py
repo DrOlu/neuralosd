@@ -9,7 +9,7 @@ def run(a):
         raise SystemExit(f"error: no audit log: {log_path}")
 
     rows = []
-    with open(log_path) as f:
+    with open(log_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -21,7 +21,7 @@ def run(a):
 
     menu = []
     if os.path.isfile(a.menu):
-        with open(a.menu) as f:
+        with open(a.menu, encoding="utf-8") as f:
             data = json.load(f)
         menu = data.get("menu", data) if isinstance(data, dict) else data
     known = {m["name"] for m in menu} if menu else set()
@@ -44,7 +44,7 @@ def run(a):
             uniq.append(g)
 
     out = {"source": log_path, "count": len(uniq), "gaps": uniq}
-    with open(a.out, "w") as f:
+    with open(a.out, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=2, ensure_ascii=False)
     print(json.dumps(out, indent=2, ensure_ascii=False))
     print(f"\n{len(uniq)} gaps written to {a.out}", file=__import__("sys").stderr)

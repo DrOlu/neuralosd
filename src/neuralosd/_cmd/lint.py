@@ -12,7 +12,7 @@ def run(a):
         inst = load_instance(target)
         menu = inst.menu
     elif os.path.isfile(target):
-        with open(target) as f:
+        with open(target, encoding="utf-8") as f:
             data = json.load(f)
         menu = data.get("menu", data) if isinstance(data, dict) else data
     else:

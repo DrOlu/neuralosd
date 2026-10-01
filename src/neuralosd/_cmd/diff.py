@@ -7,7 +7,7 @@ def _load_menu(path):
     if os.path.isdir(path):
         from ._common import load_instance
         return load_instance(path).menu
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         data = json.load(f)
     return data.get("menu", data) if isinstance(data, dict) else data
 

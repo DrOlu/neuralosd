@@ -110,7 +110,7 @@ def count():
 def sample(n=10):
     return {{"rows": rows()[:n]}}
 '''
-    with open(os.path.join(out, "bridge.py"), "w") as f:
+    with open(os.path.join(out, "bridge.py"), "w", encoding="utf-8") as f:
         f.write(bridge)
 
 
@@ -155,7 +155,7 @@ def _write_probes(out, name, info):
     lines.append("PROBES = [" + ", ".join(probe_names) + "]")
     lines.append("")
 
-    with open(os.path.join(out, "probes.py"), "w") as f:
+    with open(os.path.join(out, "probes.py"), "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
 
@@ -190,7 +190,7 @@ neuralosd serve --instance-dir . --port 8877
 2. Add domain probes (joins, aggregates) as new `@probe` functions.
 3. Add a `golden.json` and run `neuralosd golden --dir .` in CI.
 """
-    with open(os.path.join(out, "README.md"), "w") as f:
+    with open(os.path.join(out, "README.md"), "w", encoding="utf-8") as f:
         f.write(readme)
 
 

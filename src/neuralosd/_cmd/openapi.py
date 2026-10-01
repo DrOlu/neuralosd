@@ -8,7 +8,7 @@ def run(a):
 
     menu_path = a.menu
     if os.path.isfile(menu_path) and menu_path.endswith(".json"):
-        with open(menu_path) as f:
+        with open(menu_path, encoding="utf-8") as f:
             data = json.load(f)
         menu = data.get("menu", data) if isinstance(data, dict) else data
         title = a.agent or "neuralos-instance"
@@ -27,7 +27,7 @@ def run(a):
     out = os.path.join(os.path.dirname(os.path.abspath(menu_path)) or ".",
                        "mcp_manifest.json")
     try:
-        with open(out, "w") as f:
+        with open(out, "w", encoding="utf-8") as f:
             json.dump(mcp, f, indent=2, ensure_ascii=False)
         print(f"\n# MCP manifest written to {out}", file=__import__("sys").stderr)
     except OSError:

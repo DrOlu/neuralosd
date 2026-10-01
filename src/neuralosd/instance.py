@@ -58,7 +58,7 @@ class Instance:
 
     def export(self, path: str):
         json.dump({"name": self.name, "menu": self.menu()},
-                  open(path, "w"), indent=2, ensure_ascii=False)
+                  open(path, "w", encoding="utf-8"), indent=2, ensure_ascii=False)
 
 
 import json  # noqa: E402
