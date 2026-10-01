@@ -7,7 +7,7 @@ def run(a):
     from ._common import load_instance
     from ..router import NoResults
 
-    inst = load_instance(a.instance_dir, with_model=True)
+    inst = load_instance(a.instance_dir, with_model=getattr(a, "model", False))
     question = " ".join(a.question)
     try:
         env = inst.ask(question)

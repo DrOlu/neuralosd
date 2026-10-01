@@ -2,7 +2,25 @@ from .router import NoResults
 
 """Minimal HTTP service for an Instance: /healthz /ready /ask /openapi."""
 import json
+import socketserver
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+class _Server(ThreadingHTTPServer):
+    """ThreadingHTTPServer that never blocks on reverse-DNS.
+
+    HTTPServer.server_bind() calls socket.getfqdn(host), which can hang for
+    tens of seconds (or forever) on networks with a slow/unreachable DNS.
+    We bind the socket and set server_name to the literal host instead.
+    """
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = host
+        self.server_port = port
 
 
 def serve(instance, port: int = 8877, host: str = "0.0.0.0"):
@@ -52,6 +70,6 @@ def serve(instance, port: int = 8877, host: str = "0.0.0.0"):
             except Exception as exc:
                 self._send(500, {"error": str(exc)[:300]})
 
-        print(f"neuralOS instance '{inst.name}' -> http://{host}:{port} "
+    print(f"neuralOS instance '{inst.name}' -> http://{host}:{port} "
           f"(/healthz /ready /ask)", flush=True)
-    ThreadingHTTPServer((host, port), Handler).serve_forever()
+    _Server((host, port), Handler).serve_forever()

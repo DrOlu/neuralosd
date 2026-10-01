@@ -45,12 +45,17 @@ def main():
     # ask
     p_ask = sub.add_parser("ask", help="Ask a question")
     p_ask.add_argument("--instance-dir", required=True)
+    p_ask.add_argument("--model", action="store_true",
+                       help="Load the on-device model as a fallback when no "
+                            "probe matches (slower startup)")
     p_ask.add_argument("question", nargs="+")
 
     # serve
     p_serve = sub.add_parser("serve", help="Start the HTTP service")
     p_serve.add_argument("--instance-dir", required=True)
     p_serve.add_argument("--port", type=int, default=8877)
+    p_serve.add_argument("--model", action="store_true",
+                         help="Load the on-device model as a fallback")
 
     # lint
     p_lint = sub.add_parser("lint", help="Trigger collision linter")
