@@ -1,5 +1,12 @@
-import os, sys
+"""`neuralosd serve` — HTTP service for one instance."""
+import sys
+
+
 def run(a):
-    d = os.path.abspath(a.instance_dir)
-    os.chdir(d); sys.path.insert(0, d)
-    import serve; serve.main()
+    from ._common import load_instance
+    from ..service import serve
+
+    inst = load_instance(a.instance_dir, with_model=True)
+    print(f"serving instance '{inst.name}' with {len(inst.probes)} probes "
+          f"on http://0.0.0.0:{a.port}", file=sys.stderr)
+    serve(inst, port=a.port)

@@ -1,13 +1,21 @@
+"""`neuralosd golden` — run the golden question bank for an instance."""
+import json
+import os
+import sys
+
+
 def run(a):
-    import sys, subprocess, os
-    script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                          "..", "tools", "golden.py")
-    if not os.path.exists(script):
-        script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                              "..", "..", "..",
-                              "agent-skills", "skills", "neuralos", "scripts",
-                              "golden.py")
-    if os.path.exists(script):
-        raise SystemExit(subprocess.call([sys.executable, script] + sys.argv[1:]))
-    print(f"tool script not found: {script}")
-    raise SystemExit(1)
+    from ._common import load_instance
+
+    inst_dir = os.path.abspath(a.dir)
+    inst = load_instance(inst_dir)
+
+    golden_path = os.path.join(inst_dir, "golden.json")
+    if not os.path.isfile(golden_path):
+        raise SystemExit(f"error: no golden.json in {inst_dir}")
+    with open(golden_path) as f:
+        golden = json.load(f)
+
+    passed = inst.golden_run(golden)
+    total = len(golden.get("items", []))
+    raise SystemExit(0 if passed == total else 1)

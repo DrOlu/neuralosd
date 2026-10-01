@@ -17,10 +17,13 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .probe import ProbeMeta
 
-STOP = set("the a an of in on for to and or is are was were what which who how "
-           "many show me give list all with their from by at it its do does did "
+# Only pure function words are stopped. Intent-bearing words (how, many,
+# much, show, list, count, top, best) are PRESERVED so that phrase
+# specificity survives — "how many rows" must not collapse to "rows".
+STOP = set("the a an of in on for to and or is are was were what which who "
+           "me give all with their from by at it its do does did "
            "i we you this that those these there have has had more than one not "
-           "use between during along per into over under about their".split())
+           "use between during along per into over under about".split())
 
 PII_HINTS = ("email", "phone", "ssn", "iban", "tax_id", "passport")
 
@@ -36,9 +39,13 @@ def tokens(text):
 
 
 def score_probe(meta: ProbeMeta, q_tokens):
-    s = 0.0
-    for trig in meta.triggers:
-        s += 3.0 * len(q_tokens & tokens(trig))
+    # The BEST single trigger match dominates, so a probe with one exact
+    # phrase beats a probe with many partially-overlapping triggers.
+    # (e.g. "how many rows" -> row_count, not list_rows.)
+    overlaps = [len(q_tokens & tokens(trig)) for trig in meta.triggers]
+    best = max(overlaps, default=0)
+    s = 4.0 * best
+    s += 1.0 * sum(overlaps)                 # small bonus for breadth
     s += 1.0 * len(q_tokens & tokens(meta.name.replace("_", " ")))
     s += 0.3 * len(q_tokens & tokens(meta.description))
     return s

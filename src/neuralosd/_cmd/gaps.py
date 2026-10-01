@@ -1,13 +1,50 @@
+"""`neuralosd gaps` — mine gated/fuzzy questions from an ask audit log."""
+import json
+import os
+
+
 def run(a):
-    import sys, subprocess, os
-    script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                          "..", "tools", "gaps.py")
-    if not os.path.exists(script):
-        script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                              "..", "..", "..",
-                              "agent-skills", "skills", "neuralos", "scripts",
-                              "gaps.py")
-    if os.path.exists(script):
-        raise SystemExit(subprocess.call([sys.executable, script] + sys.argv[1:]))
-    print(f"tool script not found: {script}")
-    raise SystemExit(1)
+    log_path = a.log
+    if not os.path.isfile(log_path):
+        raise SystemExit(f"error: no audit log: {log_path}")
+
+    rows = []
+    with open(log_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+
+    menu = []
+    if os.path.isfile(a.menu):
+        with open(a.menu) as f:
+            data = json.load(f)
+        menu = data.get("menu", data) if isinstance(data, dict) else data
+    known = {m["name"] for m in menu} if menu else set()
+
+    gaps = []
+    for r in rows:
+        probe = r.get("probe")
+        gated = r.get("gated") or r.get("fuzzy") or r.get("no_results")
+        if gated or (menu and probe not in known):
+            gaps.append({"question": r.get("question") or r.get("q"),
+                         "probe": probe,
+                         "score": r.get("score"),
+                         "reason": "gated" if gated else "unmatched"})
+
+    seen, uniq = set(), []
+    for g in gaps:
+        key = (g["question"] or "").lower()
+        if key and key not in seen:
+            seen.add(key)
+            uniq.append(g)
+
+    out = {"source": log_path, "count": len(uniq), "gaps": uniq}
+    with open(a.out, "w") as f:
+        json.dump(out, f, indent=2, ensure_ascii=False)
+    print(json.dumps(out, indent=2, ensure_ascii=False))
+    print(f"\n{len(uniq)} gaps written to {a.out}", file=__import__("sys").stderr)

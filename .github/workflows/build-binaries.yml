@@ -48,6 +48,7 @@ jobs:
             --output-dir=dist \
             --output-filename=neuralosd \
             --include-package=neuralosd \
+            --include-package=neuralosd._cmd \
             --include-package=needle \
             --include-package=pydantic \
             --include-package-data=needle \
@@ -70,15 +71,14 @@ jobs:
           fi
           ls -lh dist/neuralosd* || true
 
-      - name: Smoke test
+      - name: Smoke test binary
         shell: bash
         run: |
           BINARY=$(find dist -name "neuralosd*" -type f | head -1)
-          if [ -n "$BINARY" ]; then
-            echo "binary: $BINARY ($(du -h "$BINARY" | cut -f1))"
-          else
-            echo "no binary found"; exit 1
-          fi
+          if [ -z "$BINARY" ]; then echo "no binary found"; exit 1; fi
+          chmod +x "$BINARY" 2>/dev/null || true
+          echo "binary: $BINARY ($(du -h "$BINARY" | cut -f1))"
+          bash tests/smoke_cli.sh "$(pwd)/$BINARY"
 
       - uses: actions/upload-artifact@v4
         with:

@@ -14,6 +14,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev]" && pytest tests/ -v
+      - run: pip install -e . && bash tests/smoke_cli.sh "$(which neuralosd)"
 
   publish:
     needs: test

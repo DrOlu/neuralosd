@@ -103,41 +103,41 @@ def main():
         return
 
     if a.command == "init":
-        from . import _cmd_init
-        _cmd_init.run(a)
+        from ._cmd import init
+        init.run(a)
     elif a.command == "deploy":
-        from . import _cmd_deploy
-        _cmd_deploy.run(a)
+        from ._cmd import deploy
+        deploy.run(a)
     elif a.command == "ask":
-        from . import _cmd_ask
-        _cmd_ask.run(a)
+        from ._cmd import ask
+        ask.run(a)
     elif a.command == "serve":
-        from . import _cmd_serve
-        _cmd_serve.run(a)
+        from ._cmd import serve
+        serve.run(a)
     elif a.command == "lint":
-        from . import _cmd_lint
-        _cmd_lint.run(a)
+        from ._cmd import lint
+        lint.run(a)
     elif a.command == "golden":
-        from . import _cmd_golden
-        _cmd_golden.run(a)
+        from ._cmd import golden
+        golden.run(a)
     elif a.command == "truth":
-        from . import _cmd_truth
-        _cmd_truth.run(a)
+        from ._cmd import truth
+        truth.run(a)
     elif a.command == "invariants":
-        from . import _cmd_invariants
-        _cmd_invariants.run(a)
+        from ._cmd import invariants
+        invariants.run(a)
     elif a.command == "calibrate":
-        from . import _cmd_calibrate
-        _cmd_calibrate.run(a)
+        from ._cmd import calibrate
+        calibrate.run(a)
     elif a.command == "gaps":
-        from . import _cmd_gaps
-        _cmd_gaps.run(a)
+        from ._cmd import gaps
+        gaps.run(a)
     elif a.command == "openapi":
-        from . import _cmd_openapi
-        _cmd_openapi.run(a)
+        from ._cmd import openapi
+        openapi.run(a)
     elif a.command == "diff":
-        from . import _cmd_diff
-        _cmd_diff.run(a)
+        from ._cmd import diff
+        diff.run(a)
     elif a.command == "docs":
         import neuralosd as _mod
         print(_mod.docs(getattr(a, "topic", None)))
