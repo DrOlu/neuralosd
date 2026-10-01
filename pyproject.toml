@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neuralosd"
+version = "1.0.0"
+description = "Deterministic-first agentic runtime — @probe framework, chain runner, meta-selector, HITL guardrails, MCP/OpenAPI exposure, and microVM sandbox backends (BoxLite / Microsandbox)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Hyperspace Technologies", email = "agent@superagent.ng" }]
+keywords = ["neuralos", "agentic", "sandbox", "microvm", "on-device",
+            "tool-calling", "deterministic", "offline", "probes"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.scripts]
+neuralosd = "neuralosd.cli:main"
+
+[project.optional-dependencies]
+model = ["neuralos>=3.0.3"]
+boxlite = ["boxlite>=0.10.0"]
+msb = []
+data = ["pydantic>=2", "pymysql"]
+all = ["neuralos>=3.0.3", "boxlite>=0.10.0", "pydantic>=2", "pymysql"]
+dev = ["pytest", "pytest-asyncio"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
