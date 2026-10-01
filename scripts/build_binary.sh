@@ -19,17 +19,24 @@ VERSION="${3:-0.0.0}"
 
 # NOTE: a plain string (not an array) so this works on bash 3.2 (macOS)
 # under `set -u`, where expanding an empty array is an error.
-EXTRA=""
+#
+# --nofollow-import-to is essential: backends import their runtime lazily
+# (`import boxlite` inside a method), and Nuitka still follows that import.
+# Without it, every variant built in a job that has boxlite installed ends
+# up bundling boxlite — so the msb binary reported BOTH backends available.
+NOFOLLOW_BOX="--nofollow-import-to=boxlite"
+NOFOLLOW_MSB="--nofollow-import-to=microsandbox"
+EXTRA="$NOFOLLOW_BOX $NOFOLLOW_MSB"
 case "$VARIANT" in
   base)
     ;;
   boxlite)
     python -c "import boxlite" 2>/dev/null || { echo "boxlite not importable"; exit 1; }
-    EXTRA="--include-package=boxlite --include-package-data=boxlite"
+    EXTRA="--include-package=boxlite --include-package-data=boxlite $NOFOLLOW_MSB"
     ;;
   msb)
     python -c "import microsandbox" 2>/dev/null || { echo "microsandbox not importable"; exit 1; }
-    EXTRA="--include-package=microsandbox --include-package-data=microsandbox"
+    EXTRA="--include-package=microsandbox --include-package-data=microsandbox $NOFOLLOW_BOX"
     ;;
   *)
     echo "unknown variant: $VARIANT (expected base|boxlite|msb)"; exit 1
