@@ -4,6 +4,10 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      only:
+        description: "Only build this target (blank = all)"
+        default: ""
 
 permissions:
   contents: write
@@ -28,6 +32,7 @@ jobs:
             target: windows-x64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    if: ${{ github.event.inputs.only == '' || matrix.target == github.event.inputs.only }}
     steps:
       - uses: actions/checkout@v4
 
