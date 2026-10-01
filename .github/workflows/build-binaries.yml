@@ -57,6 +57,8 @@ jobs:
           python -m nuitka \
             --onefile \
             --onefile-cache-mode=cached \
+            --company-name=Hyperspace \
+            --product-name=neuralosd \
             --output-dir=dist \
             --output-filename=neuralosd \
             --include-package=neuralosd \
