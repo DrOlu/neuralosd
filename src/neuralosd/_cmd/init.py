@@ -1,9 +1,10 @@
 """`neuralosd init` — scaffold a working instance from a data source.
 
 Supported sources (self-contained, no external scripts):
-  *.csv / *.tsv   — column profiled; row-count / list / filter probes generated
-  *.json / *.jsonl— key profiled; count / list / lookup probes generated
-  anything else   — a contract template the user fills in
+  *.csv / *.tsv    — column profiled; count / list / distinct / sum probes
+  *.xlsx / *.xlsm  — Excel workbook profiled (needs openpyxl; all sheets)
+  *.json / *.jsonl — key profiled; count / list / lookup probes
+  anything else    — a contract template the user fills in
 """
 import json
 import os
@@ -15,7 +16,9 @@ def run(a):
     out = os.path.abspath(a.out or f"./{a.name}")
     os.makedirs(out, exist_ok=True)
 
-    if src.endswith((".csv", ".tsv")):
+    if src.endswith((".xlsx", ".xlsm")):
+        info = _profile_xlsx(src)
+    elif src.endswith((".csv", ".tsv")):
         info = _profile_delimited(src)
     elif src.endswith((".json", ".jsonl")):
         info = _profile_json(src)
@@ -26,11 +29,71 @@ def run(a):
     _write_probes(out, a.name, info)
     _write_readme(out, a.name, src, info)
 
+    n = len(info.get("columns", []))
     print(f"instance '{a.name}' scaffolded at {out}")
-    print(f"  probes.py     — {len(info.get('columns', []))} column(s) profiled")
-    print(f"  bridge.py     — pure-python data layer")
-    print(f"  README.md     — next steps")
+    print(f"  bridge.py     — pure-python data layer ({info.get('kind')})")
+    print(f"  probes.py     — {n} column(s) profiled")
+    if info.get("sheets"):
+        print(f"  sheets        — {', '.join(info['sheets'])}")
+    print("  README.md     — next steps")
     print(f"\ntry:  neuralosd ask --instance-dir {out} \"how many rows\"")
+
+
+def _profile_xlsx(path):
+    """Profile an Excel workbook with openpyxl. First sheet drives the menu."""
+    try:
+        import openpyxl
+    except ImportError:
+        raise SystemExit(
+            "error: reading .xlsx needs openpyxl.\n"
+            "    pip install openpyxl       # or: pip install 'neuralosd[data]'")
+
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    sheets = {}
+    order = []
+    for ws in wb.worksheets:
+        order.append(ws.title)
+        it = ws.iter_rows(values_only=True)
+        header = [str(h) if h is not None else f"col{i}"
+                  for i, h in enumerate(next(it, []))]
+        sample = []
+        n = 0
+        for r in it:
+            n += 1
+            if len(sample) < 500:
+                sample.append(r)
+        cols = []
+        for i, name in enumerate(header):
+            vals = [r[i] for r in sample if i < len(r) and r[i] is not None]
+            cols.append({"name": name, "type": _infer_type(vals),
+                         "card": len(set(vals))})
+        sheets[ws.title] = {"columns": cols, "rows": n}
+    wb.close()
+
+    primary = order[0]
+    return {"kind": "xlsx", "path": os.path.abspath(path), "sheet": primary,
+            "sheets": order, "columns": sheets[primary]["columns"],
+            "rows": sheets[primary]["rows"], "sheet_info": sheets}
+
+
+def _infer_type(values):
+    if not values:
+        return "str"
+    sample = values[:500]
+    if all(isinstance(v, bool) for v in sample):
+        return "bool"
+    if all(isinstance(v, int) and not isinstance(v, bool) for v in sample):
+        return "int"
+    if all(isinstance(v, (int, float)) and not isinstance(v, bool)
+           for v in sample):
+        return "float"
+    if all(hasattr(v, "year") for v in sample):
+        return "date"
+    if all(_is_int(v) for v in sample):
+        return "int"
+    if all(_is_float(v) for v in sample):
+        return "float"
+    return "str"
 
 
 def _profile_delimited(path):
@@ -45,7 +108,8 @@ def _profile_delimited(path):
         values = [r[i] for r in rows if i < len(r)][:1000]
         infer = "int" if values and all(_is_int(v) for v in values) else (
             "float" if values and all(_is_float(v) for v in values) else "str")
-        columns.append({"name": col, "type": infer})
+        columns.append({"name": col, "type": infer,
+                        "card": len({v for v in values if v not in (None, "")})})
     return {"kind": "delimited", "path": os.path.abspath(path),
             "columns": columns, "rows": len(rows), "delim": delim}
 
@@ -80,16 +144,40 @@ def _profile_json(path):
             "columns": keys, "rows": len(rows)}
 
 
+def _safe(name):
+    return "".join(ch if ch.isalnum() or ch == "_" else "_"
+                   for ch in str(name)).lower().strip("_")
+
+
 def _write_bridge(out, src, info):
+    sheet = info.get("sheet") or ""
     bridge = f'''"""Data layer for the scaffolded instance — pure python, no model calls."""
 import csv
 import json
 import os
 
 SOURCE = {json.dumps(os.path.abspath(src))}
+SHEET = {json.dumps(sheet)}
+
+
+def _xlsx_rows():
+    import openpyxl
+    wb = openpyxl.load_workbook(SOURCE, read_only=True, data_only=True)
+    ws = wb[SHEET] if SHEET and SHEET in wb.sheetnames else wb.worksheets[0]
+    it = ws.iter_rows(values_only=True)
+    header = [str(h) if h is not None else f"col{{i}}"
+              for i, h in enumerate(next(it, []))]
+    out = []
+    for r in it:
+        out.append({{header[i]: (r[i] if i < len(r) else None)
+                    for i in range(len(header))}})
+    wb.close()
+    return out
 
 
 def rows():
+    if SOURCE.endswith((".xlsx", ".xlsm")):
+        return _xlsx_rows()
     if SOURCE.endswith((".csv", ".tsv")):
         delim = "\\t" if SOURCE.endswith(".tsv") else ","
         with open(SOURCE, newline="", encoding="utf-8", errors="replace") as f:
@@ -103,12 +191,36 @@ def rows():
     return r
 
 
+def _num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def count():
     return {{"count": len(rows())}}
 
 
 def sample(n=10):
     return {{"rows": rows()[:n]}}
+
+
+def distinct(column, cap=100):
+    values = {{r.get(column) for r in rows()}}
+    clean = sorted(str(v) for v in values if v is not None)
+    return {{"column": column, "count": len(clean), "distinct": clean[:cap]}}
+
+
+def total(column):
+    vals = [n for n in (_num(r.get(column)) for r in rows()) if n is not None]
+    return {{"column": column, "sum": round(sum(vals), 2), "n": len(vals)}}
+
+
+def average(column):
+    vals = [n for n in (_num(r.get(column)) for r in rows()) if n is not None]
+    avg = round(sum(vals) / len(vals), 2) if vals else None
+    return {{"column": column, "average": avg, "n": len(vals)}}
 '''
     with open(os.path.join(out, "bridge.py"), "w", encoding="utf-8") as f:
         f.write(bridge)
@@ -123,35 +235,65 @@ def _write_probes(out, name, info):
 
     lines += [
         '@probe(description="Count rows in the data source",',
-        '       triggers=["how many rows", "count", "row count", "size"])',
+        '       triggers=["how many rows", "count", "row count", "size",',
+        '                 "how many records", "dataset size"])',
         "def row_count():",
         "    return bridge.count()",
         "",
         '@probe(description="Show a sample of rows",',
-        '       triggers=["show rows", "list rows", "sample", "example rows"])',
+        '       triggers=["show rows", "list rows", "sample", "example rows",',
+        '                 "preview the data", "first rows"])',
         "def list_rows():",
         "    return bridge.sample(20)",
         "",
     ]
+    probe_names = ["row_count", "list_rows"]
 
-    for col in cols[:8]:
+    # categorical columns (few distinct values) -> a distinct-values probe
+    for col in cols:
+        if col.get("type") not in ("str", "bool"):
+            continue
+        card = col.get("card")
+        if card is None or not (2 <= card <= 100):
+            continue
         cname = col["name"]
-        safe = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in cname).lower()
+        low = cname.lower()
+        safe = _safe(cname)
         lines += [
-            f'@probe(description="List distinct values for column {cname}",',
-            f'       triggers=["{cname} values", "distinct {cname}",',
-            f'                 "what {cname}", "list {cname}"])',
+            f'@probe(description="List the distinct values of {cname}",',
+            f'       triggers=["{low} values", "distinct {low}", "what {low}",',
+            f'                 "list {low}", "which {low}", "{low} list"])',
             f"def distinct_{safe}():",
-            f'    values = {{r.get("{cname}") for r in bridge.rows()}}',
-            f'    return {{"column": "{cname}", "distinct": sorted(v for v in values if v is not None)[:100],',
-            f'            "count": len(values)}}',
+            f'    return bridge.distinct("{cname}")',
             "",
         ]
+        probe_names.append(f"distinct_{safe}")
 
-    probe_names = ["row_count", "list_rows"] + [
-        "distinct_" + "".join(ch if ch.isalnum() or ch == "_" else "_"
-                              for ch in c["name"]).lower()
-        for c in cols[:8]]
+    # numeric columns -> total + average (skip ids, codes, years)
+    skip = ("row id", "postal", "id", "code", "zip", "year", "date")
+    for col in cols:
+        if col.get("type") not in ("int", "float"):
+            continue
+        cname = col["name"]
+        if any(s in cname.lower() for s in skip):
+            continue
+        low = cname.lower()
+        safe = _safe(cname)
+        lines += [
+            f'@probe(description="Total (sum) of {cname}",',
+            f'       triggers=["total {low}", "sum of {low}", "sum {low}",',
+            f'                 "{low} total", "overall {low}"])',
+            f"def total_{safe}():",
+            f'    return bridge.total("{cname}")',
+            "",
+            f'@probe(description="Average of {cname}",',
+            f'       triggers=["average {low}", "mean {low}", "avg {low}"])',
+            f"def average_{safe}():",
+            f'    return bridge.average("{cname}")',
+            "",
+        ]
+        probe_names += [f"total_{safe}", f"average_{safe}"]
+
     lines.append("PROBES = [" + ", ".join(probe_names) + "]")
     lines.append("")
 

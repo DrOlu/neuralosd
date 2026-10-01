@@ -33,8 +33,8 @@ neuralosd = "neuralosd.cli:main"
 model = ["neuralos>=3.0.3"]
 boxlite = ["boxlite>=0.10.0"]
 msb = ["microsandbox>=0.7.0"]
-data = ["pydantic>=2", "pymysql"]
-all = ["neuralos>=3.0.3", "boxlite>=0.10.0", "microsandbox>=0.7.0", "pydantic>=2", "pymysql"]
+data = ["pydantic>=2", "pymysql", "openpyxl>=3.1"]
+all = ["neuralos>=3.0.3", "boxlite>=0.10.0", "microsandbox>=0.7.0", "pydantic>=2", "pymysql", "openpyxl>=3.1"]
 dev = ["pytest", "pytest-asyncio"]
 
 [tool.setuptools.packages.find]
