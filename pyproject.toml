@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "neuralosd"
-version = "1.0.1"
+version = "1.0.2"
 description = "Deterministic-first agentic runtime — @probe framework, chain runner, meta-selector, HITL guardrails, MCP/OpenAPI exposure, and microVM sandbox backends (BoxLite / Microsandbox)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -44,4 +44,4 @@ where = ["src"]
 testpaths = ["tests"]
 
 [tool.setuptools.package-data]
-neuralosd = ["docs/*.md"]
+neuralosd = ["docs/*.md", "skills/*"]

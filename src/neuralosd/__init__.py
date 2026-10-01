@@ -6,7 +6,7 @@ One pip install. Two sandbox backends (BoxLite, Microsandbox). Any data
 source. Offline. On CPU. With verification gates, audit trail, and
 deterministic routing.
 """
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 
 _DOCS = {
     "usage": "neuralOS usage and operations guide",
@@ -14,6 +14,17 @@ _DOCS = {
     "cookbook": "agentic cookbook — complete recipes",
     "reference": "API reference — every class, function, parameter",
 }
+
+
+def skills() -> dict:
+    """List bundled agent skill documents (neuralOS operational manuals)."""
+    skills_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills")
+    result = {}
+    if os.path.isdir(skills_dir):
+        for f in sorted(os.listdir(skills_dir)):
+            if f.endswith(".md"):
+                result[f.replace(".md", "")] = os.path.join(skills_dir, f)
+    return result
 
 
 def docs(topic: str = None) -> str:
