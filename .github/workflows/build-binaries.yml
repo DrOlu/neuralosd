@@ -56,7 +56,7 @@ jobs:
 
       - name: Install base dependencies
         run: |
-          pip install neuralos pydantic pymysql nuitka pytest
+          pip install neuralos pydantic pymysql nuitka pytest openpyxl
           pip install -e .
 
       - name: Unit tests
@@ -163,6 +163,37 @@ jobs:
           echo "----- msb bundle diagnostic -----"
           "$(pwd)/$BIN" ask --instance-dir diaginst "diag" 2>&1 | head -60 || true
           echo "---------------------------------"
+
+      - name: Sidecar — run a probe on a host library the binary lacks
+        shell: bash
+        run: |
+          BIN=$(find dist -maxdepth 1 -type f -name "neuralosd" | head -1)
+          if [ -z "$BIN" ]; then echo "(no base binary built — skipping)"; exit 0; fi
+          chmod +x "$BIN" 2>/dev/null || true
+          pip install pypdf >/dev/null
+          mkdir -p sideinst
+          cp tests/sidecar_e2e_probes.py sideinst/probes.py
+
+          echo "===== A) sidecar DISABLED: must fail clearly, not crash ====="
+          set +e
+          outA=$(NEURALOSD_SIDECAR=off "$(pwd)/$BIN" ask --instance-dir sideinst "pdf pages" 2>&1)
+          codeA=$?
+          set -e
+          echo "$outA" | head -8
+          [ "$codeA" -ne 0 ] || { echo "FAIL(A): expected a non-zero exit without a sidecar"; exit 1; }
+          echo "$outA" | grep -q "pypdf" || { echo "FAIL(A): error did not name pypdf"; exit 1; }
+          echo "$outA" | grep -qi "pip install" || { echo "FAIL(A): error was not actionable"; exit 1; }
+          echo "  PASS A: clean failure that names pypdf and suggests installing it"
+
+          echo "===== B) sidecar ENABLED: must answer via the host Python ====="
+          set +e
+          outB=$("$(pwd)/$BIN" ask --instance-dir sideinst "pdf pages" 2>&1)
+          codeB=$?
+          set -e
+          echo "$outB" | head -20
+          [ "$codeB" -eq 0 ] || { echo "FAIL(B): sidecar run exited $codeB"; exit 1; }
+          echo "$outB" | grep -q '"pages": 2' || { echo "FAIL(B): wrong or missing result"; exit 1; }
+          echo "  PASS B: frozen binary answered using a library it does not contain"
 
       - name: Rename with target suffix
         shell: bash

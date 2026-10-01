@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "neuralosd"
-version = "1.0.12"
+version = "1.1.0"
 description = "Deterministic-first agentic runtime — @probe framework, chain runner, meta-selector, HITL guardrails, MCP/OpenAPI exposure, and microVM sandbox backends (BoxLite / Microsandbox)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -28,6 +28,7 @@ classifiers = [
 
 [project.scripts]
 neuralosd = "neuralosd.cli:main"
+neuralosd-sidecar = "neuralosd.sidecar:main"
 
 [project.optional-dependencies]
 model = ["neuralos>=3.0.3"]

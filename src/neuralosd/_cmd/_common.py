@@ -99,22 +99,97 @@ def load_instance(instance_dir: str, with_model: bool = False):
                 "hint: create one with `neuralosd init --source <file> --name <n>`"
                 " or point --instance-dir at an instance directory")
 
+    name = os.path.basename(instance_dir.rstrip("/")) or "instance"
+
+    try:
+        probes = _load_probes_in_process(probes_py, instance_dir, name)
+    except ModuleNotFoundError as e:
+        # A probe (or its bridge) imports a driver/model this environment
+        # does not have. Before giving up, try the sidecar: a host-Python
+        # helper where arbitrary libraries CAN be installed.
+        probes = _probes_via_sidecar_or_die(
+            instance_dir, name, probes_py, getattr(e, "name", ""))
+    except SystemExit:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise SystemExit(f"error: failed to load {probes_py}: {e}")
+
+    # Probes explicitly declared tier="sidecar" run in the host Python even
+    # when the instance loaded fine here (e.g. to use a library the frozen
+    # binary lacks while everything else stays in-process).
+    probes = _maybe_redirect_tier_sidecar(probes, instance_dir)
+
+    # A probe's dependency is often imported INSIDE the function, so a missing
+    # library shows up at CALL time, not load time — the module imports fine
+    # and the failure would otherwise be swallowed into an error envelope
+    # (a false negative: never delegated). Wrap every locally-run probe so a
+    # call-time ModuleNotFoundError retries in the sidecar.
+    probes = _wrap_with_sidecar_fallback(probes, instance_dir)
+
+    model_fallback = _build_model_fallback(probes) if with_model else None
+    return Instance(name=name, probes=probes,
+                    model_fallback=model_fallback, state_dir=instance_dir)
+
+
+def _wrap_with_sidecar_fallback(probes, instance_dir):
+    """Retry a probe in the sidecar when its (lazy) import is missing here.
+
+    The sidecar is started lazily — only on the first call that actually needs
+    it — so instances whose dependencies are all present never pay for a
+    subprocess.
+    """
+    holder = {"client": None, "tried": False}
+
+    def client():
+        if not holder["tried"]:
+            holder["tried"] = True
+            from ..sidecar_client import (SidecarClient, SidecarError,
+                                          sidecar_command)
+            if sidecar_command():
+                try:
+                    holder["client"] = SidecarClient(instance_dir).start()
+                except SidecarError:
+                    holder["client"] = None
+        return holder["client"]
+
+    out = []
+    for fn in probes:
+        meta = getattr(fn, "_probe", None)
+        if meta is None or getattr(fn, "_sidecar_backed", False):
+            out.append(fn)          # already a forwarding stub
+            continue
+        out.append(_make_fallback_probe(fn, meta, client))
+    return out
+
+
+def _make_fallback_probe(fn, meta, client):
+    def wrapper(**kwargs):
+        try:
+            return fn(**kwargs)
+        except ModuleNotFoundError as e:
+            c = client()
+            if c is None:
+                raise SystemExit(_missing_module_help(
+                    getattr(e, "name", "") or "<unknown>",
+                    f"probe '{meta.name}'"))
+            return c.call(meta.name, kwargs)
+
+    wrapper.__name__ = meta.name
+    wrapper._probe = meta
+    meta.function = wrapper
+    return wrapper
+
+
+def _load_probes_in_process(probes_py, instance_dir, name):
+    """Import probes.py here. Raises ModuleNotFoundError when a probe's
+    dependency is missing (the caller may then fall back to the sidecar)."""
     if instance_dir not in sys.path:
         sys.path.insert(0, instance_dir)
-
-    name = os.path.basename(instance_dir.rstrip("/")) or "instance"
     modname = f"neuralosd_inst_{name}"
     spec = importlib.util.spec_from_file_location(modname, probes_py)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[modname] = mod
-    try:
-        spec.loader.exec_module(mod)
-    except ModuleNotFoundError as e:
-        # A probe (or its bridge) imports a driver/model the environment
-        # doesn't have. Give an actionable message instead of a traceback.
-        raise SystemExit(_missing_module_help(getattr(e, "name", ""), probes_py))
-    except Exception as e:  # noqa: BLE001
-        raise SystemExit(f"error: failed to load {probes_py}: {e}")
+    spec.loader.exec_module(mod)
 
     probes = list(getattr(mod, "PROBES", []))
     if not probes:
@@ -125,10 +200,82 @@ def load_instance(instance_dir: str, with_model: bool = False):
             f"error: {probes_py} defines no probes.\n"
             "hint: add `PROBES = [my_probe, ...]` or decorate functions "
             "with @probe(...)")
+    return probes
 
-    model_fallback = _build_model_fallback(probes) if with_model else None
-    return Instance(name=name, probes=probes,
-                    model_fallback=model_fallback, state_dir=instance_dir)
+
+def _probes_via_sidecar_or_die(instance_dir, name, probes_py, missing):
+    """Build sidecar-backed probes, or exit with the actionable message."""
+    from ..sidecar_client import SidecarClient, SidecarError, sidecar_command
+
+    if not sidecar_command():
+        raise SystemExit(_missing_module_help(missing, probes_py))
+    try:
+        client = SidecarClient(instance_dir).start()
+        metas = client.menu()
+    except SidecarError as e:
+        msg = _missing_module_help(missing, probes_py)
+        raise SystemExit(
+            f"{msg}\n\nthe sidecar was found but failed: {e}\n"
+            "(the sidecar runs in the HOST python — install the missing "
+            "library there, e.g. `pip install " + (missing or "<lib>") + "`)")
+    return _stubs_from_menu(metas, client)
+
+
+def _stubs_from_menu(metas, client):
+    """Turn a sidecar menu into probe functions that forward their calls."""
+    from ..probe import ProbeMeta
+
+    out = []
+    for m in metas:
+        def make(meta):
+            def fn(**kwargs):
+                return client.call(meta["name"], kwargs)
+            fn.__name__ = meta["name"]
+            fn._probe = ProbeMeta(
+                name=meta["name"],
+                description=meta.get("description", ""),
+                triggers=list(meta.get("triggers") or []),
+                args=dict(meta.get("args") or {}),
+                pii=list(meta.get("pii") or []),
+                conf_gate=meta.get("conf_gate"),
+                tier=meta.get("tier") or "sidecar",
+                confirm=bool(meta.get("confirm")),
+                function=None,
+            )
+            fn._probe.function = fn
+            fn._sidecar_backed = True   # already delegates; don't re-wrap
+            return fn
+        out.append(make(m))
+    return out
+
+
+def _maybe_redirect_tier_sidecar(probes, instance_dir):
+    """Replace tier="sidecar" probes with forwarding stubs (needs a sidecar)."""
+    wanted = [p for p in probes
+              if getattr(getattr(p, "_probe", None), "tier", None) == "sidecar"]
+    if not wanted:
+        return probes
+    from ..sidecar_client import SidecarClient, SidecarError, sidecar_command
+    if not sidecar_command():
+        raise SystemExit(
+            "error: this instance has probes with tier=\"sidecar\", but no "
+            "sidecar was found.\n"
+            "hint: pip install neuralosd   (provides the neuralosd-sidecar "
+            "command) or set $NEURALOSD_SIDECAR")
+    try:
+        client = SidecarClient(instance_dir).start()
+        metas = {m["name"]: m for m in client.menu()}
+    except SidecarError as e:
+        raise SystemExit(f"error: sidecar unavailable for tier=\"sidecar\" "
+                         f"probes: {e}")
+
+    names = {p._probe.name for p in wanted}
+    stubs = {p._probe.name: p for p in _stubs_from_menu(
+        [metas[n] for n in names if n in metas], client)}
+    out = []
+    for p in probes:
+        out.append(stubs.get(p._probe.name, p))
+    return out
 
 
 def _build_model_fallback(probes):

@@ -68,8 +68,10 @@ python -m nuitka \
   --include-package=neuralosd._cmd \
   --include-package=needle \
   --include-package=pydantic \
+  --include-package=openpyxl \
   --include-package-data=needle \
   --include-package-data=neuralosd \
+  --include-package-data=openpyxl \
   $EXTRA \
   --company-name=Hyperspace \
   --product-name="neuralosd-$VARIANT" \

@@ -327,8 +327,27 @@ class Router:
             raise NoResults(env)
 
         self._audit(env)
-        self._cache_store(key, env)
+        # Never cache a failure. Errors here are usually environmental and
+        # fixable (a missing library, a DB that was down, a timeout); caching
+        # one for the whole TTL means the user installs the missing piece,
+        # retries, and keeps getting the stale error for an hour.
+        if not _is_error_envelope(env):
+            self._cache_store(key, env)
         return env
+
+
+def _is_error_envelope(env) -> bool:
+    """True when this envelope represents a failure rather than an answer."""
+    if env.get("error"):
+        return True
+    if str(env.get("mode") or "").endswith("-error"):
+        return True
+    results = env.get("results")
+    if isinstance(results, list):
+        for r in results:
+            if isinstance(r, dict) and "error" in r:
+                return True
+    return False
 
 
 def extract_args(meta: ProbeMeta, question: str) -> Optional[Dict[str, Any]]:

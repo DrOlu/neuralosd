@@ -58,6 +58,36 @@ The first run extracts the payload once (~10 s); later runs are cached and
 start in ~0.25 s. Built with [Nuitka](https://nuitka.net); every binary is
 verified by a 12-check CLI smoke suite plus a strict backend check in CI.
 
+### Beyond what's baked in: the sidecar
+
+A frozen binary cannot import the host's packages — installing a library does
+not make it visible. So when a probe needs something the binary doesn't carry,
+it can run that probe in the **host Python** instead, via a small helper:
+
+```bash
+# on the HOST (not inside the binary):
+pip install neuralosd        # provides the `neuralosd-sidecar` command
+pip install pypdf pywinrm    # whatever your probes need
+
+# then just use the binary as normal — it delegates automatically
+./neuralosd-msb ask --instance-dir ./mydata "pdf pages"
+```
+
+How it decides:
+
+| Situation | Behaviour |
+|---|---|
+| probe's imports all resolve in the binary | runs **in-process** (fast, no subprocess) |
+| probe's import is missing (even lazily, inside the function) | retried in the **sidecar** |
+| probe marked `tier="sidecar"` | always runs in the sidecar |
+| missing import, no sidecar installed | exits with `pip install <lib>` — never a crash |
+
+Opt out with `NEURALOSD_SIDECAR=off`, or point at a specific helper with
+`NEURALOSD_SIDECAR=/path/to/neuralosd-sidecar`.
+
+So the binary stays **one stable file**, and you never rebuild it to gain a
+library — you just add the library to the helper.
+
 ## What it does
 
 ```
