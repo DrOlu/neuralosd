@@ -6,7 +6,7 @@ One pip install. Two sandbox backends (BoxLite, Microsandbox). Any data
 source. Offline. On CPU. With verification gates, audit trail, and
 deterministic routing.
 """
-__version__ = "1.0.5"
+__version__ = "1.0.6"
 
 _DOCS = {
     "usage": "neuralOS usage and operations guide",

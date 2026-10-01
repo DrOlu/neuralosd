@@ -6,9 +6,34 @@
 121M-parameter on-device tool-calling model. It turns any data source into a
 private, offline question-answering service inside hardware-isolated microVMs.
 
-```
+```bash
 pip install neuralosd[all]
 ```
+
+## Single-file binaries (no Python required)
+
+Prebuilt standalone binaries are attached to every
+[release](https://github.com/DrOlu/neuralosd/releases) — the Python runtime,
+the framework, the docs and the skills are all embedded in one file:
+
+| Platform | Download |
+|---|---|
+| macOS Apple Silicon | `neuralosd-macos-arm64` |
+| macOS Intel | `neuralosd-macos-x64` |
+| Linux x86_64 | `neuralosd-linux-x64` |
+| Linux ARM64 | `neuralosd-linux-arm64` |
+| Windows x64 | `neuralosd-windows-x64.exe` |
+
+```bash
+curl -L -o neuralosd https://github.com/DrOlu/neuralosd/releases/latest/download/neuralosd-linux-x64
+chmod +x neuralosd
+./neuralosd init --source data.csv --name mydata
+./neuralosd ask --instance-dir ./mydata "how many rows"
+```
+
+The first run extracts the payload once (~10 s); later runs are cached and
+start in ~0.25 s. Built with [Nuitka](https://nuitka.net) and verified by a
+12-check CLI smoke suite on every platform in CI.
 
 ## What it does
 
@@ -36,7 +61,7 @@ Both run the same probe contract. Switch by configuration, not code.
 pip install neuralosd[all]
 
 # 2. Build an instance from your data
-neuralosd build --source your_data.csv --name my-analyst
+neuralosd init --source your_data.csv --name my-analyst
 
 # 3. Deploy into a sandbox
 neuralosd deploy --name my-analyst --backend boxlite

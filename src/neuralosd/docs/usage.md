@@ -23,6 +23,41 @@ and operating neuralOS instances. Every command is copy-paste ready.
 
 ## 1. Install
 
+### Option A — single-file binary (no Python needed)
+
+Every tagged release ships standalone binaries. The Python runtime, the
+neuralosd framework, the four documentation volumes and the bundled skills
+are all embedded in one file.
+
+| Platform | Asset |
+|---|---|
+| macOS Apple Silicon | `neuralosd-macos-arm64` |
+| macOS Intel | `neuralosd-macos-x64` |
+| Linux x86_64 | `neuralosd-linux-x64` |
+| Linux ARM64 | `neuralosd-linux-arm64` |
+| Windows x64 | `neuralosd-windows-x64.exe` |
+
+```bash
+# macOS Apple Silicon
+curl -L -o neuralosd \
+  https://github.com/DrOlu/neuralosd/releases/latest/download/neuralosd-macos-arm64
+chmod +x neuralosd && sudo mv neuralosd /usr/local/bin/
+
+neuralosd --help
+```
+
+Startup: the **first** run extracts the payload to a cache dir (~10 s on a
+cold machine); every later run reuses the cache and starts in ~0.25 s. Set a
+custom cache location with `NEURALOSD_CACHE_DIR` if needed.
+
+The binary is self-contained for the **framework** — `init`, `ask`, `serve`,
+`lint`, `openapi`, `golden`, `truth`, `invariants`, `calibrate`, `gaps`, `diff`,
+`docs`, `backends` all work with no Python installed. Sandbox deployment
+(`neuralosd deploy`) still needs BoxLite or the `msb` CLI on the host, exactly
+as the pip install does.
+
+### Option B — pip (adds the model + sandbox backends)
+
 ### What you need
 
 | Requirement | Check |
