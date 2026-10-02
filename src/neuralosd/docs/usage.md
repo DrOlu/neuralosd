@@ -177,6 +177,36 @@ engines on two threads **segfaults the process** (reproduced with six parallel
 single lock, so model questions are serialised. The deterministic path is
 unaffected and stays fully concurrent.
 
+### Keeping up with the components
+
+neuralosd is a composition — the model runtime (`neuralos`), two sandbox
+backends (`boxlite`, `microsandbox`) and the data toolchain (`pydantic`, `pymysql`, `openpyxl`). When any of them ships a
+release, there is an automated path to follow.
+
+The check ships as a script, so you can run it yourself:
+
+```bash
+python scripts/component_versions.py --check      # report drift vs the snapshot
+python scripts/component_versions.py --check --record   # update the snapshot
+python scripts/component_versions.py --bump patch      # bump neuralosd
+```
+
+Drift is detected by diffing live PyPI against `components.json`, which is
+committed — so the state is auditable and a re-run with no changes is a no-op.
+Each watched component declares a **scope**:
+
+| Scope | A new release triggers |
+|---|---|
+| `runtime` | a new PyPI release **and** rebuilt binaries |
+| `build` | rebuilt binaries only (e.g. a compiler update) |
+
+Pre-releases are skipped. An unreachable PyPI is reported as `unknown` and is
+**never** treated as drift — an outage must not mass-bump a release.
+
+In CI this runs daily (`.github/workflows/auto-update.yml`), and the gate is
+real: it tests with the current components, upgrades, then tests **again
+against the new ones** before anything is published.
+
 ### Option B — pip (adds the model + sandbox backends)
 
 ### What you need
