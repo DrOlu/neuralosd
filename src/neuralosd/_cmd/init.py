@@ -72,8 +72,64 @@ def _profile_xlsx(path):
 
     primary = order[0]
     return {"kind": "xlsx", "path": os.path.abspath(path), "sheet": primary,
-            "sheets": order, "columns": sheets[primary]["columns"],
+            "sheets": order, "columns": _annotate(sheets[primary]["columns"]),
             "rows": sheets[primary]["rows"], "sheet_info": sheets}
+
+
+_ID_HINTS = ("row id", "postal", "zip", " id", "id ", "_id", "code", "sku",
+             "phone", "fax")
+
+
+def _is_measure(col):
+    """Numeric, and not an identifier / code / year-like field."""
+    if col.get("type") not in ("int", "float"):
+        return False
+    low = f" {str(col.get('name', '')).lower()} "
+    return not any(h in low for h in _ID_HINTS)
+
+
+def _is_dimension(col):
+    """Categorical with few enough values to be useful as a group-by key."""
+    card = col.get("card")
+    return (col.get("type") in ("str", "bool")
+            and card is not None and 2 <= card <= 100)
+
+
+def _annotate(columns):
+    """Attach date_column / dimensions / measures to a profiled column list."""
+    date_col = next((c["name"] for c in columns if c.get("type") == "date"), None)
+    dims = []
+    if date_col:
+        dims += ["year", "quarter", "month"]       # derived from the date column
+    dims += [c["name"] for c in columns if _is_dimension(c)]
+    measures = [c["name"] for c in columns if _is_measure(c)]
+    for c in columns:
+        c["dimensions"] = dims
+        c["measures"] = measures
+        c["date_column"] = date_col
+    return columns
+
+
+def _looks_like_date(values):
+    import datetime
+    seen = 0
+    for v in values[:30]:
+        t = str(v).strip()
+        if not t:
+            continue
+        seen += 1
+        if not any(sep in t for sep in ("-", "/")):
+            return False       # a bare year/number is not a date column
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y", "%m/%d/%Y",
+                    "%d-%m-%Y", "%Y-%m-%d %H:%M:%S"):
+            try:
+                datetime.datetime.strptime(t[:19], fmt)
+                break
+            except ValueError:
+                continue
+        else:
+            return False
+    return seen > 0
 
 
 def _infer_type(values):
@@ -108,10 +164,12 @@ def _profile_delimited(path):
         values = [r[i] for r in rows if i < len(r)][:1000]
         infer = "int" if values and all(_is_int(v) for v in values) else (
             "float" if values and all(_is_float(v) for v in values) else "str")
+        if infer == "str" and _looks_like_date(values):
+            infer = "date"
         columns.append({"name": col, "type": infer,
                         "card": len({v for v in values if v not in (None, "")})})
     return {"kind": "delimited", "path": os.path.abspath(path),
-            "columns": columns, "rows": len(rows), "delim": delim}
+            "columns": _annotate(columns), "rows": len(rows), "delim": delim}
 
 
 def _profile_json(path):
@@ -151,6 +209,11 @@ def _safe(name):
 
 def _write_bridge(out, src, info):
     sheet = info.get("sheet") or ""
+    date_column = ""
+    for c in (info.get("columns") or []):
+        if c.get("date_column"):
+            date_column = c["date_column"]
+            break
     bridge = f'''"""Data layer for the scaffolded instance — pure python, no model calls."""
 import csv
 import json
@@ -158,6 +221,8 @@ import os
 
 SOURCE = {json.dumps(os.path.abspath(src))}
 SHEET = {json.dumps(sheet)}
+DATE_COLUMN = {json.dumps(date_column)}
+_DATE_PARTS = ("year", "quarter", "month")
 
 
 def _xlsx_rows():
@@ -221,6 +286,65 @@ def average(column):
     vals = [n for n in (_num(r.get(column)) for r in rows()) if n is not None]
     avg = round(sum(vals) / len(vals), 2) if vals else None
     return {{"column": column, "average": avg, "n": len(vals)}}
+
+
+def _parse_date(v):
+    import datetime
+    if v is None:
+        return None
+    if hasattr(v, "year") and hasattr(v, "month"):
+        return v
+    text = str(v).strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y",
+                "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.datetime.strptime(text[:19], fmt)
+        except ValueError:
+            continue
+    try:
+        return datetime.datetime.fromisoformat(text[:19])
+    except ValueError:
+        return None
+
+
+def _date_part(value, part):
+    d = _parse_date(value)
+    if d is None:
+        return None
+    if part == "year":
+        return str(d.year)
+    if part == "quarter":
+        return f"{{d.year}}-Q{{(d.month - 1) // 3 + 1}}"
+    if part == "month":
+        return f"{{d.year}}-{{d.month:02d}}"
+    return None
+
+
+def breakdown(dimension, measure):
+    """GROUP BY: sum `measure` per `dimension`.
+
+    `dimension` may be a column, or one of the derived date parts (year,
+    quarter, month) read from DATE_COLUMN.
+    """
+    groups = {{}}
+    for r in rows():
+        if dimension in _DATE_PARTS:
+            key = _date_part(r.get(DATE_COLUMN), dimension) if DATE_COLUMN else None
+        else:
+            key = r.get(dimension)
+        if key is None:
+            continue
+        value = _num(r.get(measure))
+        if value is None:
+            continue
+        key = str(key)
+        groups[key] = groups.get(key, 0.0) + value
+    ordered = sorted(groups.items())
+    return {{"by": dimension, "measure": measure, "groups": len(ordered),
+            "rows": [{{dimension: k, measure: round(v, 2)}} for k, v in ordered],
+            "total": round(sum(groups.values()), 2)}}
 '''
     with open(os.path.join(out, "bridge.py"), "w", encoding="utf-8") as f:
         f.write(bridge)
@@ -293,6 +417,39 @@ def _write_probes(out, name, info):
             "",
         ]
         probe_names += [f"total_{safe}", f"average_{safe}"]
+
+    # group-by: one probe, caged args, so both the router and the model can
+    # fill "by <dimension>" and pick a measure.
+    dims, measures = [], []
+    for c in cols:
+        dims = c.get("dimensions") or dims
+        measures = c.get("measures") or measures
+        if dims and measures:
+            break
+    if dims and measures:
+        date_col = next((c.get("date_column") for c in cols
+                         if c.get("date_column")), None)
+        triggers = ["breakdown", "break down", "broken down", "breakdown by",
+                    "split by", "group by", "per", "by", "trend", "over time"]
+        for d in dims:
+            triggers += [f"by {d}", f"per {d}", f"{d} breakdown",
+                         f"breakdown by {d}", f"{d} over {d}"]
+        if date_col:
+            triggers += ["year over year", "over the years", "by date"]
+        lines += [
+            '@probe(description="Break a measure down by a dimension '
+            '(group by, e.g. sales by year or revenue by region)",',
+            '       triggers=' + repr(sorted(set(triggers))) + ',',
+            '       args={"dimension": {"type": "enum", "values": '
+            + repr(dims) + '},',
+            '             "measure": {"type": "enum", "values": '
+            + repr(measures) + ', "required": False,',
+            '                         "default": ' + repr(measures[0]) + '}})',
+            "def breakdown(dimension, measure):",
+            "    return bridge.breakdown(dimension, measure)",
+            "",
+        ]
+        probe_names.append("breakdown")
 
     lines.append("PROBES = [" + ", ".join(probe_names) + "]")
     lines.append("")

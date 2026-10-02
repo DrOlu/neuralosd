@@ -260,10 +260,16 @@ class Router:
         if retrieved:
             used_probe = retrieved[0][0].name
 
-            # deterministic fast path: walk top-K in rank order and execute the
-            # FIRST probe whose required args are extractable with certainty.
-            # (verified live: rank-1 alone misroutes bare phrases like
-            # "top customers" to a country-caged probe.)
+            # deterministic fast path: consider every probe in the top-K whose
+            # required args are extractable with certainty, and execute the one
+            # that explains the MOST of the question.
+            #
+            # Taking the first executable candidate instead was a false
+            # positive: "sales by quarter" matched total_sales and returned a
+            # single grand total — a confident answer to a question that was
+            # not asked. A probe that accounts for the question's own words
+            # through its extracted arguments is the better match.
+            best = None   # (effective score, rank score, meta, kwargs)
             for _meta, _score in retrieved:
                 kwargs = extract_args(_meta, normalized)
                 if kwargs is None:
@@ -276,6 +282,13 @@ class Router:
                                 for s in _meta.args.values())
                 if not has_caged and _score < 0.5 * retrieved[0][1]:
                     continue
+                effective = _score + ARG_MATCH_BONUS * _args_seen(kwargs,
+                                                                 normalized)
+                if best is None or effective > best[0]:
+                    best = (effective, _score, _meta, kwargs)
+
+            if best is not None:
+                _meta, kwargs = best[2], best[3]
                 fn = self.by_name[_meta.name]
                 mode = "deterministic"
                 used_probe = _meta.name
@@ -291,7 +304,6 @@ class Router:
                                 f"{type(exc).__name__}: {str(exc)[:200]}",
                                 "_tool": _meta.name}]
                     mode = "deterministic-error"
-                break
 
         if results is None:
             # Deterministic routing produced nothing. Consult the model when one
@@ -341,6 +353,23 @@ class Router:
         if not _is_error_envelope(env):
             self._cache_store(key, env)
         return env
+
+
+# How much to favour a probe whose extracted arguments are actually present
+# in the question (i.e. it consumed the user's words instead of ignoring
+# them). Kept above the per-trigger weight so it can outrank a probe that
+# merely shares vocabulary.
+ARG_MATCH_BONUS = 3.0
+
+
+def _args_seen(kwargs, question: str) -> int:
+    """How many extracted argument values appear in the question itself."""
+    q = question.lower()
+    n = 0
+    for value in (kwargs or {}).values():
+        if isinstance(value, str) and value and value.lower() in q:
+            n += 1
+    return n
 
 
 def _tool_of(results):

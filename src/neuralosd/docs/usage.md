@@ -115,6 +115,42 @@ is always explicit because it touches the network.
 
 Requirements: `uv` on PATH (or `$NEURALOSD_UV`).
 
+### What `init` generates
+
+For every data source it produces four kinds of probe:
+
+| Probe | Answers |
+|---|---|
+| `row_count`, `list_rows` | how many rows; a sample |
+| `distinct_<col>` | which values a low-cardinality column has |
+| `total_<col>`, `average_<col>` | flat aggregates over numeric columns |
+| **`breakdown`** | **group-by: a measure per dimension** |
+
+`breakdown` takes caged arguments, so plain English fills them:
+
+```bash
+neuralosd ask --instance-dir ./superstore "revenue breakdown by year"
+neuralosd ask --instance-dir ./superstore "sales by market"
+neuralosd ask --instance-dir ./superstore "profit by category"
+```
+
+```
+2012 = 2,259,451   2013 = 2,677,439
+2014 = 3,405,746   2015 = 4,299,866      total = 12,642,501
+```
+
+Its **dimensions** are the low-cardinality categorical columns plus, when a
+date column is detected, the derived parts **year / quarter / month**. Its
+**measures** are the numeric columns that are not identifiers — and the
+measure is optional, so `"revenue breakdown by year"` works without naming
+a column (it uses the first measure, which is why "revenue" resolves to the
+`Sales` column).
+
+A note on selection: the router prefers the probe that **accounts for the
+most of the question** through its extracted arguments. Without that, "sales
+by quarter" matched a flat `total_sales` and returned a single grand total —
+a confident answer to a question nobody asked.
+
 ### The model fallback (`--model`)
 
 Deterministic routing runs first, always. The model is consulted **only** when

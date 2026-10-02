@@ -6,6 +6,48 @@ step by step without human intervention.
 
 ---
 
+## Recipe: Group-by / breakdowns
+
+Any instance built by `neuralosd init` already has a `breakdown` probe:
+
+```bash
+neuralosd init --source xlsx/global_superstore_2016.xlsx --name store
+neuralosd ask --instance-dir ./store "revenue breakdown by year"
+neuralosd ask --instance-dir ./store "sales by market"
+neuralosd ask --instance-dir ./store "profit by category"
+```
+
+It sums a **measure** per **dimension**:
+
+```
+{ "by": "year", "measure": "Sales", "groups": 4,
+  "rows": [ {"year": "2012", "Sales": 2259450.9},
+            {"year": "2013", "Sales": 2677438.69}, ... ],
+  "total": 12642501.91 }
+```
+
+**Dimensions** — low-cardinality categorical columns, plus `year` / `quarter`
+/ `month` derived from a detected date column.
+
+**Measures** — numeric columns that are not identifiers. The measure is
+optional and defaults to the first one, so `"breakdown by year"` works even
+if you never name a column.
+
+Add your own grouped probe when you need a shape the generator does not
+produce (a ratio, a top-N, a filter):
+
+```python
+@probe(description="Top regions by profit",
+       triggers=["top regions", "best regions by profit"])
+def top_regions():
+    rows = bridge.breakdown("Region", "Profit")["rows"]
+    top = sorted(rows, key=lambda r: -r["Profit"])[:5]
+    return {"top": top}
+```
+
+The parts always reconcile with the flat total —
+`breakdown(d, m)["total"] == total(m)["sum"]`.
+
 ## Recipe: Use a library the binary doesn't have
 
 A frozen binary cannot import your machine's packages. When a probe needs one
