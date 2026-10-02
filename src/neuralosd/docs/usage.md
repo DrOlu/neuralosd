@@ -115,6 +115,32 @@ is always explicit because it touches the network.
 
 Requirements: `uv` on PATH (or `$NEURALOSD_UV`).
 
+### The model fallback (`--model`)
+
+Deterministic routing runs first, always. The model is consulted **only** when
+lexical retrieval and argument extraction cannot produce an answer:
+
+```bash
+neuralosd ask --instance-dir ./inst "total revenue"          # deterministic
+neuralosd ask --instance-dir ./inst --model "what did we earn"   # -> model
+```
+
+| Retrieval | With `--model` |
+|---|---|
+| a probe matches and its args extract | runs deterministically — **the model is never loaded** |
+| a probe matches but args are missing | model chooses among the retrieved candidates |
+| nothing matches at all | model is shown the **whole menu** |
+| nothing matches, no `--model` | honest refusal: `no probe matched this question` |
+
+The model routes; it does not answer. It may only call the instance's real
+probes, and those still execute in the data layer, so results stay verified.
+
+**Thread safety.** The on-device engine is not thread-safe — building two
+engines on two threads **segfaults the process** (reproduced with six parallel
+`/ask` calls against `serve --model`). All model work therefore runs behind a
+single lock, so model questions are serialised. The deterministic path is
+unaffected and stays fully concurrent.
+
 ### Option B — pip (adds the model + sandbox backends)
 
 ### What you need

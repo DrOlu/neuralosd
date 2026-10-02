@@ -254,62 +254,69 @@ class Router:
                 return env
 
         retrieved = self._retrieve(normalized, k)
-        if not retrieved:
-            env = {"ask_id": ask_id, "question": question,
-                   "normalized": normalized, "probe": None,
-                   "menu_version": self.menu_version, "error":
-                   "no probe matched this question", "results": None}
-            self._audit(env)
-            raise NoResults(env)
-        rank1_score = retrieved[0][1]
 
-        results, used_probe, mode, conf = None, retrieved[0][0].name, "retrieval", None
+        results, used_probe, mode, conf = None, None, "retrieval", None
 
-        # deterministic fast path: walk top-K in rank order and execute the
-        # FIRST probe whose required args are extractable with certainty.
-        # (verified live: rank-1 alone misroutes bare phrases like
-        # "top customers" to a country-caged probe.)
-        for _meta, _score in retrieved:
-            kwargs = extract_args(_meta, normalized)
-            if kwargs is None:
-                continue
-            # Strong-match rule: a probe with NO caged args is ambiguous (any
-            # question could hit it) — only auto-execute it if it is a strong
-            # lexical match (>= 1/2 of rank-1's score). Caged probes with all
-            # args extracted are always confident.
-            has_caged = any(s.get("required", True) or s.get("pattern")
-                            for s in _meta.args.values())
-            if not has_caged and _score < 0.5 * retrieved[0][1]:
-                continue
-            fn = self.by_name[_meta.name]
-            mode = "deterministic"
-            used_probe = _meta.name
-            try:
-                r = fn(**kwargs)
-                if isinstance(r, dict):
-                    r = {**r, "_tool": _meta.name}
-                    results = [r]
-                elif isinstance(r, list):
-                    results = r
-            except Exception as exc:
-                results = [{"error": f"{type(exc).__name__}: {str(exc)[:200]}",
-                            "_tool": _meta.name}]
-                mode = "deterministic-error"
-            break
+        if retrieved:
+            used_probe = retrieved[0][0].name
+
+            # deterministic fast path: walk top-K in rank order and execute the
+            # FIRST probe whose required args are extractable with certainty.
+            # (verified live: rank-1 alone misroutes bare phrases like
+            # "top customers" to a country-caged probe.)
+            for _meta, _score in retrieved:
+                kwargs = extract_args(_meta, normalized)
+                if kwargs is None:
+                    continue
+                # Strong-match rule: a probe with NO caged args is ambiguous
+                # (any question could hit it) — only auto-execute it if it is a
+                # strong lexical match (>= 1/2 of rank-1's score). Caged probes
+                # with all args extracted are always confident.
+                has_caged = any(s.get("required", True) or s.get("pattern")
+                                for s in _meta.args.values())
+                if not has_caged and _score < 0.5 * retrieved[0][1]:
+                    continue
+                fn = self.by_name[_meta.name]
+                mode = "deterministic"
+                used_probe = _meta.name
+                try:
+                    r = fn(**kwargs)
+                    if isinstance(r, dict):
+                        r = {**r, "_tool": _meta.name}
+                        results = [r]
+                    elif isinstance(r, list):
+                        results = r
+                except Exception as exc:
+                    results = [{"error":
+                                f"{type(exc).__name__}: {str(exc)[:200]}",
+                                "_tool": _meta.name}]
+                    mode = "deterministic-error"
+                break
 
         if results is None:
+            # Deterministic routing produced nothing. Consult the model when one
+            # is configured — with the retrieved subset if lexical retrieval
+            # found something, otherwise with the whole menu (a paraphrase with
+            # no shared tokens is exactly what the model is for).
             if self.model_fallback is None:
+                reason = ("no probe matched this question" if not retrieved
+                          else "no results produced (no model fallback "
+                               "configured)")
                 env = {"ask_id": ask_id, "question": question,
                        "normalized": normalized, "probe": None,
-                       "menu_version": self.menu_version, "error":
-                       "no results produced (no model fallback configured)",
-                       "results": None}
+                       "menu_version": self.menu_version,
+                       "error": reason, "results": None}
                 self._audit(env)
                 raise NoResults(env)
             conf = None
-            results = self.model_fallback(normalized,
-                                          [m for m, s in retrieved])
-            used_probe = retrieved[0][0].name
+            candidates = ([m for m, _s in retrieved] if retrieved
+                          else list(self.metas))
+            mode = "model"
+            results = self.model_fallback(normalized, candidates)
+            # The model may pick a different probe than rank-1, so trust the
+            # tool tag the bridge attaches rather than the top-ranked name.
+            used_probe = (_tool_of(results)
+                          or (retrieved[0][0].name if retrieved else None))
 
         if self.pii_mask:
             results = mask_pii(results)
@@ -334,6 +341,13 @@ class Router:
         if not _is_error_envelope(env):
             self._cache_store(key, env)
         return env
+
+
+def _tool_of(results):
+    """The probe name a result list reports, if any."""
+    if isinstance(results, list) and results and isinstance(results[0], dict):
+        return results[0].get("_tool")
+    return None
 
 
 def _is_error_envelope(env) -> bool:

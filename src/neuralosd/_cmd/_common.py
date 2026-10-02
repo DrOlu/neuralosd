@@ -295,10 +295,10 @@ def _build_model_fallback(probes):
         raise SystemExit(_missing_module_help(
             getattr(e, "name", "needle") or "needle", "the --model flag"))
 
-    def _fallback(question: str, menu):
-        try:
-            from .model_bridge import model_ask  # type: ignore
-            return model_ask(question, menu)
-        except Exception:  # noqa: BLE001
-            return None
+    def _fallback(question, metas):
+        # Imported lazily so needle (and the model) load only if the fallback
+        # is genuinely reached. Engine errors deliberately propagate: the
+        # user asked for the model, so silently degrading would be worse.
+        from .model_bridge import model_ask
+        return model_ask(question, metas)
     return _fallback

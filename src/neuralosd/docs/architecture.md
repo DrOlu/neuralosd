@@ -611,3 +611,37 @@ Two invariants worth preserving:
   for a subprocess;
 * a failure is **never cached** (`router._is_error_envelope`) — otherwise the
   user installs the missing library, retries, and receives the stale error.
+
+
+## The model fallback
+
+```
+question
+   │
+   ├─ lexical retrieval (token overlap)  ──► deterministic execution
+   │                                          (fast; the model is never loaded)
+   │
+   └─ nothing executable?
+         ├─ no model configured ──► honest refusal
+         └─ model configured
+               ├─ retrieval found candidates? → offer those
+               └─ nothing at all?             → offer the whole menu
+                     │
+                     └─ the model picks a real probe and fills its args,
+                        then that probe runs in the data layer
+```
+
+Design notes worth keeping:
+
+* **Results, not function_calls.** needle reports `function_calls: []` even on
+  success; the answer lives in `results` (a list of JSON strings). Anything
+  gating on `function_calls` silently sees nothing.
+* **Attribution.** Because `function_calls` is empty, the bridge records which
+  tool ran by wrapping each probe, so the envelope's `probe` field reflects
+  what actually executed rather than whatever ranked first lexically.
+* **One lock, everything.** Engine *construction* is as unsafe as inference.
+  Serialising only `run()` was not enough — six concurrent constructions
+  segfaulted the server. The model is a fallback, so serialising it costs
+  little.
+* **The model never invents an answer.** It can only select from the real
+  probes; the probe does the reading.
