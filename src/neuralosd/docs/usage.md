@@ -61,6 +61,32 @@ The binary is self-contained for the **framework** — `init`, `ask`, `serve`,
 (`neuralosd deploy`) still needs BoxLite or the `msb` CLI on the host, exactly
 as the pip install does.
 
+### Beyond what's baked in: the sidecar
+
+A frozen binary cannot import the host's packages — installing a library does
+not make it visible to the binary. When a probe needs something the binary
+does not carry, it runs *that probe* in the host Python instead:
+
+```bash
+# on the host:
+pip install neuralosd        # provides the neuralosd-sidecar command
+pip install pypdf pywinrm    # whatever your probes need
+
+# use the binary normally — delegation is automatic
+./neuralosd-msb ask --instance-dir ./mydata "pdf pages"
+```
+
+| Situation | Behaviour |
+|---|---|
+| all of a probe's imports resolve in the binary | runs in-process (fast) |
+| an import is missing, even lazily inside the function | retried in the sidecar |
+| probe declared `tier="sidecar"` | always runs in the sidecar |
+| missing import and no sidecar | exits with `pip install <lib>` |
+
+`NEURALOSD_SIDECAR=off` disables delegation; `NEURALOSD_SIDECAR=/path/to/helper`
+points at a specific helper. The binary stays one stable file — you never
+rebuild it to gain a library.
+
 ### Option B — pip (adds the model + sandbox backends)
 
 ### What you need

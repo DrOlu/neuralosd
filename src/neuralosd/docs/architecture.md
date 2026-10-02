@@ -561,3 +561,38 @@ instance has its own data source and probe set.
 | MicroVM isolation (not containers) | Shared-kernel containers are escapeable; agents generate untrusted code | Docker containers (weaker isolation) |
 | Deterministic chains (not model-planned) | Model-planned paths are probabilistic; declared DAGs are verifiable | Let the model plan multi-step execution |
 | PII mask at host (not in VM) | Secrets never enter the sandbox; no leak surface | Inject secrets into the sandbox (leak surface) |
+
+
+## Data access: in-process vs sidecar
+
+The frozen binary is *sealed*: it carries a fixed set of libraries and cannot
+import the host's packages. The **sidecar** is the escape hatch that keeps the
+binary stable while allowing arbitrary libraries.
+
+```
+                 route / verify / serve           execute the probe
+frozen binary  ───────────────────────────►  ┌──────────────────────────┐
+  (stable)                                    │ in-process  (baked libs) │
+                                              │      or                  │
+                                              │ sidecar     (host python)│
+                                              └──────────────────────────┘
+                        JSON-RPC over stdin/stdout
+```
+
+Selection rules (see `neuralosd/_cmd/_common.py`):
+
+1. **Whole-instance delegation** — `probes.py` itself cannot be imported here
+   (a module-level import is missing) → the binary asks the sidecar for its
+   menu and rebuilds every probe as a forwarding stub.
+2. **Per-probe call-time retry** — the module imported fine but a *lazy*
+   import inside the probe body failed → that single call is retried in the
+   sidecar. This is the common case, and the easiest to get wrong: a
+   load-time-only fallback silently never fires.
+3. **Explicit** — a probe declared `tier="sidecar"` always delegates.
+
+Two invariants worth preserving:
+
+* the sidecar is started **lazily** — a fully-in-process instance never pays
+  for a subprocess;
+* a failure is **never cached** (`router._is_error_envelope`) — otherwise the
+  user installs the missing library, retries, and receives the stale error.

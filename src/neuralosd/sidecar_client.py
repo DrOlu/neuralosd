@@ -37,6 +37,28 @@ class SidecarError(RuntimeError):
 _DISABLED = {"", "0", "off", "false", "no", "none", "-"}
 
 
+def _split_cmd(text, posix=None):
+    """Split a command line into argv.
+
+    On Windows shlex must run in NON-posix mode: posix mode treats backslash
+    as an escape character and silently destroys paths —
+    ``C:\\tools\\helper.exe`` became ``C:toolshelper.exe``.  Non-posix mode
+    preserves backslashes but keeps surrounding quotes, so those are stripped
+    afterwards.  (A path containing spaces must still be quoted by the user,
+    exactly as it would be on a Windows command line.)
+    """
+    if posix is None:
+        posix = os.name != "nt"
+    try:
+        parts = shlex.split(text, posix=posix)
+    except (ValueError, TypeError):
+        parts = [text]
+    if not posix:
+        parts = [p[1:-1] if len(p) >= 2 and p[0] == p[-1] and p[0] in "\"'"
+                 else p for p in parts]
+    return [p for p in parts if p]
+
+
 def sidecar_command():
     """Return the argv prefix that launches a sidecar, or None if none exists.
 
@@ -47,10 +69,7 @@ def sidecar_command():
     if explicit is not None:
         if explicit.strip().lower() in _DISABLED:
             return None
-        try:
-            parts = shlex.split(explicit)
-        except ValueError:
-            parts = [explicit]
+        parts = _split_cmd(explicit)
         if parts:
             return parts
 

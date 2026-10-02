@@ -155,7 +155,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          BIN=$(find dist -maxdepth 1 -type f -name "neuralosd-msb*" | head -1)
+          BIN=$(find dist -maxdepth 1 -type f -name "neuralosd-msb*" 2>/dev/null | head -1 || true)
           [ -n "$BIN" ] || { echo "no msb binary"; exit 0; }
           chmod +x "$BIN" 2>/dev/null || true
           mkdir -p diaginst
@@ -167,7 +167,7 @@ jobs:
       - name: Sidecar — run a probe on a host library the binary lacks
         shell: bash
         run: |
-          BIN=$(find dist -maxdepth 1 -type f -name "neuralosd" | head -1)
+          BIN=$(find dist -maxdepth 1 -type f -name "neuralosd" 2>/dev/null | head -1 || true)
           if [ -z "$BIN" ]; then echo "(no base binary built — skipping)"; exit 0; fi
           chmod +x "$BIN" 2>/dev/null || true
           pip install pypdf >/dev/null

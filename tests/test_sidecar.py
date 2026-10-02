@@ -610,3 +610,41 @@ def test_error_envelope_detection():
     assert _is_error_envelope({"results": [{"error": "boom"}]})
     assert not _is_error_envelope({"results": [{"count": 1}]})
     assert not _is_error_envelope({"results": [{"error_count": 3}]})
+
+
+# ── argv splitting (Windows path bug) ──────────────────────────────────────
+
+def test_split_cmd_posix_escapes_are_stripped():
+    assert scc._split_cmd("/a/b c/d", posix=True) == ["/a/b", "c/d"]
+
+
+def test_split_cmd_windows_paths_survive():
+    """REGRESSION: posix-mode shlex ate the backslashes in a Windows path, so
+    $NEURALOSD_SIDECAR=C:\\tools\\helper.exe launched 'C:toolshelper.exe'."""
+    win = r"C:\tools\neuralosd-sidecar.exe"
+    assert scc._split_cmd(win, posix=False) == [win]
+
+
+def test_split_cmd_windows_quoted_path_with_spaces():
+    quoted = r'"C:\Program Files\Hyper\neuralosd-sidecar.exe"'
+    assert scc._split_cmd(quoted, posix=False) == [
+        r"C:\Program Files\Hyper\neuralosd-sidecar.exe"]
+
+
+def test_split_cmd_windows_path_with_arg():
+    cmd = r'"C:\Program Files\H\sidecar.exe" --instance-dir C:\tmp\x'
+    assert scc._split_cmd(cmd, posix=False) == [
+        r"C:\Program Files\H\sidecar.exe", "--instance-dir", r"C:\tmp\x"]
+
+
+def test_env_windows_path_not_mangled_on_windows(monkeypatch):
+    """On a Windows host the env command must be preserved verbatim."""
+    monkeypatch.setattr(scc.os, "name", "nt")
+    monkeypatch.setenv("NEURALOSD_SIDECAR", r"C:\tools\sidecar.exe")
+    assert scc.sidecar_command() == [r"C:\tools\sidecar.exe"]
+
+
+def test_disabled_sentinels(monkeypatch):
+    for value in ("off", "OFF", "0", "false", "no", "none", "-", "  off  "):
+        monkeypatch.setenv("NEURALOSD_SIDECAR", value)
+        assert scc.sidecar_command() is None, value
