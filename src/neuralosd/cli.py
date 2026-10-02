@@ -102,6 +102,17 @@ def main():
     p_docs.add_argument("topic", nargs="?", default=None)
     sub.add_parser("backends", help="List available sandbox backends")
 
+    # sidecar
+    p_sc = sub.add_parser(
+        "sidecar",
+        help="Provision a sidecar environment (lets this binary use host libraries)")
+    p_sc.add_argument("--status", action="store_true", help="report and exit")
+    p_sc.add_argument("--setup", action="store_true", help="create the environment")
+    p_sc.add_argument("--with", dest="packages", default="",
+                      help="extra packages, comma separated (e.g. pypdf,pywinrm)")
+    p_sc.add_argument("--python", default="3.12")
+    p_sc.add_argument("--force", action="store_true", help="rebuild from scratch")
+
     a = ap.parse_args()
     if not a.command:
         ap.print_help()
@@ -146,6 +157,13 @@ def main():
     elif a.command == "docs":
         import neuralosd as _mod
         print(_mod.docs(getattr(a, "topic", None)))
+    elif a.command == "sidecar":
+        from .provision import main as sidecar_main
+        raise SystemExit(sidecar_main(
+            (["--setup"] if a.setup else [])
+            + (["--status"] if a.status else [])
+            + ["--with", a.packages, "--python", a.python]
+            + (["--force"] if a.force else [])))
     elif a.command == "backends":
         from .backends import available_backends
         av = available_backends()

@@ -62,6 +62,9 @@ def _split_cmd(text, posix=None):
 def sidecar_command():
     """Return the argv prefix that launches a sidecar, or None if none exists.
 
+    Order: ``$NEURALOSD_SIDECAR`` → PATH → a uv-provisioned environment
+    (``~/.neuralosd/sidecar``) → ``python3 -m neuralosd.sidecar``.
+
     ``$NEURALOSD_SIDECAR=off`` (also 0/false/no/none/-) disables the sidecar
     entirely, even when a helper is installed.
     """
@@ -73,10 +76,22 @@ def sidecar_command():
         if parts:
             return parts
 
+    # 2. PATH — explicit user intent wins over anything we provisioned.
     exe = shutil.which("neuralosd-sidecar")
     if exe:
         return [exe]
 
+    # 3. An environment we provisioned with uv (see neuralosd.provision).
+    #    Checked before the bare-interpreter fallback so a bootstrapped
+    #    machine needs no environment variables at all.
+    try:
+        from .provision import is_provisioned, sidecar_executable
+        if is_provisioned():
+            return [sidecar_executable()]
+    except Exception:  # noqa: BLE001 — discovery must never raise
+        pass
+
+    # 4. A host interpreter that happens to have neuralosd installed.
     for py in ("python3", "python"):
         p = shutil.which(py)
         if p:

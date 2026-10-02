@@ -7,3 +7,10 @@ build/
 test_venv/
 venv/
 .DS_Store
+build_venv/
+.venv/
+*.pyz
+_msb_stage/
+.ask_cache.json
+ask_audit.jsonl
+*.xlsx

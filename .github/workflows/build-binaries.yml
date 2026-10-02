@@ -54,6 +54,8 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: astral-sh/setup-uv@v5
+
       - name: Install base dependencies
         run: |
           pip install neuralos pydantic pymysql nuitka pytest openpyxl
@@ -194,6 +196,38 @@ jobs:
           [ "$codeB" -eq 0 ] || { echo "FAIL(B): sidecar run exited $codeB"; exit 1; }
           echo "$outB" | grep -q '"pages": 2' || { echo "FAIL(B): wrong or missing result"; exit 1; }
           echo "  PASS B: frozen binary answered using a library it does not contain"
+
+      - name: Sidecar — uv-provisioned environment (real uv)
+        shell: bash
+        run: |
+          BIN=$(find dist -maxdepth 1 -type f -name "neuralosd" 2>/dev/null | head -1 || true)
+          if [ -z "$BIN" ]; then echo "(no base binary — skipping)"; exit 0; fi
+          chmod +x "$BIN" 2>/dev/null || true
+
+          export NEURALOSD_HOME="$RUNNER_TEMP/neuralosd-home"
+          rm -rf "$NEURALOSD_HOME"
+
+          echo "===== provision a sidecar with real uv ====="
+          python -m neuralosd.provision --setup --with pypdf
+          test -f "$NEURALOSD_HOME/sidecar/bin/neuralosd-sidecar"             || test -f "$NEURALOSD_HOME/sidecar/Scripts/neuralosd-sidecar.exe"             || { echo "FAIL: provisioned executable missing"; exit 1; }
+
+          echo "===== remove every other copy so discovery must use the provisioned one ====="
+          pip uninstall -y neuralosd >/dev/null 2>&1 || true
+          hash -r 2>/dev/null || true
+          echo "  neuralosd-sidecar on PATH now: $(command -v neuralosd-sidecar || echo none)"
+
+          echo "===== the binary must find it with no NEURALOSD_SIDECAR set ====="
+          mkdir -p uvinst
+          cp tests/sidecar_e2e_probes.py uvinst/probes.py
+          set +e
+          out=$(env -u NEURALOSD_SIDECAR -u NEURALOSD_UV "$(pwd)/$BIN" \
+                ask --instance-dir uvinst "pdf pages" 2>&1)
+          code=$?
+          set -e
+          echo "$out" | head -20
+          [ "$code" -eq 0 ] || { echo "FAIL: binary exited $code"; exit 1; }
+          echo "$out" | grep -q '"pages": 2' || { echo "FAIL: provisioned sidecar not used"; exit 1; }
+          echo "  PASS: binary used the uv-provisioned sidecar with zero configuration"
 
       - name: Rename with target suffix
         shell: bash

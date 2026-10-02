@@ -8,6 +8,11 @@ private, offline question-answering service inside hardware-isolated microVMs.
 
 ```bash
 pip install neuralosd[all]
+
+# or with uv (faster, and can supply its own Python)
+uv pip install "neuralosd[all]"
+uv tool install neuralosd                      # global CLI
+uvx neuralosd ask --instance-dir . "how many rows"   # no install at all
 ```
 
 ## Single-file binaries (no Python required)
@@ -73,6 +78,20 @@ pip install pypdf pywinrm    # whatever your probes need
 ./neuralosd-msb ask --instance-dir ./mydata "pdf pages"
 ```
 
+**No Python on the machine?** uv can supply one. `neuralosd sidecar --setup`
+creates a dedicated environment at `~/.neuralosd/sidecar` — installing a
+Python if necessary — and the binary then finds it with **no configuration at
+all**:
+
+```bash
+neuralosd sidecar --status                      # uv found? provisioned?
+neuralosd sidecar --setup --with pypdf,pywinrm  # create it
+neuralosd sidecar --setup --force               # rebuild from scratch
+```
+
+Provisioning is always explicit — it touches the network, so it never happens
+silently while answering a question.
+
 How it decides:
 
 | Situation | Behaviour |
@@ -80,7 +99,7 @@ How it decides:
 | probe's imports all resolve in the binary | runs **in-process** (fast, no subprocess) |
 | probe's import is missing (even lazily, inside the function) | retried in the **sidecar** |
 | probe marked `tier="sidecar"` | always runs in the sidecar |
-| missing import, no sidecar installed | exits with `pip install <lib>` — never a crash |
+| missing import, no sidecar installed | exits with `pip install <lib>` and the `neuralosd sidecar --setup` hint |
 
 Opt out with `NEURALOSD_SIDECAR=off`, or point at a specific helper with
 `NEURALOSD_SIDECAR=/path/to/neuralosd-sidecar`.

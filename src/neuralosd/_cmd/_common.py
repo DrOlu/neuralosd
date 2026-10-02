@@ -60,6 +60,10 @@ def _missing_module_help(missing: str, source: str) -> str:
         out += ["Install the missing module:", "", f"    pip install {root}"]
     out += ["", "Or switch to the full install:  pip install 'neuralosd[all]'",
             "See:  neuralosd docs usage"]
+    if _is_frozen():
+        out += ["",
+                f"Or provision a sidecar so this binary can use {root} from the",
+                f"host Python:  neuralosd sidecar --setup --with {root}"]
     return "\n".join(out)
 
 
