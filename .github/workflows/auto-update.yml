@@ -100,6 +100,19 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Preflight — PyPI token present
+        if: github.event.inputs.dry_run != 'true'
+        env:
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          if [ -z "$PYPI_API_TOKEN" ]; then
+            echo "::error::PYPI_API_TOKEN is not configured, so this run could not publish."
+            echo "Add it under Settings -> Secrets and variables -> Actions,"
+            echo "or re-run this workflow with dry_run=true to rehearse without publishing."
+            exit 1
+          fi
+          echo "token present"
+
       - name: Drift summary
         run: |
           {
@@ -159,22 +172,17 @@ jobs:
 
       - name: Publish to PyPI
         id: pypi
-        if: github.event.inputs.dry_run != 'true' 
+        if: github.event.inputs.dry_run != 'true'
         env:
           PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         run: |
-          if [ -z "$PYPI_API_TOKEN" ]; then
-            echo "::warning::PYPI_API_TOKEN is not set — skipping the PyPI publish."
-            echo "published=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
           pip install twine
           twine upload dist/* --username __token__ --password "$PYPI_API_TOKEN" \
             --non-interactive --skip-existing
           echo "published=true" >> "$GITHUB_OUTPUT"
 
       - name: Record the new component versions
-        if: github.event.inputs.dry_run != 'true'
+        if: github.event.inputs.dry_run != 'true' && steps.pypi.outputs.published == 'true'
         run: |
           python scripts/component_versions.py --check --record
           git config user.name  "Hyperspace Technologies"
@@ -184,7 +192,7 @@ jobs:
           git push
 
       - name: Tag — this triggers build-binaries.yml
-        if: github.event.inputs.dry_run != 'true'
+        if: github.event.inputs.dry_run != 'true' && steps.pypi.outputs.published == 'true'
         run: |
           V="${{ steps.bump.outputs.new_version }}"
           git tag "v$V"
