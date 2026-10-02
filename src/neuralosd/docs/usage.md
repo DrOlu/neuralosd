@@ -87,6 +87,34 @@ pip install pypdf pywinrm    # whatever your probes need
 points at a specific helper. The binary stays one stable file — you never
 rebuild it to gain a library.
 
+#### Provisioning the sidecar (uv)
+
+If the machine has no usable Python, or you would rather not touch its
+environment, let uv build a dedicated one:
+
+```bash
+neuralosd sidecar --status                       # uv found? provisioned?
+neuralosd sidecar --setup --with pypdf,pywinrm   # create it
+neuralosd sidecar --setup --python 3.11          # a specific interpreter
+neuralosd sidecar --setup --force                # rebuild from scratch
+```
+
+Under the hood that is exactly:
+
+```bash
+uv python install 3.12                            # non-fatal if it fails
+uv venv --python 3.12 ~/.neuralosd/sidecar
+uv pip install --python ~/.neuralosd/sidecar/bin/python \
+    "neuralosd==<this build>" pypdf pywinrm
+```
+
+The environment lives at `~/.neuralosd/sidecar` (override with
+`$NEURALOSD_HOME`) and is found automatically — **no environment variables
+required**. It is pinned to the same version as the binary, and provisioning
+is always explicit because it touches the network.
+
+Requirements: `uv` on PATH (or `$NEURALOSD_UV`).
+
 ### Option B — pip (adds the model + sandbox backends)
 
 ### What you need

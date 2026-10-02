@@ -25,6 +25,77 @@ in the `neuralosd` package.
 
 ---
 
+## neuralosd.sidecar
+
+Runs an instance's probes in the **host** Python, so a frozen binary can use
+libraries it does not carry. Speaks newline-delimited JSON-RPC on
+stdin/stdout.
+
+| | |
+|---|---|
+| `main(argv)` | CLI entry point (`neuralosd-sidecar`) |
+| `Sidecar(instance_dir)` | serves one instance's probes |
+| `Sidecar.handle(req)` | `ping` / `menu` / `call` / `shutdown` |
+| `load_probe_functions(dir)` | import `probes.py`, return the probe functions |
+| `probe_meta(fn)` | serialisable view of a probe declaration |
+
+Protocol — one JSON object per line:
+
+```jsonc
+// request
+{"id": 1, "method": "call", "params": {"probe": "pdf_pages", "args": {}}}
+// response
+{"id": 1, "ok": true,  "result": {"pages": 2}}
+{"id": 1, "ok": false, "error": "unknown probe: 'ghost'"}
+```
+
+A `{"event": "ready"}` (or `"error"`) line is emitted before any response.
+
+## neuralosd.sidecar_client
+
+| | |
+|---|---|
+| `sidecar_command()` | resolve a helper: `$NEURALOSD_SIDECAR` → PATH → provisioned → `python3 -m neuralosd.sidecar` |
+| `SidecarClient(instance_dir, command=None, timeout=180)` | long-lived subprocess |
+| `.start()` / `.close()` | lifecycle (context manager supported) |
+| `.call(probe, args)` / `.menu()` / `.ping()` | protocol methods |
+| `SidecarError` | raised on not-found / died / timeout / remote error |
+
+`$NEURALOSD_SIDECAR=off` (also `0`, `false`, `no`, `none`, `-`) disables the
+sidecar entirely.
+
+## neuralosd.provision
+
+Creates a sidecar environment with uv — including a Python, if the machine has
+none.
+
+| | |
+|---|---|
+| `find_uv()` | `$NEURALOSD_UV`, PATH, then common install dirs |
+| `sidecar_home()` | `~/.neuralosd` (`$NEURALOSD_HOME` overrides) |
+| `sidecar_dir()` | `<home>/sidecar` |
+| `sidecar_executable()` | `<home>/sidecar/{bin,Scripts}/neuralosd-sidecar` |
+| `is_provisioned()` | does that executable exist? |
+| `requirements(packages, version)` | the pip requirement list |
+| `provision(python, packages, force, uv, version)` | create it (idempotent) |
+| `status()` | dict for the CLI to report |
+| `ProvisionError` | uv missing, uv failed, or a useless environment |
+
+### CLI
+
+```bash
+neuralosd sidecar --status
+neuralosd sidecar --setup [--with a,b] [--python 3.12] [--force]
+```
+
+### Environment variables
+
+| Variable | Effect |
+|---|---|
+| `NEURALOSD_SIDECAR` | helper command; `off` disables delegation |
+| `NEURALOSD_UV` | path to `uv` |
+| `NEURALOSD_HOME` | where the provisioned environment lives |
+
 ## neuralosd (top-level)
 
 ### `__version__`

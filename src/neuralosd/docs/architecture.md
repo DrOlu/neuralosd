@@ -590,6 +590,21 @@ Selection rules (see `neuralosd/_cmd/_common.py`):
    load-time-only fallback silently never fires.
 3. **Explicit** — a probe declared `tier="sidecar"` always delegates.
 
+**Bootstrapping.** A sidecar needs a host Python. `neuralosd.provision` removes
+even that assumption by driving uv, which ships its own CPython builds:
+
+```
+uv python install <ver>        (non-fatal — uv venv can fetch its own)
+uv venv --python <ver> ~/.neuralosd/sidecar
+uv pip install --python <env>/python neuralosd==<build> <extras>
+```
+
+The result is discovered automatically (PATH first, then the provisioned
+environment), so a bootstrapped machine needs no configuration. Provisioning
+is deliberately **explicit** — it touches the network, so it must never be
+triggered from inside an answer. Version-pinning the environment to the
+binary's own version keeps the protocol honest.
+
 Two invariants worth preserving:
 
 * the sidecar is started **lazily** — a fully-in-process instance never pays

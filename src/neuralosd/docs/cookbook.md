@@ -6,6 +6,52 @@ step by step without human intervention.
 
 ---
 
+## Recipe: Use a library the binary doesn't have
+
+A frozen binary cannot import your machine's packages. When a probe needs one
+it lacks, it runs that probe in the host Python via the **sidecar**.
+
+**1. Write the probe normally** — import the library inside the function:
+
+```python
+from neuralosd import probe
+
+@probe(description="Count pages in a PDF", triggers=["pdf pages", "pdf"])
+def pdf_pages(path):
+    from pypdf import PdfReader       # resolved in the sidecar
+    return {"pages": len(PdfReader(path).pages)}
+```
+
+**2. Give the sidecar the library** — either of:
+
+```bash
+pip install neuralosd pypdf            # machine already has Python
+neuralosd sidecar --setup --with pypdf # let uv build the environment
+```
+
+**3. Use the binary as normal** — delegation is automatic:
+
+```bash
+./neuralosd-macos-arm64 ask --instance-dir ./pdfs "pdf pages"
+```
+
+**What happens if you skip step 2?** A clear, non-crashing exit:
+
+```
+error: probe 'pdf_pages' needs the Python module 'pypdf',
+       which is not available in this environment.
+```
+
+**Notes**
+
+- The sidecar starts lazily — only for calls that need it. Everything else
+  stays in-process and fast.
+- `NEURALOSD_SIDECAR=off` disables delegation; `NEURALOSD_SIDECAR=/path/to/helper`
+  points at a specific helper.
+- To force delegation regardless of what the binary carries, declare the probe
+  with `tier="sidecar"`.
+- The binary never needs rebuilding to gain a library.
+
 ## Recipe 1: Analyst-in-a-Box (any CSV)
 
 **Goal**: Turn any CSV file into an offline question-answering service
