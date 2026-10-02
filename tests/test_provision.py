@@ -244,12 +244,14 @@ def test_provision_python_install_failure_is_not_fatal(env, monkeypatch):
 
 # ── discovery integration ──────────────────────────────────────────────────
 
-def test_discovery_finds_a_provisioned_environment(env):
-    from neuralosd.sidecar_client import sidecar_command
-    assert sidecar_command() != [env["uv"]] or True   # sanity
+def test_discovery_finds_a_provisioned_environment(env, monkeypatch):
+    """With nothing on PATH, discovery must fall through to what we
+    provisioned. (In CI the venv's own neuralosd-sidecar IS on PATH, which is
+    why this test hides it explicitly.)"""
+    from neuralosd import sidecar_client as scc
     prov.provision(version="1.0")
-    cmd = sidecar_command()
-    assert cmd == [prov.sidecar_executable()]
+    monkeypatch.setattr(scc.shutil, "which", lambda n: None)
+    assert scc.sidecar_command() == [prov.sidecar_executable()]
 
 
 def test_path_beats_the_provisioned_copy(env, monkeypatch, tmp_path):
