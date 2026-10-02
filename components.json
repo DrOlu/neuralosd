@@ -1,0 +1,12 @@
+{
+  "_comment": "Recorded versions of the components neuralosd composes. Updated automatically by .github/workflows/auto-update.yml when an upstream release is detected.",
+  "components": {
+    "neuralos": "3.10.2",
+    "boxlite": "0.10.5",
+    "microsandbox": "0.7.6",
+    "pydantic": "2.13.5",
+    "pymysql": "1.2.3",
+    "openpyxl": "3.1.5",
+    "nuitka": "4.2.2"
+  }
+}

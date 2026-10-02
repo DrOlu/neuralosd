@@ -1,0 +1,220 @@
+name: Auto-update on component drift
+
+# neuralosd is a composition: the on-device model (neuralos), two sandbox
+# backends (boxlite, microsandbox) and the data/binary toolchain. There is no
+# "package X was released" webhook, so this polls PyPI and compares against
+# the snapshot in components.json.
+#
+# On drift it: runs the tests, upgrades to the new versions, runs the tests
+# again against them, publishes to PyPI, and pushes a tag — which triggers
+# build-binaries.yml to produce all 12 binaries and the GitHub release.
+#
+# Configure before first use:
+#   * repo secret  PYPI_API_TOKEN      (or publishing is skipped with a notice)
+#   * repo variable AUTO_UPDATE=off    (kill switch, optional)
+
+on:
+  schedule:
+    - cron: "17 6 * * *"        # daily, 06:17 UTC
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Detect and test only — do not publish or tag"
+        type: boolean
+        default: false
+      bump_part:
+        description: "Which version part to bump"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+concurrency:
+  group: auto-update
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  detect:
+    name: Detect drift
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+      runtime_changed: ${{ steps.check.outputs.runtime_changed }}
+      build_changed: ${{ steps.check.outputs.build_changed }}
+      components: ${{ steps.check.outputs.components }}
+      needs_record: ${{ steps.check.outputs.needs_record }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Kill switch
+        id: gate
+        run: |
+          V='${{ vars.AUTO_UPDATE }}'
+          if [ "$V" = "off" ]; then
+            echo "AUTO_UPDATE=off — standing down"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check component versions
+        id: check
+        if: steps.gate.outputs.enabled == 'true'
+        run: python scripts/component_versions.py --check
+
+      - name: Report
+        if: steps.gate.outputs.enabled == 'true'
+        run: |
+          {
+            echo "## Component drift"
+            echo "neuralosd ${{ steps.check.outputs.changed == 'true' && 'has' || 'has no' }} drift"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          python scripts/component_versions.py --check >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Record the initial baseline
+        if: steps.gate.outputs.enabled == 'true' && steps.check.outputs.needs_record == 'true' && steps.check.outputs.changed != 'true'
+        run: |
+          python scripts/component_versions.py --check --record
+          git config user.name  "Hyperspace Technologies"
+          git config user.email "agent@superagent.ng"
+          git add components.json
+          git commit -m "chore: record component baseline"
+          git push
+
+  update:
+    name: Update, test and publish
+    needs: detect
+    if: needs.detect.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Drift summary
+        run: |
+          {
+            echo "### Triggered by: ${{ needs.detect.outputs.components }}"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install with the CURRENT components and test
+        run: |
+          pip install -e ".[dev]"
+          python -m pytest tests/ -q
+
+      - name: Upgrade to the NEW components
+        run: |
+          pip install --upgrade \
+            neuralos boxlite microsandbox pydantic pymysql openpyxl
+          pip install -e ".[dev]"
+
+      - name: Which versions are we now on
+        run: |
+          python - <<'PY'
+          import importlib
+          for mod, pkg in (("needle", "neuralos"), ("boxlite", "boxlite"),
+                           ("microsandbox", "microsandbox"),
+                           ("pydantic", "pydantic"), ("openpyxl", "openpyxl")):
+              try:
+                  m = importlib.import_module(mod)
+                  print(f"  {pkg:14} {getattr(m, '__version__', '?')}")
+              except Exception as e:
+                  print(f"  {pkg:14} NOT IMPORTABLE: {e}")
+          PY
+
+      - name: Test AGAINST the new components
+        run: |
+          python -m pytest tests/ -q
+          bash tests/smoke_cli.sh "$(which neuralosd)"
+
+      - name: Verify the generated instance still performs a breakdown
+        run: |
+          mkdir -p /tmp/autocheck && cd /tmp/autocheck
+          printf 'order_date,region,sales\n2023-01-05,North,100\n2024-01-05,South,200\n' > s.csv
+          neuralosd init --source s.csv --name s --out ./inst >/dev/null
+          out=$(neuralosd ask --instance-dir ./inst "sales by year")
+          echo "$out"
+          echo "$out" | grep -q '"probe": "breakdown"' \
+            || { echo "FAIL: breakdown routing regressed"; exit 1; }
+          echo "  PASS: breakdown still routes correctly"
+
+      - name: Bump the version
+        id: bump
+        run: python scripts/component_versions.py --bump "${{ github.event.inputs.bump_part || 'patch' }}"
+
+      - name: Build
+        run: |
+          pip install build
+          python -m build
+
+      - name: Publish to PyPI
+        id: pypi
+        if: github.event.inputs.dry_run != 'true' 
+        env:
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          if [ -z "$PYPI_API_TOKEN" ]; then
+            echo "::warning::PYPI_API_TOKEN is not set — skipping the PyPI publish."
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          pip install twine
+          twine upload dist/* --username __token__ --password "$PYPI_API_TOKEN" \
+            --non-interactive --skip-existing
+          echo "published=true" >> "$GITHUB_OUTPUT"
+
+      - name: Record the new component versions
+        if: github.event.inputs.dry_run != 'true'
+        run: |
+          python scripts/component_versions.py --check --record
+          git config user.name  "Hyperspace Technologies"
+          git config user.email "agent@superagent.ng"
+          git add components.json pyproject.toml src/neuralosd/__init__.py
+          git commit -m "release: ${{ steps.bump.outputs.new_version }} (components: ${{ needs.detect.outputs.components }})"
+          git push
+
+      - name: Tag — this triggers build-binaries.yml
+        if: github.event.inputs.dry_run != 'true'
+        run: |
+          V="${{ steps.bump.outputs.new_version }}"
+          git tag "v$V"
+          git push origin "v$V"
+          {
+            echo "### Released \`$V\`"
+            echo
+            echo "- PyPI publish: ${{ steps.pypi.outputs.published }}"
+            echo "- Binaries: tagging \`v$V\` triggers **Build Binaries (Nuitka)**"
+            echo "  (5 platforms x 3 variants, ~60 min)"
+            echo "- Components: ${{ needs.detect.outputs.components }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Dry run notice
+        if: github.event.inputs.dry_run == 'true'
+        run: |
+          echo "::notice::dry_run=true — detected, upgraded, tested and built, but NOT published or tagged"
+
+  # Rebuild the binaries when only a build-scope component moved (nuitka),
+  # without cutting a new PyPI release.
+  rebuild-binaries:
+    name: Rebuild binaries (build-scope drift)
+    needs: detect
+    if: needs.detect.outputs.changed == 'true' && needs.detect.outputs.runtime_changed != 'true' && needs.detect.outputs.build_changed != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Retag the current version to rebuild
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "build-scope change: ${{ needs.detect.outputs.build_changed }}"
+          echo "Rebuilding binaries for the current version."
+          gh workflow run build-binaries.yml --repo "$GITHUB_REPOSITORY"
