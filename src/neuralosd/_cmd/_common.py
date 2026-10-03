@@ -148,6 +148,14 @@ def load_instance(instance_dir: str, with_model: bool = False):
     # binary lacks while everything else stays in-process).
     probes = _maybe_redirect_tier_sidecar(probes, instance_dir)
 
+    # Derived metrics from derived.json are appended on BOTH paths, so a metric
+    # the reasoning loop has installed is routable immediately. They are built
+    # from the STORED observation snapshot — zero probe calls here. Loading must
+    # never fire a probe: they may be slow, remote or rate-limited, and this
+    # runs on every single ask.
+    from ..menu_adapter import dedup_probes, derived_probes as _derived_probes
+    probes = dedup_probes(probes, _derived_probes(instance_dir))
+
     # A probe's dependency is often imported INSIDE the function, so a missing
     # library shows up at CALL time, not load time — the module imports fine
     # and the failure would otherwise be swallowed into an error envelope
@@ -184,8 +192,13 @@ def _wrap_with_sidecar_fallback(probes, instance_dir):
     out = []
     for fn in probes:
         meta = getattr(fn, "_probe", None)
-        if meta is None or getattr(fn, "_sidecar_backed", False):
-            out.append(fn)          # already a forwarding stub
+        if meta is None or getattr(fn, "_sidecar_backed", False) \
+                or getattr(fn, "_derived", False):
+            # Already a forwarding stub, or a derived metric: pure computation
+            # over a stored snapshot, with no import to retry. Wrapping one in
+            # a fresh function would silently drop its markers — which is how
+            # `_derived` was lost and the metric stopped being recognisable.
+            out.append(fn)
             continue
         out.append(_make_fallback_probe(fn, meta, client))
     return out
@@ -206,6 +219,11 @@ def _make_fallback_probe(fn, meta, client):
     wrapper.__name__ = meta.name
     wrapper._probe = meta
     meta.function = wrapper
+    # Preserve any marker the original carried. Dropping one is how a derived
+    # metric became indistinguishable from a quantity probe.
+    for attr in ("_derived", "_sidecar_backed"):
+        if hasattr(fn, attr):
+            setattr(wrapper, attr, getattr(fn, attr))
     return wrapper
 
 

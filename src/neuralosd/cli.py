@@ -118,7 +118,8 @@ def main():
         "reason",
         help="Escalate a question to a reasoning model, then extend the menu")
     p_rs.add_argument("--instance-dir", required=True)
-    p_rs.add_argument("question", nargs="+")
+    p_rs.add_argument("question", nargs="*",
+                      help="the question to escalate (not needed with --refresh)")
     p_rs.add_argument("--model", default=None,
                       help="Ollama model (default deepseek-r1:8b)")
     p_rs.add_argument("--ollama", default=None,
@@ -130,6 +131,10 @@ def main():
                       default="percent")
     p_rs.add_argument("--dry-run", action="store_true",
                       help="show the whole trail, write nothing")
+    p_rs.add_argument("--refresh", action="store_true",
+                      help="re-observe the instance and rewrite the derived "
+                           "snapshot for the metrics already installed. No "
+                           "model, no proposal. Use when the data moved.")
     p_rs.add_argument("--force", action="store_true",
                       help="escalate even when the gate says not to")
     p_rs.add_argument("--no-stability-check", action="store_true",

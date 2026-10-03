@@ -136,21 +136,46 @@ def probes_from_menu(instance_dir: str,
     return out
 
 
-def derived_probes(instance_dir: str,
-                   observations: Optional[Dict[str, Dict]] = None
-                   ) -> List[Callable]:
-    """Load derived.json and turn each metric into a routable probe."""
-    from .derived import as_probe, load as load_derived
+def dedup_probes(probes: List[Callable],
+                 extra: List[Callable]) -> List[Callable]:
+    """Append `extra` probes whose names are not already present.
 
-    path = os.path.join(instance_dir, DERIVED_FILE)
-    metrics = load_derived(path)
+    Guards against the same metric entering a menu twice — via the probes.py
+    path AND the needle-menu path on an instance that has both files.
+    """
+    have = {getattr(p, "_probe").name for p in probes
+            if getattr(p, "_probe", None) is not None}
+    out = list(probes)
+    for p in extra:
+        meta = getattr(p, "_probe", None)
+        if meta is None or meta.name in have:
+            continue
+        have.add(meta.name)
+        out.append(p)
+    return out
+
+
+def derived_probes(instance_dir: str,
+                   observations: Optional[Dict[str, Dict]] = None,
+                   snapshot_ts: Optional[float] = None) -> List[Callable]:
+    """Load derived.json and turn each metric into a routable probe.
+
+    Pass `observations` (what `reason` just observed) to evaluate against fresh
+    numbers. WITHOUT them the metrics are built from the STORED snapshot in
+    derived_snapshot.json — which costs zero probe calls, so `load_instance` may
+    append these on every ask without firing anything. A metric with no
+    snapshot at all still routes, and refuses with the refresh command.
+    """
+    from .derived import as_probe, load as load_derived, load_snapshot
+
+    metrics = load_derived(os.path.join(instance_dir, DERIVED_FILE))
     if not metrics:
         return []
     if observations is None:
-        observations = observe(instance_dir)
+        observations, snapshot_ts = load_snapshot(instance_dir)
     out = []
     for m in metrics:
-        p = as_probe(m, observations)
+        p = as_probe(m, observations, snapshot_ts)
         if p is not None:
             out.append(p)
     return out
@@ -187,6 +212,6 @@ def load_menu_instance(instance_dir: str):
     probes = probes_from_menu(instance_dir)
     if not probes:
         return None
-    probes = probes + derived_probes(instance_dir)
+    probes = dedup_probes(probes, derived_probes(instance_dir))
     name = os.path.basename(os.path.abspath(instance_dir).rstrip(os.sep))
     return Instance(name=name, probes=probes, state_dir=instance_dir)

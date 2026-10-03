@@ -54,14 +54,32 @@ def _neighbour_questions(inst, question):
 
 def run(a):
     from ._common import load_instance
-    from ..derived import load as load_derived
+    from ..derived import load as load_derived, save as save_derived, \
+        save_snapshot
     from ..menu_adapter import observe, read_menu
     from ..reasoning import (MapperError, OllamaMapper, compare_routes,
                              install, needs_escalation, propose,
                              snapshot_routes)
 
+    instance_dir = os.path.abspath(os.path.expanduser(a.instance_dir))
+
+    # ── 0. explicit snapshot refresh: no model, no proposal ────────────────
+    if getattr(a, "refresh", False):
+        obs = observe(instance_dir)
+        metrics = load_derived(os.path.join(instance_dir, "derived.json"))
+        if not metrics:
+            print(f"no derived.json in {instance_dir} — nothing to refresh")
+            return 0
+        path, missing = save_snapshot(instance_dir, obs, metrics)
+        print(f"refreshed {path}")
+        print(f"  {len(obs)} probes observed, "
+              f"{len(metrics)} metrics now covered")
+        if missing:
+            print(f"  warning: no observation for {', '.join(missing)}")
+        return 0
+
     inst = load_instance(a.instance_dir)
-    question = " ".join(a.question)
+    question = " ".join(a.question or [])
     instance_dir = inst.state_dir
 
     # ── 1. the deterministic gate ──────────────────────────────────────────
@@ -177,9 +195,10 @@ def run(a):
     print(f"  baseline: captured {len(before)} routes "
           f"({refusals} of them already refusing)")
 
-    # ── 8. install ─────────────────────────────────────────────────────────
-    path = install(metric, instance_dir)
+    # ── 8. install (with the snapshot, so the next ask needs no probe calls)─
+    path = install(metric, instance_dir, observations=observations)
     print(f"\n✓ INSTALLED -> {path}")
+    print(f"  snapshot  -> {os.path.join(instance_dir, 'derived_snapshot.json')}")
 
     # ── 9. diff the routes and prove closure ───────────────────────────────
     from ._common import load_instance as reload_instance
@@ -210,4 +229,8 @@ def run(a):
               "is not involved, and nothing else moved.")
         return 0
     print(f"\n✗ the target question did not route to {metric.name!r}.")
+    print("   remediation:")
+    print(f"     1. check the triggers in {path}")
+    print(f"     2. re-run with --dry-run and read the backtest")
+    print(f"     3. ask again:  neuralosd ask --instance-dir {instance_dir} '")
     return 5

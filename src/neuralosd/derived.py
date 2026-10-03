@@ -30,13 +30,24 @@ fabricated quantity is a rejection rather than a wrong number.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import os
 import re
+import sys
+import time
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from decimal import Decimal
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 DERIVED_FILE = "derived.json"
+SNAPSHOT_FILE = "derived_snapshot.json"
+
+# How old a stored observation snapshot may be before it is flagged stale in
+# the envelope. Advisory, never enforced at load: enforcing it would mean
+# refreshing at load, which means firing probes just to answer a question, which
+# is the bug this file exists to prevent. Staleness is SURFACED instead.
+DEFAULT_TTL = float(os.environ.get("NEURALOSD_DERIVED_TTL", 3600))
 
 KINDS = ("ratio",)
 SCALES = ("ratio", "percent")
@@ -170,7 +181,30 @@ def inventory_from_observations(observations: Dict[str, Dict]) -> List[Quantity]
 
 
 def _numeric(v: Any) -> bool:
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+    """A measure. Decimal counts: MySQL DECIMAL columns arrive as Decimal via
+    pymysql, and a SUM over an invoice table is exactly the kind of quantity a
+    derived metric exists to divide."""
+    return isinstance(v, (int, float, Decimal)) and not isinstance(v, bool)
+
+
+def _json_safe(v: Any) -> Any:
+    """Coerce a probe result into something json.dump accepts.
+
+    Decimal becomes float (same value, serializable), datetimes become ISO
+    text, and anything exotic degrades to its string form — a snapshot that
+    fails to write is a metric that silently stops being routable.
+    """
+    if isinstance(v, Decimal):
+        return float(v)
+    if isinstance(v, (_dt.datetime, _dt.date, _dt.time)):
+        return v.isoformat()
+    if isinstance(v, dict):
+        return {str(k): _json_safe(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_json_safe(x) for x in v]
+    if isinstance(v, (str, int, float, bool)) or v is None:
+        return v
+    return str(v)
 
 
 def _truncation(observations: Dict[str, Dict], probe: str,
@@ -289,6 +323,66 @@ def evaluate(metric: DerivedMetric,
     }
 
 
+# ── the observation snapshot ─────────────────────────────────────────────
+#
+# A derived metric needs the numbers its ids point at. Observing them means
+# CALLING probes, which is fine inside `reason` (it is already doing that) and
+# catastrophic at instance-load time, when probes may be slow, remote or
+# rate-limited. So the snapshot is taken once by the loop, PRUNED to the probes
+# the installed metrics reference, written to disk, and loaded by every
+# subsequent `ask` without touching a single probe.
+
+def referenced_probes(metrics: List[DerivedMetric]) -> List[str]:
+    """Probe names the installed metrics actually read."""
+    out = []
+    for m in metrics:
+        for q in (m.numerator, m.denominator):
+            probe = q.split(".", 1)[0]
+            if probe not in out:
+                out.append(probe)
+    return out
+
+
+def save_snapshot(instance_dir: str, observations: Dict[str, Dict],
+                  metrics: List[DerivedMetric]) -> Tuple[str, List[str]]:
+    """Write derived_snapshot.json, pruned to what the metrics reference.
+
+    Returns (path, missing) where `missing` names referenced probes that were
+    not in the observations — those metrics will refuse until refreshed.
+    """
+    keep = referenced_probes(metrics)
+    pruned = {k: _json_safe(observations[k]) for k in keep
+              if k in observations}
+    missing = [k for k in keep if k not in observations]
+    blob = {"version": 1, "ts": time.time(),
+            "observations": pruned}
+    path = os.path.join(instance_dir, SNAPSHOT_FILE)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(blob, fh, indent=2, ensure_ascii=False)
+        fh.write("\n")
+    os.replace(tmp, path)
+    return path, missing
+
+
+def load_snapshot(instance_dir: str) -> Tuple[Optional[Dict[str, Dict]],
+                                              Optional[float]]:
+    """(observations, ts). (None, None) when there is no snapshot."""
+    path = os.path.join(instance_dir, SNAPSHOT_FILE)
+    if not os.path.isfile(path):
+        return None, None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            blob = json.load(fh)
+        return blob.get("observations") or {}, blob.get("ts")
+    except (ValueError, OSError):
+        return None, None
+
+
+def snapshot_age(ts: Optional[float]) -> Optional[float]:
+    return None if ts is None else max(0.0, time.time() - float(ts))
+
+
 # ── turning a spec into a routable probe ───────────────────────────────────
 
 def is_derived(probe) -> bool:
@@ -301,21 +395,40 @@ def is_derived(probe) -> bool:
     return bool(getattr(probe, "_derived", False))
 
 
-def as_probe(metric: DerivedMetric, observations: Dict[str, Dict]
-             ) -> Optional[Callable]:
+def as_probe(metric: DerivedMetric, observations: Optional[Dict[str, Dict]] = None,
+             snapshot_ts: Optional[float] = None) -> Optional[Callable]:
     """Wrap a spec as a probe the Router can route to.
 
     The wrapper closes over a SNAPSHOT of the observations, so a derived probe
-    is exactly as deterministic as the probes it is built from, and costs no
-    extra database round-trips at ask time.
+    is exactly as deterministic as the probes it was built from — and costs NO
+    probe calls at ask time. That is the whole point: `load_instance` may append
+    these on every invocation, and a load must never fire a probe.
+
+    With no snapshot the probe still routes, and refuses with the exact
+    remediation. Routing to the right capability and failing loudly beats
+    silently returning the wrong shape — the error the truncation and share
+    guards exist to prevent.
     """
     from .probe import probe as probe_deco
 
     metric.validate()
-    by_id = {q.id: q for q in inventory_from_observations(observations)}
+    by_id = ({q.id: q for q in inventory_from_observations(observations)}
+             if observations else {})
 
     def derived_fn():
-        return evaluate(metric, observations, by_id)
+        if not observations:
+            raise DerivedError(
+                f"derived metric {metric.name!r} has no observation snapshot — "
+                f"run:  neuralosd reason --instance-dir <dir> --refresh")
+        try:
+            out = evaluate(metric, observations, by_id)
+        except DerivedError:
+            raise
+        age = snapshot_age(snapshot_ts)
+        if age is not None:
+            out["snapshot_age_s"] = round(age, 1)
+            out["snapshot_stale"] = bool(age > DEFAULT_TTL)
+        return out
 
     derived_fn.__name__ = metric.name
     derived_fn._derived = True          # excluded from future inventories

@@ -483,13 +483,26 @@ def backtest(cases: List[Dict[str, str]], ask: Callable[[str], Dict]
 
 # ── 8. install ─────────────────────────────────────────────────────────────
 
-def install(metric: DerivedMetric, instance_dir: str) -> str:
-    """Add or replace a metric in derived.json. Never touches probes.py."""
-    from .derived import load as load_derived, save as save_derived
+def install(metric: DerivedMetric, instance_dir: str,
+            observations: Optional[Dict[str, Dict]] = None) -> str:
+    """Add or replace a metric. Never touches probes.py.
+
+    With `observations` (what the loop just observed) it also writes the pruned
+    snapshot — which is what makes the metric routable on the NEXT ask with
+    ZERO probe calls at load. Without them the metric is installed but will
+    refuse until a snapshot exists.
+    """
+    from .derived import (load as load_derived, save as save_derived,
+                          save_snapshot)
     path = os.path.join(instance_dir, "derived.json")
     metrics = [m for m in load_derived(path) if m.name != metric.name]
     metrics.append(metric)
     save_derived(path, metrics)
+    if observations is not None:
+        snap_path, missing = save_snapshot(instance_dir, observations, metrics)
+        if missing:
+            print(f"warning: no observation for {', '.join(missing)} — those "
+                  f"metrics will refuse until refreshed", file=sys.stderr)
     return path
 
 
