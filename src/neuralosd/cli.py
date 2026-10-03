@@ -89,7 +89,10 @@ def main():
     p_cal = sub.add_parser("calibrate", help="Learn per-probe confidence gates")
     p_cal.add_argument("--golden", default="golden.json")
     p_cal.add_argument("--base", default="http://127.0.0.1:8877")
-    p_cal.add_argument("--out", default="calibration.json")
+    p_cal.add_argument("--traps", default=None,
+                       help="trap bank JSON (default <instance>/traps.json)")
+    p_cal.add_argument("--allow-no-traps", action="store_true",
+                       help="fit without a trap bank (not recommended)")
 
     # gaps
     p_gaps = sub.add_parser("gaps", help="Mine gated/fuzzy questions")

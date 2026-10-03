@@ -38,20 +38,64 @@ class Instance:
         return lint_menu(self.menu, top=top, max_triggers=max_triggers)
 
     def golden_run(self, golden: Dict, base_port: Optional[int] = None):
-        """Run every golden question through the router."""
-        passed = 0
+        """Run every golden question through the router, positives and TRAPS.
+
+        A positive item declares the probe that must answer it:
+
+            {"q": "...", "expect_probe": "open_incidents"}
+
+        A negative item (a trap) declares that the router must REFUSE, and
+        optionally why:
+
+            {"q": "...", "expect_refusal": true,
+             "refusal_reason": "no_probe_matches"}
+
+        A confident answer to a trap is the worst failure this system has, so
+        it is counted separately from a plain wrong routing and it fails the
+        run. Returns a summary dict; exit code is the caller's decision.
+        """
+        correct = refused_ok = answered_trap = wrong = refused_wrong = 0
+        total = len(golden.get("items", []))
         for item in golden.get("items", []):
+            q = item.get("q")
+            wants_refusal = bool(item.get("expect_refusal"))
+            want_reason = item.get("refusal_reason")
             try:
-                env = self.ask(item["q"])
+                env = self.ask(q)
+                probe, refusal_reason = env.get("probe"), env.get("refusal_reason")
+                answered = env.get("results") not in (None, [], {})
+            except NoResults as e:
+                env = getattr(e, "envelope", {}) or {}
                 probe = env.get("probe")
-                ok = (item.get("expect_probe") in (None, probe)) and \
-                     env.get("results") not in (None, [], {})
-            except NoResults:
-                probe, ok = None, False
-            passed += ok
-            print(f"{'PASS' if ok else 'FAIL'}  {item['q']!r} -> {probe}")
-        print(f"golden: {passed}/{len(golden.get('items', []))} PASS")
-        return passed
+                refusal_reason = env.get("refusal_reason")
+                answered = False
+            if wants_refusal:
+                if not answered and (not want_reason
+                                     or refusal_reason == want_reason):
+                    ok, refused_ok = True, refused_ok + 1
+                    print(f"PASS  REFUSED  {q!r} [{refusal_reason}]")
+                else:
+                    ok = False
+                    answered_trap += answered
+                    wrong += 1
+                    print(f"FAIL  {'CONFIDENTLY ANSWERED' if answered else 'refused, wrong reason'}"
+                          f"  {q!r} -> {probe} [{refusal_reason}]")
+            else:
+                expect = item.get("expect_probe")
+                ok = ((expect in (None, probe)) and answered)
+                if ok:
+                    correct += 1
+                    print(f"PASS  {q!r} -> {probe}")
+                else:
+                    wrong += 1
+                    refused_wrong += (not answered)
+                    print(f"FAIL  {q!r} -> {probe} (expected {expect})")
+        summary = {"total": total, "correct": correct, "refused_ok": refused_ok,
+                   "answered_traps": answered_trap, "wrong": wrong,
+                   "refused_when_should_answer": refused_wrong}
+        print(f"golden: {correct + refused_ok}/{total} PASS "
+              f"({wrong} wrong, {answered_trap} trap(s) confidently answered)")
+        return summary
 
     def openapi(self, title=None):
         return self.router.openapi(title)

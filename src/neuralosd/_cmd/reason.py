@@ -20,6 +20,7 @@ What happens, in order:
 import json
 import os
 import sys
+import time
 
 
 def _neighbour_questions(inst, question):
@@ -167,7 +168,14 @@ def run(a):
         print(f"  result      = {v['value']} {v['unit']}")
 
     if not p.ok:
-        print("\n✗ NOT INSTALLED")
+        # An honest abstention is a GAP, not a dead end: the menu cannot express
+        # this, and the next extension cycle should start from it.
+        gap_path = os.path.join(instance_dir, "menu_gaps.jsonl")
+        with open(gap_path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"question": question, "served": served,
+                                 "reason": p.reasons, "ts": time.time(),
+                                 "source": "reason_declined"}) + "\n")
+        print(f"\n✗ NOT INSTALLED (declined — logged to {gap_path})")
         for r in p.reasons:
             print(f"  - {r}")
         return 4

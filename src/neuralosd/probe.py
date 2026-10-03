@@ -16,6 +16,21 @@ class ProbeMeta:
     confirm: bool
     function: Callable
     min_coverage: Optional[float] = None
+
+    def _vocab_tokens(self):
+        """Every token this probe can be said to know: triggers, name,
+        and enum values. Used by the router's question-coverage
+        check - a question token absent from here is a domain noun this probe
+        has never heard of."""
+        from .router import tokens
+        v = set()
+        for t in self.triggers or []:
+            v |= tokens(t)
+        v |= tokens(self.name.replace("_", " "))
+        for spec in (self.args or {}).values():
+            for val in spec.get("values") or []:
+                v |= tokens(str(val))
+        return frozenset(v)
     """Fraction of the probe's best trigger that the question must contain.
 
     Token-overlap scoring is happy with a 2-token question matching 2 of an

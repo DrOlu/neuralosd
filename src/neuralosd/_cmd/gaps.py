@@ -26,15 +26,36 @@ def run(a):
         menu = data.get("menu", data) if isinstance(data, dict) else data
     known = {m["name"] for m in menu} if menu else set()
 
+    # Mine EVERY shape of "the menu struggled here", not only hard refusals:
+    #   refusals with a calibrated reason (below_floor, ambiguous, ...)
+    #   a confident answer to a question the probe only partly understood
+    #     (discarded terms/filters - previously logged as a plain success, so
+    #      the worst failure class was invisible to this miner)
+    #   the legacy gated/fuzzy markers from older audit shapes
     gaps = []
     for r in rows:
         probe = r.get("probe")
+        reason = r.get("refusal_reason")
+        refused = r.get("results") is None and (reason or r.get("error"))
+        discarded = r.get("discarded") or {}
+        fuzzy = bool(discarded.get("terms") or discarded.get("filters"))
         gated = r.get("gated") or r.get("fuzzy") or r.get("no_results")
-        if gated or (menu and probe not in known):
+        unmatched = bool(menu) and probe not in known
+        if refused:
             gaps.append({"question": r.get("question") or r.get("q"),
                          "probe": probe,
-                         "score": r.get("score"),
-                         "reason": "gated" if gated else "unmatched"})
+                         "reason": reason or "refused",
+                         "scores": r.get("scores")})
+        elif fuzzy:
+            gaps.append({"question": r.get("question") or r.get("q"),
+                         "probe": probe,
+                         "reason": "partial_answer",
+                         "discarded": discarded})
+        elif gated or unmatched:
+            gaps.append({"question": r.get("question") or r.get("q"),
+                         "probe": probe,
+                         "reason": "gated" if gated else "unmatched",
+                         "score": r.get("score")})
 
     seen, uniq = set(), []
     for g in gaps:

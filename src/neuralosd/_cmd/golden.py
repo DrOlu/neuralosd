@@ -16,6 +16,7 @@ def run(a):
     with open(golden_path, encoding="utf-8") as f:
         golden = json.load(f)
 
-    passed = inst.golden_run(golden)
-    total = len(golden.get("items", []))
-    raise SystemExit(0 if passed == total else 1)
+    summary = inst.golden_run(golden)
+    # A confidently answered trap fails the run outright, whatever the score.
+    raise SystemExit(0 if (summary["wrong"] == 0
+                           and summary["answered_traps"] == 0) else 1)

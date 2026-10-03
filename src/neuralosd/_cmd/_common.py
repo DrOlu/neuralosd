@@ -2,7 +2,7 @@
 import importlib.util
 import os
 import sys
-from typing import Optional
+from typing import Any, Dict, Optional
 
 
 # Missing-module -> (human label, pip package). Used to turn a bare
@@ -83,7 +83,8 @@ def _load_menu_instance(instance_dir: str, with_model: bool = False):
     return inst
 
 
-def load_instance(instance_dir: str, with_model: bool = False):
+def load_instance(instance_dir: str, with_model: bool = False,
+                  router_overrides: Optional[Dict[str, Any]] = None):
     """Load an :class:`~neuralosd.instance.Instance` from a directory.
 
     Resolution order:
@@ -156,6 +157,7 @@ def load_instance(instance_dir: str, with_model: bool = False):
     from ..menu_adapter import dedup_probes, derived_probes as _derived_probes
     probes = dedup_probes(probes, _derived_probes(instance_dir))
 
+
     # A probe's dependency is often imported INSIDE the function, so a missing
     # library shows up at CALL time, not load time — the module imports fine
     # and the failure would otherwise be swallowed into an error envelope
@@ -164,8 +166,12 @@ def load_instance(instance_dir: str, with_model: bool = False):
     probes = _wrap_with_sidecar_fallback(probes, instance_dir)
 
     model_fallback = _build_model_fallback(probes) if with_model else None
-    return Instance(name=name, probes=probes,
+    inst = Instance(name=name, probes=probes,
                     model_fallback=model_fallback, state_dir=instance_dir)
+    for key, value in (router_overrides or {}).items():
+        if hasattr(inst.router, key):
+            setattr(inst.router, key, value)
+    return inst
 
 
 def _wrap_with_sidecar_fallback(probes, instance_dir):

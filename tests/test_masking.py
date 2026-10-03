@@ -158,8 +158,13 @@ def test_storage_masking_applies_even_when_pii_mask_is_off(tmp_path):
 
 
 def test_the_question_itself_is_masked_at_storage(tmp_path):
+    """Even a REFUSAL is audited, and the question is masked on the way in."""
+    from neuralosd.router import NoResults
     r = _leaky_router(tmp_path)
-    r.ask(f"show the leak {JWT}")
+    try:
+        r.ask(f"show the leak {JWT}")
+    except NoResults:
+        pass                                  # refused: fine, still audited
     assert JWT not in open(r.audit_file, encoding="utf-8").read()
 
 

@@ -577,6 +577,82 @@ curl -X POST http://localhost:8877/ask \
 }
 ```
 
+### The three outcomes: answer, escalate, refuse
+
+The router no longer answers whatever scores highest. Every question lands in
+one of three outcomes:
+
+| Outcome | Meaning | Envelope |
+|---|---|---|
+| **CONFIDENT** | the best match clears the floor, beats the runner-up by the margin, and knows the question's domain nouns | answered as before |
+| **UNSURE** | a threshold failed and a model fallback is configured | the fallback tries; if it abstains → refusal |
+| **REFUSE** | no match, thresholds failed with no fallback, or the fallback abstained | `mode: "refused"`, `refusal_reason`, `results: null`, exit 2 |
+
+Four thresholds, all per-instance configurable via `router.json` (fitted by
+`neuralosd calibrate`) or environment variables:
+
+| Threshold | Default | Catches |
+|---|---|---|
+| `floor` (NEURALOSD_FLOOR) | 3.0 | a best match too weak to trust — usually a generic prefix like "how many" |
+| `margin` (NEURALOSD_MARGIN) | 2.0 | two probes within a hair of each other, where picking either is a guess |
+| `min_question_coverage` (NEURALOSD_MIN_QUESTION_COVERAGE) | 0.5 | the question's **domain nouns** are unknown to the winning probe — it won on generic words |
+| `refuse_disjunction` | true | "more X or Y" comparisons when no probe claims to compare |
+
+Plus a **dropped-qualifier** check: "blocked", "overdue", "closed", "last
+month"… — if the question carries a status/time qualifier the winning probe's
+vocabulary does not, the answer would silently ignore it → refused.
+
+Design details that matter:
+
+- **Coverage is measured over domain nouns, not all content words.** "how many
+  worklog entries exist" is five content tokens, three of them generic intent.
+  Measuring over all five let a probe that knew only "how many" pass at 0.6.
+- **Coverage uses the STRONG vocabulary** (name + triggers + enum values), not
+  the description. Prose absorbs nearby words; the curated contract is the
+  honest evidence of scope.
+- **Ambiguity requires a coverage disadvantage.** A question sharing one
+  generic token with many probes ("top genres") ties on raw score; refusing an
+  answerable question is its own failure. The winner must explain the question
+  strictly better than the runner-up.
+- **An extracted entity bypasses the thresholds.** "status of incident
+  INC0000000077173" matched a caged pattern — that extraction IS the confidence
+  signal. Applying prose thresholds there would refuse the questions caged
+  probes exist for.
+
+Every refusal carries its **score vector** (top-3 probes + scores) and a
+`refusal_reason`:
+
+```json
+{"mode": "refused",
+ "refusal_reason": "no_probe_matches",
+ "scores": [{"probe": "open_incidents", "score": 10.0},
+            {"probe": "unresolved_incidents", "score": 10.0}],
+ "results": null}
+```
+
+`refusal_reason` ∈ `no_probe_matches`, `below_floor`, `ambiguous`,
+`low_coverage`, `comparative`, `dropped_filter`, `args_not_extractable`,
+`out_of_range`, `model_abstained`. Refusals are audited with their score
+vectors, and `neuralosd gaps` mines them — a refusal is a menu gap you can fix.
+
+**Fitting the thresholds:** write a trap bank, then fit:
+
+```json
+// traps.json — questions this instance must REFUSE
+{"items": [{"q": "how many worklog entries exist", "expect_refusal": true,
+            "refusal_reason": "no_probe_matches"}]}
+```
+
+```bash
+neuralosd calibrate --golden ./inst/golden.json        # traps.json picked up automatically
+```
+
+`calibrate` searches (floor x margin), punishes a confident wrong answer 5x
+harder than a false refusal, writes the chosen operating point to
+`router.json`, and prints the trade-off curve. `golden.json` supports negative
+cases: `{"q": "...", "expect_refusal": true, "refusal_reason": "..."}` — a
+confidently answered trap fails the run outright.
+
 ### Trusting an answer: the `discarded` ledger
 
 An answer is only an answer if it is an answer to **the question you asked**. A

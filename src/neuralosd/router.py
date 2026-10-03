@@ -65,6 +65,53 @@ PII_VALUE_PATTERNS = (
 
 MASKED = "***masked***"
 
+# Words that carry INTENT but no SUBJECT. A question built mostly from these
+# ("how many X exist") can match any probe whose trigger starts the same way,
+# which is exactly how a confident wrong answer used to be chosen. Coverage is
+# measured over what remains after these are removed.
+GENERIC_INTENT = frozenset("""
+    how many much show list give tell me find get what which who where when
+    top best most least first last sample example preview all any
+    are is there exist exists please number status break down
+""".split())
+
+# Status and time QUALIFIERS. If the question carries one and the winning
+# probe's vocabulary does not, the answer will silently ignore it - "how many
+# work orders are blocked" answered with an open count is a wrong answer that
+# looks right. Checked against the winner's STRONG vocabulary only: a
+# description that merely mentions "closed" is not a closed-filter.
+QUALIFIERS = ("blocked", "overdue", "rejected", "closed", "resolved",
+              "pending", "escalated", "cancelled", "archived", "on hold",
+              "last week", "last month", "last year", "this week",
+              "this month", "yesterday", "today", "unassigned")
+
+
+def _envf(name, default):
+    """Float from the environment, or the default."""
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _router_config(instance_name):
+    """Per-instance router thresholds from router.json, if present.
+
+    Written by `neuralosd calibrate` after fitting floor/margin against the
+    golden and trap banks, so an operator's chosen operating point survives
+    restarts without environment variables.
+    """
+    for candidate in (f"{instance_name}.router.json", "router.json"):
+        if os.path.isfile(candidate):
+            try:
+                with open(candidate, encoding="utf-8") as fh:
+                    d = json.load(fh)
+                if isinstance(d, dict):
+                    return d
+            except (ValueError, OSError):
+                pass
+    return {}
+
 # Arg names whose enum values are MEASURES, not filters. A measure named in a
 # question ("sales") is normal. A categorical FILTER named in a question that
 # nothing consumed ("Western Europe") means the answer silently ignored it.
@@ -248,7 +295,10 @@ class Router:
                  cache_file: str = ".ask_cache.json",
                  audit_file: str = "ask_audit.jsonl",
                  pii_mask: bool = True, ttl: int = 3600,
-                 name: str = "instance", strict_discards: bool = False):
+                 name: str = "instance", strict_discards: bool = False,
+                 floor: Optional[float] = None, margin: Optional[float] = None,
+                 min_question_coverage: Optional[float] = None,
+                 refuse_disjunction: Optional[bool] = None):
         self.probes = list(probes)
         self.metas = [getattr(p, "_probe") for p in self.probes]
         self.by_name = {m.name: p for p, m in zip(self.probes, self.metas)}
@@ -262,6 +312,30 @@ class Router:
         # is refused instead of returned. Off by default so existing callers
         # keep working; the ledger is still always present in the envelope.
         self.strict_discards = strict_discards
+        # ── calibrated refusal thresholds ──────────────────────────────────
+        # The router used to execute the argmax unconditionally, so a question
+        # whose only match was a generic prefix ("how many ...") answered
+        # confidently from an unrelated probe. Defaults: refuse-over-guess.
+        # Per-instance override: router.json next to probes.py / the menu.
+        cfg = _router_config(name)
+        self.floor = float(floor if floor is not None
+                           else cfg.get("floor", _envf("NEURALOSD_FLOOR", 3.0)))
+        self.margin = float(margin if margin is not None
+                            else cfg.get("margin", _envf("NEURALOSD_MARGIN", 2.0)))
+        self.min_question_coverage = float(
+            min_question_coverage if min_question_coverage is not None
+            else cfg.get("min_question_coverage",
+                         _envf("NEURALOSD_MIN_QUESTION_COVERAGE", 0.5)))
+        self.refuse_disjunction = bool(
+            refuse_disjunction if refuse_disjunction is not None
+            else cfg.get("refuse_disjunction", True))
+        # What the winner is allowed to know about, per probe: triggers, name,
+        # description AND enum values. A question token that appears nowhere in
+        # that set is a domain noun the probe has never heard of.
+        self._vocab = {m.name: m._vocab_tokens() for m in self.metas
+                       if hasattr(m, "_vocab_tokens")}
+        self._menu_vocab = frozenset().union(*self._vocab.values()) \
+            if self._vocab else frozenset()
         self.menu_version = self._menu_version()
         self._filter_vocab = self._build_filter_vocab()
 
@@ -387,6 +461,126 @@ class Router:
                 "paths": paths}
 
     # -- internal helpers --------------------------------------------------
+    def _gate(self, normalized, runner_up, chosen):
+        """The three-outcome decision. Returns None (CONFIDENT) or a reason.
+
+        None            -> execute the chosen probe (today's behaviour)
+        "below_floor"   -> the best match is too weak to be trusted
+        "ambiguous"     -> a second probe scores within `margin` of the first
+                           AND explains the question no worse
+        "low_coverage"  -> the question's DOMAIN NOUNS are unknown to the
+                           winner (it won on generic words like "how many")
+        "comparative"   -> the question compares alternatives and no probe
+                           claims to compare
+
+        Deliberately computed from the MENU and the QUESTION only: no probe
+        runs, no model is called, microseconds.
+
+        Coverage is measured over the question's DOMAIN nouns, not all content
+        words. "how many worklog entries exist" is five content tokens of which
+        three are generic intent ("how many ... exist") — measuring over all
+        five let a winner that knew only "how many" pass at 0.6. Measuring over
+        {worklog, entries, exist} scores it 0.0, which is the truth.
+
+        Ambiguity needs a coverage-advantage test as well as a margin: a
+        question sharing one generic token with many probes ("top genres" vs
+        "top customers") ties on raw score, and refusing an answerable question
+        is its own failure. The winner must explain the question strictly
+        better than the runner-up, or the tie is real ambiguity.
+
+        All thresholds are skipped when the question explicitly names an entity
+        the winner extracted (an id, an email, a status word). A caged pattern
+        or enum hit IS the confidence signal there; prose scores are not the
+        evidence, and applying them would refuse the exact questions caged
+        probes exist for.
+        """
+        if not chosen:
+            return None                      # nothing executable; handled upstream
+        meta, score, kwargs = chosen
+        if _args_seen(kwargs, normalized) > 0:
+            return None                      # explicit entity reference
+        per_probe = meta.conf_gate if meta.conf_gate else 0.0
+        if max(self.floor, per_probe) > 0 and score < max(self.floor, per_probe):
+            return "below_floor"
+
+        qt = tokens(normalized)
+        # Numbers are entity references ("user 4"), not subjects.
+        domain = {t for t in qt - GENERIC_INTENT if not t.isdigit()}
+        domain = domain or (qt - GENERIC_INTENT) or qt
+
+        def cover(name):
+            return (len(domain & self._vocab.get(name, frozenset()))
+                    / max(1, len(domain)))
+
+        # A domain noun NO probe in the menu knows means the subject itself is
+        # out of scope - refusing is correct no matter which probe scored top.
+        unknown = [t for t in sorted(domain) if not self._known_anywhere(t)]
+        if unknown:
+            return "no_probe_matches"
+
+        if runner_up is not None:
+            # Ambiguity is measured between the things we could actually
+            # EXECUTE. Comparing the chosen candidate against a higher-scoring
+            # probe that was skipped (its arguments did not extract) produced
+            # false refusals on questions whose best prose match was not
+            # routable anyway.
+            if (score - runner_up[1] < self.margin
+                    and cover(meta.name) <= cover(runner_up[0].name)):
+                return "ambiguous"
+        if self.min_question_coverage > 0 and cover(meta.name) < \
+                self.min_question_coverage:
+            return "low_coverage"
+        for qual in QUALIFIERS:
+            if qual in normalized.lower():
+                head = qual.split()[0]
+                if (head not in self._vocab.get(meta.name, frozenset())
+                        and qual not in normalized.lower().split()):
+                    return "dropped_filter"
+        if self.refuse_disjunction:
+            q = normalized.lower()
+            comparative = re.search(
+                r"\b(more|less|fewer|greater|higher|lower|bigger|smaller|"
+                r"compared?|versus|vs)\b", q)
+            if comparative and re.search(r"\bor\b", q):
+                claims = self._vocab.get(meta.name, frozenset()) & {
+                    "compare", "comparison", "compares", "versus", "vs",
+                    "between"}
+                if not claims:
+                    return "comparative"
+        return None
+
+    def _known_anywhere(self, token: str) -> bool:
+        """Is this domain noun in ANY probe's strong vocabulary?
+
+        Plural-insensitive: 'genres' matches 'genre' and vice versa. Exact
+        otherwise - this is a SUBJECT check, not a fuzziness contest.
+        """
+        v = self._menu_vocab
+        if token in v:
+            return True
+        if len(token) > 3 and token.endswith("s") and token[:-1] in v:
+            return True
+        if len(token) > 3 and (token + "s") in v:
+            return True
+        return False
+
+    def _refuse(self, ask_id, ts, question, normalized, reason, retrieved,
+                extra=None):
+        """Build, audit and raise a refusal envelope with its score vector."""
+        scores = [{"probe": m.name, "score": round(s, 3)}
+                  for m, s in (retrieved or [])[:3]]
+        env = {"ask_id": ask_id, "ts": ts, "question": question,
+               "normalized": normalized, "probe": None,
+               "menu_version": self.menu_version, "mode": "refused",
+               "error": f"refused ({reason}): the menu cannot answer this "
+                        f"confidently, and guessing is worse",
+               "results": None, "refusal_reason": reason,
+               "scores": scores}
+        if extra:
+            env.update(extra)
+        self._audit(env)
+        raise NoResults(env)
+
     def _retrieve(self, q, k):
         qt = tokens(q)
         scored = sorted(((score_probe(m, qt), m) for m in self.metas),
@@ -477,6 +671,9 @@ class Router:
 
         results, used_probe, mode, conf = None, None, "retrieval", None
         exec_kwargs = {}
+        gate_reason_for_audit = None
+        args_failed = False   # a probe matched but its args could not be
+                              # extracted - its own honest refusal reason
 
         if retrieved:
             used_probe = retrieved[0][0].name
@@ -490,8 +687,12 @@ class Router:
             # single grand total — a confident answer to a question that was
             # not asked. A probe that accounts for the question's own words
             # through its extracted arguments is the better match.
-            best = None   # (effective score, rank score, meta, kwargs)
+            best = None   # (effective, lexical, meta, kwargs)
             oor = None    # first out-of-range argument we hit
+            exec_cands = []   # every candidate we could actually execute -
+                              # ambiguity is judged between THESE, not between
+                              # the chosen one and a higher-scoring probe whose
+                              # arguments did not extract
             for _meta, _score in retrieved:
                 try:
                     kwargs = extract_args(_meta, normalized)
@@ -499,6 +700,7 @@ class Router:
                     oor = exc
                     continue
                 if kwargs is None:
+                    args_failed = True
                     continue
                 # A probe that opts into min_coverage must be substantially
                 # present in the question, not merely touching it.
@@ -521,6 +723,7 @@ class Router:
                 effective = (_score
                              + ARG_MATCH_BONUS * _args_seen(kwargs, normalized)
                              - UNCONSUMED_PENALTY * len(ignored))
+                exec_cands.append((effective, _score, _meta, kwargs))
                 if best is None or effective > best[0]:
                     best = (effective, _score, _meta, kwargs)
 
@@ -532,13 +735,40 @@ class Router:
                        "normalized": normalized, "probe": None,
                        "menu_version": self.menu_version, "mode": "refused",
                        "error": str(oor), "results": None,
+                       "refusal_reason": "out_of_range",
                        "discarded": {"out_of_range": {
                            oor.argname: {"value": oor.value,
                                          "min": oor.lo, "max": oor.hi}}}}
                 self._audit(env)
                 raise NoResults(env)
 
-            if best is not None:
+            # ── the three-outcome decision ────────────────────────────────
+            # CONFIDENT: execute. UNSURE: do not execute - let the fallback
+            # try, and refuse if it abstains. The decision is made from the
+            # menu and the question alone.
+            chosen = best if best is not None else None
+            runner_up = None
+            if chosen is not None and len(exec_cands) > 1:
+                others = [c for c in exec_cands if c[2].name != chosen[2].name]
+                if others:
+                    best_c = max(others, key=lambda c: c[1])
+                    runner_up = (best_c[2], best_c[1])   # (meta, lexical score)
+            gate_reason = self._gate(
+                normalized, runner_up,
+                (chosen[2], chosen[1], chosen[3]) if chosen else None)
+            if gate_reason is not None:
+                if self.model_fallback is None:
+                    self._refuse(ask_id, time.time(), question, normalized,
+                                 gate_reason, retrieved)
+                # UNSURE with a fallback: skip the deterministic execute and
+                # let the model path below try. If it abstains we refuse with
+                # model_abstained. The reason is carried so the audit shows WHY
+                # the deterministic layer stood down.
+                gate_reason_for_audit = gate_reason
+            else:
+                gate_reason_for_audit = None
+
+            if best is not None and gate_reason is None:
                 _meta, kwargs = best[2], best[3]
                 exec_kwargs = dict(kwargs)
                 fn = self.by_name[_meta.name]
@@ -558,18 +788,30 @@ class Router:
                     mode = "deterministic-error"
 
         if results is None:
-            # Deterministic routing produced nothing. Consult the model when one
-            # is configured — with the retrieved subset if lexical retrieval
-            # found something, otherwise with the whole menu (a paraphrase with
-            # no shared tokens is exactly what the model is for).
+            # Nothing the deterministic layer would stand behind. Either no
+            # probe matched, or the calibrated gate stood down (UNSURE). Consult
+            # the model when one is configured - with the retrieved subset if
+            # lexical retrieval found something, otherwise with the whole menu.
             if self.model_fallback is None:
-                reason = ("no probe matched this question" if not retrieved
-                          else "no results produced (no model fallback "
-                               "configured)")
+                if gate_reason_for_audit:
+                    refusal_reason = gate_reason_for_audit
+                    reason = (f"refused ({refusal_reason}): the best match "
+                              f"was not confident enough to answer")
+                elif args_failed:
+                    refusal_reason = "args_not_extractable"
+                    reason = ("probes matched but none could extract their "
+                              "required arguments (no model fallback "
+                              "configured)")
+                else:
+                    refusal_reason = "no_probe_matches"
+                    reason = "no probe matched this question"
                 env = {"ask_id": ask_id, "question": question,
                        "normalized": normalized, "probe": None,
                        "menu_version": self.menu_version,
-                       "error": reason, "results": None}
+                       "error": reason, "results": None,
+                       "refusal_reason": refusal_reason,
+                       "scores": [{"probe": m.name, "score": round(s, 3)}
+                                  for m, s in (retrieved or [])[:3]]}
                 self._audit(env)
                 raise NoResults(env)
             conf = None
