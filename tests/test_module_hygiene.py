@@ -23,6 +23,12 @@ SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
 SKIP_DIRS = ("skills",)
 
 
+def _test_files():
+    root = os.path.dirname(os.path.abspath(__file__))
+    return [os.path.join(root, f) for f in sorted(os.listdir(root))
+            if f.endswith(".py")]
+
+
 def _modules(include_data_scripts=False):
     for root, dirs, files in os.walk(SRC):
         rel = os.path.relpath(root, SRC)
@@ -65,6 +71,48 @@ def test_no_shadowed_definitions(path):
         f"{os.path.relpath(path, SRC)} defines the same name more than once: "
         f"{dupes}. The later definition wins, so edits to the earlier one are "
         f"silently discarded.")
+
+
+def _encoding_offenders(path):
+    """Calls that read/write text via the LOCALE default encoding.
+
+    On macOS and Linux that is UTF-8, so it works. On Windows it is cp1252, and
+    the first non-ASCII byte raises UnicodeDecodeError — which is why this class
+    of bug survives a green CI on two platforms and fails on the third.
+    """
+    tree = ast.parse(open(path, encoding="utf-8").read())
+    bad = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        f = node.func
+        name = getattr(f, "id", None) or getattr(f, "attr", None)
+        has_enc = any(k.arg == "encoding" for k in node.keywords)
+        if name in ("read_text", "write_text"):
+            if not has_enc:
+                bad.append(f"{name}() at line {node.lineno}")
+        elif name == "open":
+            mode = None
+            if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
+                mode = node.args[1].value
+            for k in node.keywords:
+                if k.arg == "mode" and isinstance(k.value, ast.Constant):
+                    mode = k.value.value
+            if mode and "b" in str(mode):
+                continue                      # binary is fine
+            if not has_enc:
+                bad.append(f"open() at line {node.lineno}")
+    return bad
+
+
+@pytest.mark.parametrize("path", list(_modules()) + list(_test_files()),
+                         ids=lambda p: os.path.relpath(p, os.path.dirname(SRC)))
+def test_text_io_declares_its_encoding(path):
+    offenders = _encoding_offenders(path)
+    assert not offenders, (
+        f"{os.path.relpath(path, os.path.dirname(SRC))} uses the locale default "
+        f"encoding: {offenders}. Pass encoding= explicitly; on Windows the "
+        f"default is cp1252 and non-ASCII content raises UnicodeDecodeError.")
 
 
 def test_router_has_exactly_one_extract_args():

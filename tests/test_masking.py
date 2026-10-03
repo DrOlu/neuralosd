@@ -179,8 +179,9 @@ def _seed(dirpath, secret=True):
     if secret:
         payload["results"][0]["notes"] = f"key {JWT}"
     json.dump({"abc": {"ts": 1, "menu_version": "v", "payload": payload}},
-              open(os.path.join(dirpath, ".ask_cache.json"), "w"))
-    with open(os.path.join(dirpath, "ask_audit.jsonl"), "w") as fh:
+              open(os.path.join(dirpath, ".ask_cache.json"), "w", encoding="utf-8"))
+    with open(os.path.join(dirpath, "ask_audit.jsonl"), "w",
+                  encoding="utf-8") as fh:
         fh.write(json.dumps(payload) + "\n")
         fh.write(json.dumps({"question": "clean one", "results": [{"n": 1}]}) + "\n")
 

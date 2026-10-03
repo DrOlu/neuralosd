@@ -128,7 +128,7 @@ def test_ask_exits_2_on_a_refusal(tmp_path):
     r = _router(tmp_path)
     d = str(tmp_path / "inst")
     os.makedirs(d, exist_ok=True)
-    with open(os.path.join(d, "probes.py"), "w") as fh:
+    with open(os.path.join(d, "probes.py"), "w", encoding="utf-8") as fh:
         fh.write("from neuralosd import probe\n\n")
         fh.write("@probe(description='Show a user', triggers=['show user'],\n")
         fh.write("       args={'user': {'type': 'integer', 'min': 1, 'max': 10,\n")

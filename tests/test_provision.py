@@ -49,10 +49,12 @@ def _fake_uv(tmp_path, name="uv"):
     impl.write_text(FAKE_UV_IMPL, encoding="utf-8")
     if os.name == "nt":
         stub = tmp_path / f"{name}.cmd"
-        stub.write_text(f'@echo off\r\n"{sys.executable}" "{impl}" %*\r\n')
+        stub.write_text(f'@echo off\r\n"{sys.executable}" "{impl}" %*\r\n',
+                        encoding="utf-8")
     else:
         stub = tmp_path / name
-        stub.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{impl}" "$@"\n')
+        stub.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{impl}" "$@"\n',
+                        encoding="utf-8")
         stub.chmod(0o755)
     return str(stub)
 
@@ -71,7 +73,7 @@ def env(tmp_path, monkeypatch):
     def calls():
         if not log.exists():
             return []
-        return [json.loads(ln) for ln in log.read_text().splitlines() if ln.strip()]
+        return [json.loads(ln) for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()]
 
     return {"home": home, "uv": uv, "log": log, "calls": calls}
 
@@ -130,7 +132,7 @@ def test_find_uv_common_locations(monkeypatch, tmp_path):
                         lambda p: str(tmp_path) if p == "~" else p)
     local = tmp_path / ".local" / "bin"
     local.mkdir(parents=True)
-    (local / "uv").write_text("#!/bin/sh\n")
+    (local / "uv").write_text("#!/bin/sh\n", encoding="utf-8")
     assert prov.find_uv() == str(local / "uv")
 
 
@@ -260,7 +262,7 @@ def test_path_beats_the_provisioned_copy(env, monkeypatch, tmp_path):
     prov.provision(version="1.0")
     on_path = tmp_path / "bin" / "neuralosd-sidecar"
     on_path.parent.mkdir(parents=True, exist_ok=True)
-    on_path.write_text("#!/bin/sh\n")
+    on_path.write_text("#!/bin/sh\n", encoding="utf-8")
     monkeypatch.setattr("shutil.which",
                         lambda n: str(on_path) if n == "neuralosd-sidecar" else None)
     assert sidecar_command() == [str(on_path)]

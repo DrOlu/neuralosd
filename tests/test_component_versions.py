@@ -177,7 +177,7 @@ def test_outputs_are_written_in_actions_format(frozen, tmp_path):
     frozen["latest"].update({k: "1.0.0" for k in cv.COMPONENTS})
     out = tmp_path / "out.txt"
     cv.write_outputs(cv.check(), path=str(out))
-    body = out.read_text()
+    body = out.read_text(encoding="utf-8")
     assert "changed=true" in body
     assert "runtime_changed=true" in body
     assert "components=boxlite" in body
@@ -214,15 +214,15 @@ def test_bump_version(tmp_path, part, expect):
     py, init = _fake_repo(tmp_path)
     old, new = cv.bump_version(part, pyproject=py, init_py=init)
     assert (old, new) == ("1.2.3", expect)
-    assert f'version = "{expect}"' in py.read_text()
-    assert expect in init.read_text()
+    assert f'version = "{expect}"' in py.read_text(encoding="utf-8")
+    assert expect in init.read_text(encoding="utf-8")
 
 
 def test_bump_keeps_other_version_strings(tmp_path):
     py, init = _fake_repo(tmp_path)
-    py.write_text(py.read_text() + 'requires-python = ">=3.10"\n', encoding="utf-8")
+    py.write_text(py.read_text(encoding="utf-8") + 'requires-python = ">=3.10"\n', encoding="utf-8")
     cv.bump_version("patch", pyproject=py, init_py=init)
-    assert 'requires-python = ">=3.10"' in py.read_text()
+    assert 'requires-python = ">=3.10"' in py.read_text(encoding="utf-8")
 
 
 def test_bump_handles_short_versions(tmp_path):
@@ -264,7 +264,7 @@ def test_cli_bump_writes_actions_output(tmp_path, monkeypatch, capsys):
     out = tmp_path / "out.txt"
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
     assert cv.main(["--bump", "patch"]) == 0
-    body = out.read_text()
+    body = out.read_text(encoding="utf-8")
     assert "old_version=1.2.3" in body and "new_version=1.2.4" in body
 
 
