@@ -183,6 +183,28 @@ def normalize_possessive(question, enum_values):
     return question, None
 
 
+def coverage(meta: ProbeMeta, q_tokens) -> float:
+    """How much of the probe's best trigger the question actually contains.
+
+    A 2-token question matching 2 of an 8-token trigger scores the same as one
+    matching 2 of 2; coverage tells them apart. Used only by probes that opt in
+    via ``min_coverage``, so nothing that exists today changes.
+    """
+    best = 0.0
+    for tr in meta.triggers or []:
+        tt = tokens(tr)
+        if tt:
+            best = max(best, len(q_tokens & tt) / len(tt))
+    return best
+
+
+def _passes_coverage(meta: ProbeMeta, q_tokens) -> bool:
+    floor = getattr(meta, "min_coverage", None)
+    if floor is None:
+        return True
+    return coverage(meta, q_tokens) >= float(floor)
+
+
 def _extract_one(argname, spec, question):
     t = spec.get("type", "string")
     if t == "enum":
@@ -477,6 +499,10 @@ class Router:
                     oor = exc
                     continue
                 if kwargs is None:
+                    continue
+                # A probe that opts into min_coverage must be substantially
+                # present in the question, not merely touching it.
+                if not _passes_coverage(_meta, tokens(normalized)):
                     continue
                 # Strong-match rule: a probe with NO caged args is ambiguous
                 # (any question could hit it) — only auto-execute it if it is a

@@ -15,6 +15,16 @@ class ProbeMeta:
     tier: str
     confirm: bool
     function: Callable
+    min_coverage: Optional[float] = None
+    """Fraction of the probe's best trigger that the question must contain.
+
+    Token-overlap scoring is happy with a 2-token question matching 2 of an
+    8-token trigger, which is how an installed derived metric captured the
+    unrelated question "total revenue". Coverage asks a stricter question:
+    is this probe's trigger SUBSTANTIALLY present, or merely touching?
+
+    None keeps the original scoring, so every existing probe is unaffected.
+    """
 
 
 def arg(spec: Dict[str, Any]) -> Dict[str, Any]:
@@ -52,7 +62,8 @@ def probe(description: str, triggers: List[str],
           conf_gate: Optional[float] = None,
           tier: str = "in-process",
           name: Optional[str] = None,
-          confirm: bool = False) -> Callable:
+          confirm: bool = False,
+          min_coverage: Optional[float] = None) -> Callable:
     """Declare a typed capability.
 
     The decorated function must be a PURE function of its args -> the data
@@ -69,6 +80,7 @@ def probe(description: str, triggers: List[str],
             tier=tier,
             confirm=confirm,
             function=fn,
+            min_coverage=min_coverage,
         )
         return fn
     return deco

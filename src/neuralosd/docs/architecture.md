@@ -329,6 +329,60 @@ and a drifted copy is a silent no-op — which is exactly what happened when
 `extract_args` was defined twice in `router.py`: a fix written into the first
 copy had no effect on any live code path while the source clearly showed it.
 
+## 6c. The Reasoning Boundary
+
+The deterministic layer answers what it can and refuses the rest. A reasoning
+model can close some of those refusals — but only if it is fenced.
+
+### The division of labour
+
+| decides | who |
+|---|---|
+| whether to escalate at all | **deterministic code** (`needs_escalation`) |
+| which two quantities to divide | **the model** (a closed-list classifier) |
+| whether the ids exist | **deterministic code** |
+| the numbers | **deterministic code** |
+| whether the answer is a valid share | **deterministic code** |
+| whether anything else moved | **deterministic code** |
+
+Two failures produced this table. A 7B model answered *"gap"* and then *"ok"* on
+identical input — a judge that flips is not a gate, so escalation is decided
+without a model. And it once proposed dividing two probe *names* — meaningless —
+so it names quantities and never computes.
+
+### Two structural properties
+
+**Nothing a model emits is executed.** The output is two ids. The install is a
+JSON spec interpreted by `derived.py`. Code generation was deliberately avoided:
+the ratio class is where the dangerous errors live, and it needs no new code —
+only a declaration of which two existing quantities to divide.
+
+**The inventory is observed, not declared.** Every id a model may choose comes
+from calling a probe and reading what it returned. A fabricated quantity is not
+"unlikely"; it is unrepresentable. Identifiers and calendar parts are excluded
+by name, because summing customer ids is arithmetically valid and semantically
+meaningless.
+
+### Why it converges
+
+Each cycle moves one kind of question from the slow, uncertain path to the
+fast, certain one, permanently. The model is invoked **less** over time and the
+answers get **faster**: the opposite of bolting an LLM onto every request.
+
+### The hijack problem
+
+An installed metric shares vocabulary with the probes it was built from, and
+token-overlap scoring reports 2-of-8 the same as 2-of-2. In the run that
+installed the first metric, `"total revenue"` — two tokens — began routing to an
+eight-token derived trigger.
+
+`ProbeMeta.min_coverage` answers it: the question must contain at least that
+fraction of the trigger. Only derived metrics opt in, so nothing that exists
+changes. The verification replays **every trigger in the menu** before and after
+installing, and the baseline is this router's own prior behaviour — comparing
+against another engine's answers reported 16 pre-existing disagreements as
+fresh damage.
+
 ## 7. The Data Layer
 
 ### 7.1 The bridge

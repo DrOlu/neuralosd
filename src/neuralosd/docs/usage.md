@@ -660,6 +660,153 @@ which secret shapes it found without printing them.
 
 ---
 
+### When nothing can answer: the reasoning loop
+
+Some questions are the wrong SHAPE for the menu, not merely missing from it:
+
+```
+"what is the average shipping cost per unit"   -> shipped cost per line item (3.5x off)
+"what share of revenue comes from the top 10"  -> shipped a list of customers, no share
+"average number of tracks per album"           -> shipped the album list
+```
+
+Real data, wrong question, and it looks fine. These are ratios, and the router
+serves the nearest thing it has.
+
+`neuralosd reason` closes that gap — by installing a **derived metric**, which is
+data, not code:
+
+```bash
+neuralosd reason \
+  --instance-dir ~/neuralos-instances/chinook \
+  --oracle 0.193764 \
+  "what share of total revenue comes from the top 10 customers"
+```
+
+The loop, in order:
+
+```
+1  a DETERMINISTIC gate decides whether to escalate at all      (no model)
+2  every probe is called once -> a CLOSED inventory of quantities
+3  the reasoning model picks two ids from that list             (nothing else)
+4  ids outside the list are REJECTED; the arithmetic is OURS
+5  deterministic invariants check it ("a share cannot exceed 1")
+6  an optional oracle checks it against a number the loop never sees
+7  every neighbouring question is replayed -> routes must not move
+8  a derived.json entry is written
+9  the same question is now deterministic and the model is gone
+```
+
+**The division of labour is the design.** A 7B model must never judge: in the
+run that produced this, it answered *"gap"* and then *"ok"* on identical input.
+It must never compute either: it once proposed dividing two probe *names*.
+
+| the model decides | our code decides |
+|---|---|
+| which two quantities to divide | whether to escalate |
+| | whether the ids exist |
+| | the numbers |
+| | whether the answer is a valid share |
+| | whether anything else moved |
+
+**Nothing a model emits is executed.** The output is two ids from a closed list,
+which is why a prompt injection can make it *want* to lie and still cannot
+succeed — the id is rejected, and even an accepted pair goes through our
+arithmetic.
+
+#### `derived.json`
+
+```json
+{"version": 1,
+ "metrics": [{"name": "derived_share_total_revenue_comes_from_top",
+              "kind": "ratio",
+              "numerator": "chinook_top_customers.rows[].total_spend",
+              "denominator": "chinook_overview.grand_total_revenue",
+              "scale": "percent",
+              "triggers": ["what share of total revenue comes from the top 10 customers"],
+              "min_coverage": 0.6,
+              "provenance": {"model": "deepseek-r1:8b",
+                             "verified_against": 0.193764,
+                             "checks": ["ids_in_closed_list", "computes",
+                                        "expectation_lte_1",
+                                        "matches_outside_oracle"]}}]}
+```
+
+Every id is a field some probe **really returned** — the inventory is observed,
+not declared. `min_coverage` is explained under *Avoiding hijack* below.
+
+#### Avoiding hijack
+
+A new metric must not capture its siblings' questions. In the run that built
+this, `"total revenue"` — a 2-token question — started routing to an 8-token
+derived trigger, because token-overlap scoring happily reports 2-of-8 the same
+as 2-of-2.
+
+`min_coverage` fixes it: the question must contain at least that fraction of the
+metric's trigger. `"total revenue"` covers 2/8 = 0.25 and is turned away; the
+real question covers 8/8. Only derived metrics opt in, so no existing probe
+changes behaviour.
+
+The loop also **replays every trigger in the menu** before and after installing
+and refuses to keep a metric that moved anything but its own target.
+
+#### Reading a derived answer
+
+```json
+{"probe": "derived_share_total_revenue_comes_from_top",
+ "mode": "deterministic",
+ "results": [{"percent": 19.3764,
+              "numerator":   {"id": "chinook_top_customers.rows[].total_spend", "value": 451.2},
+              "denominator": {"id": "chinook_overview.grand_total_revenue", "value": 2328.6},
+              "formula": "total_spend / grand_total_revenue",
+              "_derived": true}]}
+```
+
+The formula travels with the answer, so a reader can check the arithmetic
+without trusting the answer.
+
+#### Flags
+
+| Flag | Meaning |
+|---|---|
+| `--oracle <ratio>` | an independently-computed expected value; the loop never sees where it came from. Without it the check is reported as **unchecked**, not as passed |
+| `--model` | Ollama model (default `deepseek-r1:8b`) |
+| `--ollama <url>` | default `http://127.0.0.1:11434` |
+| `--dry-run` | show the whole trail, write nothing |
+| `--force` | escalate even when the gate says not to |
+| `--no-stability-check` | ask once instead of twice (faster, less safe) |
+
+```bash
+ollama pull deepseek-r1:8b     # the reasoning model lives on-device
+```
+
+#### Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | loop closed, or nothing to do |
+| 2 | no probe returned anything to build an inventory from |
+| 3 | Ollama unreachable, or the model is not pulled |
+| 4 | refused — a check failed, or a neighbour moved route |
+| 5 | installed but the target question still routes elsewhere |
+
+### Serving a classic needle-menu instance
+
+An instance built before neuralosd carries its declaration in JSON rather than
+in `@probe` decorators. `neuralosd` serves it directly:
+
+```bash
+neuralosd ask --instance-dir ~/neuralos-instances/chinook "how many customers"
+neuralosd serve --instance-dir ~/neuralos-instances/chinook --port 8878
+```
+
+The menu's own `parameters` become the caged args, so the same routing and the
+same accounting apply. A probe whose module cannot import reports *why*
+(`ModuleNotFoundError: No module named 'pymysql'`) rather than "0 routable
+probes", which sends you looking in the wrong place.
+
+---
+
 ## 7. Run as a Service
 
 ### 7.1 Start the standard service

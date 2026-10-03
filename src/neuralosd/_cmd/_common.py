@@ -67,18 +67,38 @@ def _missing_module_help(missing: str, source: str) -> str:
     return "\n".join(out)
 
 
+def _load_menu_instance(instance_dir: str, with_model: bool = False):
+    """Load a classic needle-menu instance (menu JSON + callables)."""
+    from ..menu_adapter import load_menu_instance
+
+    inst = load_menu_instance(instance_dir)
+    if inst is None:
+        raise SystemExit(
+            f"error: {instance_dir}/needle_menu.json declares no probe that a "
+            f"callable actually backs\n"
+            f"hint: the menu names must match functions in bridge.py or "
+            f"instance.py in the same directory")
+    if with_model:
+        inst.router.model_fallback = _build_model_fallback(inst.probes)
+    return inst
+
+
 def load_instance(instance_dir: str, with_model: bool = False):
     """Load an :class:`~neuralosd.instance.Instance` from a directory.
 
     Resolution order:
       1. ``<dir>/probes.py``                    -> single instance in ``dir``
       2. exactly one ``<dir>/*/probes.py``       -> that sub-instance
-      3. otherwise raise SystemExit with a helpful message
+      3. ``<dir>/needle_menu.json``              -> a classic needle-menu instance
+      4. otherwise raise SystemExit with a helpful message
 
     The instance dir is added to ``sys.path`` so sibling modules
     (``bridge.py``, ``models.py``) import normally. Probes come from a
     module-level ``PROBES`` list, falling back to every ``@probe``-decorated
     function in the module.
+
+    Derived metrics from ``derived.json`` are appended to the probes in both
+    cases, so a metric the reasoning loop has installed is routable immediately.
     """
     from ..instance import Instance
 
@@ -98,8 +118,13 @@ def load_instance(instance_dir: str, with_model: bool = False):
                 f"error: {instance_dir} contains multiple instances "
                 f"({', '.join(subs)}); pass one of them explicitly")
         else:
+            # Not a generated instance. It may be a classic needle-menu
+            # instance (the chinook layout), which carries the same declaration
+            # in JSON instead of in @probe decorators.
+            if os.path.isfile(os.path.join(instance_dir, "needle_menu.json")):
+                return _load_menu_instance(instance_dir, with_model)
             raise SystemExit(
-                f"error: no probes.py found in {instance_dir}\n"
+                f"error: no probes.py or needle_menu.json found in {instance_dir}\n"
                 "hint: create one with `neuralosd init --source <file> --name <n>`"
                 " or point --instance-dir at an instance directory")
 

@@ -537,3 +537,85 @@ for line in sys.stdin:
 for term, n in c.most_common(10):
     print(f'{n:5}  {term}   <- add a probe or a trigger for this')"
 ```
+
+---
+
+## Recipe 12: Close a gap with a derived metric
+
+A question the menu cannot answer in the right *shape*. Here the router serves
+`chinook_top_customers` — a list of customers — for a question asking for a
+share. Real data, wrong question.
+
+### 1. Establish the truth yourself, first
+
+Never let the loop be its own oracle. Direct SQL, not through the bridge:
+
+```sql
+SELECT SUM(UnitPrice * Quantity) FROM InvoiceLine;                     -- 2328.60
+SELECT SUM(spend) FROM (
+  SELECT SUM(il.UnitPrice * il.Quantity) AS spend
+  FROM InvoiceLine il JOIN Invoice i USING (InvoiceId)
+  GROUP BY i.CustomerId ORDER BY spend DESC LIMIT 10);                 -- 451.20
+```
+
+so the expected ratio is `451.20 / 2328.60 = 0.193764`.
+
+### 2. Rehearse the loop with nothing at stake
+
+```bash
+neuralosd reason --instance-dir ./chinook --oracle 0.193764 --dry-run \
+  "what share of total revenue comes from the top 10 customers"
+```
+
+Read the trail. The line that matters is the computed value against the oracle:
+
+```
+[PASS] matches_outside_oracle: delta 0.00e+00 vs oracle 0.193764
+```
+
+### 3. Install
+
+```bash
+neuralosd reason --instance-dir ./chinook --oracle 0.193764 \
+  "what share of total revenue comes from the top 10 customers"
+```
+
+```
+  baseline: captured 35 routes (4 of them already refusing)
+✓ INSTALLED -> ./chinook/derived.json
+  unchanged: 35/35
+✓ LOOP CLOSED
+```
+
+The target is deterministic now. The model is gone from that path.
+
+### 4. Confirm the model is really gone
+
+```bash
+time neuralosd ask --instance-dir ./chinook \
+  "what share of total revenue comes from the top 10 customers"
+# ~1s, mode=deterministic, percent=19.3764
+```
+
+### 5. Leave the model running, not the loop
+
+The success metric for this whole arrangement is that the **model gets called
+less over time**. Count it:
+
+```bash
+neuralosd ask --instance-dir ./chinook "how many customers" >/dev/null   # no model
+grep -c esca /dev/null || true
+# the loop only spends a model where the deterministic layer has a hole, and
+# every run fills one
+```
+
+### What NOT to do
+
+- **Do not skip the oracle.** Without it the check is reported as *unchecked*,
+  not as passed. `"verified_against": null` in `provenance` is exactly what it
+  sounds like.
+- **Do not lower `min_coverage` to make matching easier.** That is the setting
+  that stops an installed metric capturing `"total revenue"`.
+- **Do not hand-edit `derived.json` to add a quantity id you have not seen a
+  probe return.** An id that resolves to nothing fails at ask time.
+

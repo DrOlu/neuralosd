@@ -310,6 +310,126 @@ the cache expires, the audit log does not.
 
 ---
 
+## neuralosd.derived
+
+### `class DerivedMetric`
+
+A ratio declared as DATA. Validated, interpreted, and computed by this module —
+nothing a model emits is executed.
+
+```python
+DerivedMetric(name, kind="ratio", numerator, denominator, scale="ratio",
+              description="", triggers=[], question="", min_coverage=0.6,
+              provenance={})
+```
+
+`numerator`/`denominator` are **quantity ids** from the closed inventory
+(`<probe>.<field>` or `<probe>.rows[].<field>`). `validate()` raises
+`DerivedError` on a bad name, an unknown `kind`/`scale`, a missing id, identical
+ids, or a `min_coverage` outside 0..1.
+
+### `inventory_from_observations(observations) -> List[Quantity]`
+
+Build the CLOSED list from `{probe_name: returned_dict}`. Observed rather than
+declared, so every id is a field some probe really returned. Identifiers and
+calendar parts are excluded — summing customer ids is arithmetically valid and
+semantically meaningless, and a model asked to pick from a list will pick one.
+
+### `resolve(quantity, observations) -> float | None`
+
+Turn a quantity into a number. The only place a number is produced.
+
+### `evaluate(metric, observations, by_id=None) -> dict`
+
+Deterministic. Raises `DerivedError` for an unknown id, an unresolvable value,
+or a zero denominator. Returns `{metric, numerator{id,value}, denominator{...},
+ratio, percent, value, unit, formula, _tool, _derived}`.
+
+### `expectation_for(question) -> "lte_1" | "any"`
+
+Read off the question, never from the model — so the model cannot relax its own
+acceptance test. A "share of" question cannot legitimately produce more than 1.
+
+### `check_expectation(value, expectation) -> str | None`
+
+Returns a reason string when the value violates the expectation.
+
+### `as_probe(metric, observations) -> Callable`
+
+Wrap a spec as a routable probe, closing over a snapshot of the observations.
+Sets `min_coverage` on the ProbeMeta.
+
+### `load(path)` / `save(path, metrics)`
+
+Read/write `derived.json`. A missing file is an empty registry, not an error.
+
+## neuralosd.reasoning
+
+### `needs_escalation(question, served_probe, probe_text=None) -> str | None`
+
+The deterministic gate. Returns the uncovered ratio qualifier, or None. Coverage
+is tested on the qualifier's CONTENT WORDS, so a description reading "revenue
+share percentages" covers "share of".
+
+### `class OllamaMapper(model, url, timeout)`
+
+The reasoning model as a closed-list classifier. `temperature=0`, `seed=42`,
+`format=json`. `available()` checks both reachability and that the model is
+pulled. `map_ids(...)` raises `MapperError` when Ollama is unreachable.
+
+### `validate_pick(pick, inventory) -> (clean, reason)`
+
+The anti-hallucination gate. Note the `"null"` STRING: deepseek-r1 replies
+`{"numerator": "null"}` rather than JSON null, and that is treated as a decline.
+
+### `propose(question, served, observations, mapper, oracle=None, tolerance=1e-6, check_stability=True, scale="percent") -> Proposal`
+
+The full loop with **no side effects**. Checks: `closed_inventory`,
+`stable_across_two_calls`, `ids_in_closed_list`, `computes`,
+`expectation_<x>`, `matches_outside_oracle`. `Proposal.ok` is True only when no
+check failed.
+
+### `triggers_from_question(question) -> List[str]`
+
+Triggers derived from the question, never from a model. A model-written trigger
+list is how a new probe hijacks its siblings.
+
+### `snapshot_routes(questions, ask)` / `compare_routes(before, after, exempt)`
+
+The baseline must be THIS router's own prior behaviour. Comparing against
+another engine's answers reports that engine's pre-existing disagreements as
+damage done by the new metric.
+
+### `backtest(cases, ask)` / `install(metric, instance_dir)`
+
+Replay against explicit golden expectations; write `derived.json` without
+touching `probes.py`.
+
+## neuralosd.menu_adapter
+
+### `probes_from_menu(instance_dir, module_names=None, errors=None)`
+
+Lift a `needle_menu.json` into `ProbeMeta` objects so the same router serves it.
+Pass `errors` (a dict) to collect why a module failed to import — without it, a
+missing database driver looks exactly like a menu whose names do not match its
+functions.
+
+### `derived_probes(instance_dir, observations=None)` / `observe(instance_dir)`
+
+Load `derived.json` as routable probes; call every menu probe once and record
+its output.
+
+### `load_menu_instance(instance_dir) -> Instance | None`
+
+The `Instance` for a classic needle-menu directory.
+
+### `Router` — coverage
+
+`ProbeMeta.min_coverage` (default `None`) is the fraction of the probe's best
+trigger the question must contain. Token-overlap scoring reports 2-of-8 the same
+as 2-of-2; coverage tells them apart. `None` keeps the original scoring, so
+every existing probe is unaffected.
+
 ## neuralosd._cmd.scrub
 
 ### `run(args) → int`

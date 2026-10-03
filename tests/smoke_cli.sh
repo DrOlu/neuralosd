@@ -78,6 +78,13 @@ fi
 r="$(run scrub --instance-dir ./inst --dry-run)"
 check "scrub: examines the state" 'entries examined\|audit' "$r"
 
+# 2e. reason — the DETERMINISTIC gate runs before the model is ever contacted,
+# so this half is testable with no Ollama anywhere near it.
+r="$(run reason --instance-dir ./inst --dry-run 'how many rows')"
+check "reason: gate declines an already-answerable question" 'do not escalate' "$r"
+r="$(run reason --instance-dir ./inst --dry-run 'how many rows per region')"
+check "reason: gate recognises a ratio qualifier" 'per region' "$r"
+
 # 3. invariants
 r="$(run invariants --dir ./inst)"
 check "invariants hold" 'all invariants hold' "$r"

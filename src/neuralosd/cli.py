@@ -14,6 +14,7 @@ Subcommands:
   openapi    — generate OpenAPI 3.1 + MCP manifest from the menu
   diff       — profile/instance schema-evolution diff
   scrub      — sanitize cache + audit records already on disk
+  reason     — escalate to a reasoning model, then extend the menu
   backends   — list available sandbox backends
 """
 import argparse
@@ -112,6 +113,30 @@ def main():
     p_docs.add_argument("topic", nargs="?", default=None)
     sub.add_parser("backends", help="List available sandbox backends")
 
+    # reason
+    p_rs = sub.add_parser(
+        "reason",
+        help="Escalate a question to a reasoning model, then extend the menu")
+    p_rs.add_argument("--instance-dir", required=True)
+    p_rs.add_argument("question", nargs="+")
+    p_rs.add_argument("--model", default=None,
+                      help="Ollama model (default deepseek-r1:8b)")
+    p_rs.add_argument("--ollama", default=None,
+                      help="Ollama base URL (default http://127.0.0.1:11434)")
+    p_rs.add_argument("--oracle", type=float, default=None,
+                      help="an independently-computed expected RATIO; the "
+                           "loop never sees where it came from")
+    p_rs.add_argument("--scale", choices=["ratio", "percent"],
+                      default="percent")
+    p_rs.add_argument("--dry-run", action="store_true",
+                      help="show the whole trail, write nothing")
+    p_rs.add_argument("--force", action="store_true",
+                      help="escalate even when the gate says not to")
+    p_rs.add_argument("--no-stability-check", action="store_true",
+                      help="ask the model once instead of twice (faster, and "
+                           "less safe)")
+    p_rs.add_argument("--timeout", type=float, default=240.0)
+
     # scrub
     p_scrub = sub.add_parser(
         "scrub", help="Sanitize cache + audit records already on disk")
@@ -175,6 +200,9 @@ def main():
     elif a.command == "scrub":
         from ._cmd import scrub
         raise SystemExit(scrub.run(a))
+    elif a.command == "reason":
+        from ._cmd import reason
+        raise SystemExit(reason.run(a))
     elif a.command == "docs":
         import neuralosd as _mod
         print(_mod.docs(getattr(a, "topic", None)))
