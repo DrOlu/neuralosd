@@ -71,6 +71,17 @@ def run(a):
     except Exception as e:                     # NoResults and friends
         env = getattr(e, "envelope", None) or {}
     served = env.get("probe")
+
+    # Evidence for the gate: what the serving probe ACTUALLY returned. Its field
+    # names are a better witness than its description, which will mention any
+    # word the question happens to contain.
+    served_output = None
+    fn = inst.router.by_name.get(served) if served else None
+    if fn is not None:
+        try:
+            served_output = fn()
+        except Exception:                          # a probe that fails is a probe
+            served_output = None                   # that cannot cover anything
     entry = next((e for e in read_menu(instance_dir) if e["name"] == served),
                  None)
     probe_text = None
@@ -78,7 +89,8 @@ def run(a):
         probe_text = " ".join([entry.get("name", ""),
                                entry.get("description") or "",
                                " ".join(entry.get("triggers") or [])])
-    qualifier = needs_escalation(question, served, probe_text)
+    qualifier = needs_escalation(question, served, probe_text,
+                                 output=served_output)
     print(f"question  : {question}")
     print(f"served by : {served or 'nothing (refused)'}")
     print(f"gate      : {'ESCALATE — the question asks for a ' + repr(qualifier) + ' and the probe cannot produce one' if qualifier else 'do not escalate'}")

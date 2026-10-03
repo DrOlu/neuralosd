@@ -406,3 +406,97 @@ def test_the_mapper_defaults_itself_not_at_the_call_site():
     assert m.model == MODEL_DEFAULT
     assert m.url == OLLAMA_DEFAULT.rstrip("/")
     assert "None" not in m.model
+
+
+# ── the gate uses the probe's OUTPUT, not its prose ─────────────────────────
+#
+# 'what is the average revenue per track sold' was served by a probe whose
+# description mentions tracks, and which returns a per-TRACK-PRICE figure
+# (1.0508) when the answer is revenue per track SOLD (1.039554). Prose covered
+# the word; the output did not cover the concept.
+
+PRICE_STATS = {"tracks": 3503, "avg_price": 1.0508, "min_price": 0.99,
+               "max_price": 1.99,
+               "price_points": [{"price": 0.99, "tracks": 3290}]}
+
+INVOICE_STATS = {"invoices": 412, "avg_total": 5.65, "min_total": 0.99,
+                 "max_total": 25.86, "grand_total": 2328.60}
+
+PER_CUSTOMER = {"countries": 24,
+                "rows": [{"country": "Chile", "revenue": 46.62,
+                          "customers": 1, "revenue_per_customer": 46.62}]}
+
+
+def test_prose_mentioning_the_word_is_not_enough():
+    """The description says 'tracks per price point'; that is not a per-track
+    answer. The prose fallback now requires the phrase itself, which is why the
+    OUTPUT check is preferred: prose is a bad witness to shape."""
+    from neuralosd.reasoning import needs_escalation
+    q = "what is the average revenue per track sold"
+    prose = ("Track CATALOG pricing digest: average, min, max, and tracks per "
+             "price point")
+    assert needs_escalation(q, "track_price_stats", probe_text=prose) == "per track"
+
+
+def test_prose_with_the_literal_phrase_is_treated_as_covered():
+    """The prose fallback is deliberately loose about evidence but strict about
+    the phrase: it is only for callers that have no output to show."""
+    from neuralosd.reasoning import needs_escalation
+    q = "what is the average revenue per track sold"
+    prose = "Revenue per track sold across the catalog"
+    assert needs_escalation(q, "p", probe_text=prose) is None
+
+
+def test_output_evidence_catches_what_prose_misses():
+    from neuralosd.reasoning import needs_escalation
+    q = "what is the average revenue per track sold"
+    got = needs_escalation(q, "track_price_stats",
+                           probe_text="catalog pricing digest",
+                           output=PRICE_STATS)
+    assert got == "per track"
+
+
+def test_a_real_per_x_field_genuinely_covers_the_qualifier():
+    from neuralosd.reasoning import needs_escalation
+    q = "what is the revenue per customer by country"
+    assert needs_escalation(q, "revenue_per_customer",
+                            output=PER_CUSTOMER) is None
+
+
+def test_an_avg_field_covers_an_average_question():
+    from neuralosd.reasoning import needs_escalation
+    assert needs_escalation("what is the average invoice total",
+                            "invoice_stats", output=INVOICE_STATS) is None
+
+
+def test_a_share_field_covers_a_share_question():
+    from neuralosd.reasoning import needs_escalation
+    top = {"rows": [{"genre": "Rock", "revenue": 826.65,
+                     "revenue_share_pct": 35.5}]}
+    assert needs_escalation("what share of revenue is rock",
+                            "top_genres", output=top) is None
+
+
+def test_no_output_evidence_escalates_rather_than_assuming():
+    """Without evidence, standing down would be a guess."""
+    from neuralosd.reasoning import needs_escalation
+    assert needs_escalation("revenue per track sold", "p") == "per track"
+
+
+def test_field_names_are_collected_at_any_depth():
+    from neuralosd.reasoning import _field_names
+    got = _field_names({"a": 1, "rows": [{"b_per_track": 2, "nest": {"c": 3}}]})
+    for name in ("a", "rows", "b_per_track", "nest", "c"):
+        assert name in got.split()
+
+
+def test_per_word_in_a_field_is_not_a_per_customer_answer():
+    """'price_per_unit_sold' must not cover 'per customer'."""
+    from neuralosd.reasoning import _qualifier_covered
+    assert not _qualifier_covered("per customer", "price_per_unit_sold", True)
+
+
+def test_field_underscores_and_question_spaces_are_the_same_shape():
+    from neuralosd.reasoning import _qualifier_covered
+    assert _qualifier_covered("per unit sold", "price_per_unit_sold", True)
+    assert _qualifier_covered("per customer", "revenue_per_customer", True)

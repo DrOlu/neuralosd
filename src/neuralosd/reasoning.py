@@ -41,8 +41,60 @@ MODEL_DEFAULT = os.environ.get("NEURALOSD_REASON_MODEL", "deepseek-r1:8b")
 
 # ── 1. the deterministic gate ──────────────────────────────────────────────
 
+SHARE_FIELD_HINTS = ("share", "pct", "percent", "proportion", "ratio")
+
+
+def _field_names(output) -> str:
+    """Every field name a probe returned, at any depth.
+
+    EVIDENCE, not prose. A description says "revenue share percentages" and so
+    mentions the word; only the returned fields show whether a share was
+    actually produced.
+    """
+    names = []
+
+    def walk(x):
+        if isinstance(x, dict):
+            for k, v in x.items():
+                names.append(str(k))
+                walk(v)
+        elif isinstance(x, list):
+            for v in x[:3]:
+                walk(v)
+    walk(output)
+    return " ".join(names).lower()
+
+
+def _qualifier_covered(qualifier: str, evidence: str,
+                       from_output: bool) -> bool:
+    """Can the probe produce this SHAPE of answer?
+
+    Checked against the probe's OUTPUT when available, because prose is a bad
+    witness: 'what is the average revenue per track sold' was served by a probe
+    whose description mentions tracks, and which returns a per-TRACK-PRICE
+    figure (1.0508) when the answer is revenue per track SOLD (1.039554).
+    """
+    ev = (evidence or "").lower()
+    if qualifier in SHARE_PHRASES:
+        if from_output:
+            return any(h in ev for h in SHARE_FIELD_HINTS)
+        return "share" in ev or "percent" in ev
+    m = re.match(r"^(?:on average\s+)?per\s+(.+)$", qualifier.strip())
+    if m:
+        # Underscore-insensitive: the field is `revenue_per_customer` while the
+        # question says "per customer", and both must count as the same shape.
+        target = re.escape(m.group(1).strip().replace("_", " "))
+        if from_output:
+            return bool(re.search(r"per[_ ]?" + target,
+                                  ev.replace("_", " ")))
+        return bool(re.search(r"per\s+" + target, ev))
+    # "ratio", "vs", "average per", ... nothing can be shown to cover them
+    return False
+
+
 def needs_escalation(question: str, served_probe: Optional[str],
-                     probe_text: Optional[str] = None) -> Optional[str]:
+                     probe_text: Optional[str] = None,
+                     output: Optional[Dict] = None) -> Optional[str]:
     """Should this question go to a reasoning model? Deterministic. No model.
 
     True when the question asks for a SHAPE of answer — a ratio — that the probe
@@ -50,10 +102,10 @@ def needs_escalation(question: str, served_probe: Optional[str],
     from the top 10 customers" was served by a probe that returns a list of
     customers: real data, wrong question.
 
-    Coverage is tested on the qualifier's CONTENT WORDS, not on the literal
-    phrase: a description reading "revenue share percentages" covers "share of",
-    because the concept is present even though those two words never sit
-    together.
+    Pass `output` (what the serving probe returned) whenever you have it: the
+    check is then about field names, which are evidence. Without it the check
+    falls back to the probe's prose, which is a weaker witness and will miss a
+    probe whose description happens to contain the qualifier's words.
     """
     q = (question or "").lower()
     asked = [t for t in RATIO_QUALIFIERS if t in q]
@@ -61,11 +113,15 @@ def needs_escalation(question: str, served_probe: Optional[str],
         return None
     if not served_probe:
         return asked[0]
-    from .router import tokens
-    own = tokens(probe_text or served_probe)
+    if output is not None:
+        evidence, from_output = _field_names(output), True
+    elif probe_text is not None:
+        evidence, from_output = probe_text, False
+    else:
+        # No evidence at all: escalate rather than assume the probe covered it.
+        return asked[0]
     for t in asked:
-        words = tokens(t)
-        if words and not (words & own):
+        if not _qualifier_covered(t, evidence, from_output):
             return t
     return None
 
