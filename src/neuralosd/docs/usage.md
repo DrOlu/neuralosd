@@ -577,6 +577,87 @@ curl -X POST http://localhost:8877/ask \
 }
 ```
 
+### Trusting an answer: the `discarded` ledger
+
+An answer is only an answer if it is an answer to **the question you asked**. A
+router that quietly drops a filter, or a probe that quietly drops rows,
+produces a number that looks perfectly reasonable and is wrong.
+
+Every envelope therefore carries a `discarded` block whenever something was
+left out:
+
+```json
+{
+  "probe": "breakdown",
+  "results": [{"by": "year", "total": 300.0,
+               "grand_total": 600.0, "unaccounted": 300.0,
+               "rows_in": 3, "rows_counted": 2,
+               "skipped": {"missing_year": 1},
+               "rows": [{"year": "2012", "Sales": 300.0}]}],
+  "discarded": {"rows": {"missing_year": 1}}
+}
+```
+
+Two vectors, one ledger:
+
+| Key | Meaning |
+|---|---|
+| `discarded.terms` | a filter value the question named that no argument consumed |
+| `discarded.rows` | rows the probe excluded from its own computation |
+
+A non-empty ledger means the answer is **not** an answer to your question.
+Nothing is cached when the ledger is non-empty, because memoizing a partial
+answer as if it were complete makes it permanent for the whole TTL.
+
+**Probes self-account.** Every generated aggregate reports `rows_in`,
+`rows_counted` and `skipped`, and `breakdown` also reports `grand_total` and
+`unaccounted` — the difference between the sum of its groups and the total over
+all rows. That difference used to be invisible, and it is exactly how a
+breakdown can add up internally while disagreeing with the grand total.
+
+Use `--strict` to refuse instead of returning a partial answer:
+
+```bash
+neuralosd ask --instance-dir ./inst --strict "sales by year"
+# exit 2, error: would have ignored row(s) missing_year=1 — refusing in strict mode
+```
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | answered — `results` is populated |
+| `2` | refused — `results` is `null`, `error` explains why |
+
+A refusal prints a JSON envelope, so check the exit code (or `results`) to tell
+an answer from a refusal. In Python, a refusal raises `NoResults`.
+
+### Arguments are never coerced
+
+An out-of-range argument is refused, not clamped. `user 999` against an
+argument declared `1..10` used to return the record for `user 10` — a
+**different** record, silently. Now:
+
+```
+user=999 is outside the supported range (1..10) — widen the argument's min/max
+```
+
+### What reaches the disk
+
+`--pii-mask off` (or `pii_mask=False`) governs the **response**, not storage. The
+cache expires; `ask_audit.jsonl` is append-only and permanent. Secrets and PII
+are therefore masked on write regardless of that setting, by key name **and** by
+value shape — a JWT under a key called `notes` is still a JWT.
+
+```bash
+neuralosd scrub --instance-dir ./inst --dry-run   # what is on disk today?
+neuralosd scrub --instance-dir ./inst             # rewrite it masked
+neuralosd scrub --instance-dir ./inst --purge-cache
+```
+
+`scrub` is the remediation path for records written before a fix; it reports
+which secret shapes it found without printing them.
+
 ---
 
 ## 7. Run as a Service
@@ -584,10 +665,20 @@ curl -X POST http://localhost:8877/ask \
 ### 7.1 Start the standard service
 
 ```bash
-cd my_instance
-python3 serve.py --port 8877
-# → "instance service -> http://0.0.0.0:8877"
+neuralosd serve --instance-dir ./inst --port 8877
+# → http://127.0.0.1:8877
 ```
+
+`serve` binds **loopback by default**. `/ask` exposes the data behind every
+probe and has **no authentication**, so binding wide is a deliberate act:
+
+```bash
+neuralosd serve --instance-dir ./inst --host 0.0.0.0 --port 8877
+# WARNING: bound to a non-loopback address, and /ask has NO authentication.
+# Put an authenticating proxy in front, or bind 127.0.0.1 and tunnel.
+```
+
+`--strict` applies the same refusal policy as `ask --strict` to every request.
 
 ### 7.2 Endpoints
 

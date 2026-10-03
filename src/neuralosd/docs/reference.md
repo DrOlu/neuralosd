@@ -264,9 +264,68 @@ Run the trigger collision linter. Returns `{"hard": [...], "soft": [...], "bloat
 #### `Exception: NoResults(envelope)`
 
 Raised when nothing was produced for a question. The `.envelope` attribute
-contains the error details (never stale data).
+contains the error details (never stale data). Also raised by a **strict
+refusal** and by an out-of-range argument — `results` is `None` and `error`
+explains why.
+
+#### `Exception: ArgOutOfRange(argname, value, lo, hi)`
+
+Raised when an integer argument's value falls outside its declared `min`/`max`.
+Attributes: `.argname`, `.value`, `.lo`, `.hi`.
+
+Arguments are **never clamped**. `user 999` against `1..10` used to return the
+record for `user 10` — a different record, silently. The router records the
+violation during its candidate walk and, if no candidate can serve the question,
+refuses with `mode="refused"` and a `discarded.out_of_range` entry.
+
+#### `UNCONSUMED_PENALTY = 5.0`
+
+Subtracted per **named-but-ignored filter value** when choosing between
+executable candidates. Kept above the per-trigger weight (4.0) so that ignoring
+one word a candidate could have consumed is enough to lose to a probe that
+consumes it. Without it, `"total revenue by region"` matched the flat
+`total_revenue` (trigger `"total revenue"`, overlap 2) and returned one grand
+total with `region` dropped.
+
+#### `ARG_MATCH_BONUS = 3.0`
+
+Added per extracted argument value present in the question.
+
+#### `mask_pii(x, deep=True) → Any`
+
+Mask by key name **and** (when `deep`) by value shape, recursively.
+`deep=False` restores key-name-only behaviour. Key hints live in `PII_HINTS`;
+value shapes in `SECRET_PATTERNS` (JWT, AWS, GitHub, OpenAI, Slack, PEM,
+`Bearer`, connection strings). `AGGRESSIVE_PATTERNS` (long hex) is off unless
+`NEURALOSD_MASK_AGGRESSIVE=1`.
+
+Response masking is **not** storage masking — see `_storage_mask`.
+
+#### `_storage_mask(x) → Any`
+
+The masker applied to everything written to the cache and the audit log, at
+every depth, regardless of `pii_mask`. Key hints + `SECRET_PATTERNS` +
+`PII_VALUE_PATTERNS` (email, phone). `pii_mask=False` governs the *response*;
+the cache expires, the audit log does not.
 
 ---
+
+## neuralosd._cmd.scrub
+
+### `run(args) → int`
+
+Sanitize the state already on disk. Masking at write time protects *future*
+records; this fixes the ones already written.
+
+```bash
+neuralosd scrub --instance-dir ./inst --dry-run
+neuralosd scrub --instance-dir ./inst
+neuralosd scrub --instance-dir ./inst --purge-cache
+```
+
+Uses the **storage** masker (these records are on disk, so response rules do not
+apply). Reports which secret shapes it found — by name and count, never by
+value — and how many records it rewrote.
 
 ## neuralosd.instance
 

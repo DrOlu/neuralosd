@@ -263,6 +263,16 @@ def _num(v):
         return None
 
 
+def _blank(v):
+    """A blank cell is MISSING data, not a category called ''. Without this,
+    an empty CSV cell becomes its own group and a distinct value."""
+    if v is None:
+        return None
+    if isinstance(v, str) and not v.strip():
+        return None
+    return v
+
+
 def count():
     return {{"count": len(rows())}}
 
@@ -271,21 +281,51 @@ def sample(n=10):
     return {{"rows": rows()[:n]}}
 
 
+# Every probe below reports what it EXCLUDED. Silence is how a wrong answer
+# looks correct: a filtered question that quietly drops its filter, or a total
+# that counts rows a breakdown did not. rows_in == rows_counted + sum(skipped).
+
 def distinct(column, cap=100):
-    values = {{r.get(column) for r in rows()}}
-    clean = sorted(str(v) for v in values if v is not None)
-    return {{"column": column, "count": len(clean), "distinct": clean[:cap]}}
+    vals = [r.get(column) for r in rows()]
+    present = [v for v in vals if _blank(v) is not None]
+    clean = sorted({{str(v) for v in present}})
+    return {{"column": column, "count": len(clean), "distinct": clean[:cap],
+            "rows_in": len(vals), "rows_counted": len(present),
+            "truncated": max(0, len(clean) - cap),
+            "skipped": {{"null": len(vals) - len(present)}}}}
 
 
 def total(column):
-    vals = [n for n in (_num(r.get(column)) for r in rows()) if n is not None]
-    return {{"column": column, "sum": round(sum(vals), 2), "n": len(vals)}}
+    n_rows = counted = bad = 0
+    acc = 0.0
+    for r in rows():
+        n_rows += 1
+        v = _num(r.get(column))
+        if v is None:
+            bad += 1
+            continue
+        counted += 1
+        acc += v
+    return {{"column": column, "sum": round(acc, 2), "n": counted,
+            "rows_in": n_rows, "rows_counted": counted,
+            "skipped": {{"non_numeric": bad}}}}
 
 
 def average(column):
-    vals = [n for n in (_num(r.get(column)) for r in rows()) if n is not None]
-    avg = round(sum(vals) / len(vals), 2) if vals else None
-    return {{"column": column, "average": avg, "n": len(vals)}}
+    n_rows = counted = bad = 0
+    acc = 0.0
+    for r in rows():
+        n_rows += 1
+        v = _num(r.get(column))
+        if v is None:
+            bad += 1
+            continue
+        counted += 1
+        acc += v
+    avg = round(acc / counted, 2) if counted else None
+    return {{"column": column, "average": avg, "n": counted,
+            "rows_in": n_rows, "rows_counted": counted,
+            "skipped": {{"non_numeric": bad}}}}
 
 
 def _parse_date(v):
@@ -329,22 +369,49 @@ def breakdown(dimension, measure):
     quarter, month) read from DATE_COLUMN.
     """
     groups = {{}}
+    n_rows = counted = miss_dim = miss_meas = 0
+    grand = 0.0
+    has_grand = False
     for r in rows():
+        n_rows += 1
+        value = _num(r.get(measure))
+        if value is not None:
+            grand += value
+            has_grand = True
         if dimension in _DATE_PARTS:
             key = _date_part(r.get(DATE_COLUMN), dimension) if DATE_COLUMN else None
         else:
-            key = r.get(dimension)
+            key = _blank(r.get(dimension))
         if key is None:
+            miss_dim += 1
             continue
-        value = _num(r.get(measure))
         if value is None:
+            miss_meas += 1
             continue
+        counted += 1
         key = str(key)
         groups[key] = groups.get(key, 0.0) + value
     ordered = sorted(groups.items())
-    return {{"by": dimension, "measure": measure, "groups": len(ordered),
+    total = round(sum(groups.values()), 2)
+    skipped = {{}}
+    if miss_dim:
+        skipped["missing_" + dimension] = miss_dim
+    if miss_meas:
+        skipped["non_numeric_" + measure] = miss_meas
+    out = {{"by": dimension, "measure": measure, "groups": len(ordered),
             "rows": [{{dimension: k, measure: round(v, 2)}} for k, v in ordered],
-            "total": round(sum(groups.values()), 2)}}
+            "total": total, "rows_in": n_rows, "rows_counted": counted}}
+    if skipped:
+        out["skipped"] = skipped
+    # Cross-check the parts against the whole. These differ EXACTLY when rows
+    # were dropped for a missing dimension — which used to happen silently,
+    # producing a breakdown that added up internally and disagreed with the
+    # grand total by 50%.
+    if has_grand:
+        g = round(grand, 2)
+        out["grand_total"] = g
+        out["unaccounted"] = round(g - total, 2)
+    return out
 '''
     with open(os.path.join(out, "bridge.py"), "w", encoding="utf-8") as f:
         f.write(bridge)
@@ -433,7 +500,13 @@ def _write_probes(out, name, info):
                     "split by", "group by", "per", "by", "trend", "over time"]
         for d in dims:
             triggers += [f"by {d}", f"per {d}", f"{d} breakdown",
-                         f"breakdown by {d}", f"{d} over {d}"]
+                         f"breakdown by {d}"]
+            # "year over year" is a real phrase. "region over region" is not,
+            # and a trigger that can never match a real question just dilutes
+            # the menu. Inlined rather than referencing the bridge template's
+            # own _DATE_PARTS, which lives in the GENERATED file's namespace.
+            if d in ("year", "quarter", "month"):
+                triggers.append(f"{d} over {d}")
         if date_col:
             triggers += ["year over year", "over the years", "by date"]
         lines += [

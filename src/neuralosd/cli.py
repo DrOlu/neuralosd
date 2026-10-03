@@ -13,6 +13,7 @@ Subcommands:
   gaps       — mine gated/fuzzy questions for menu improvements
   openapi    — generate OpenAPI 3.1 + MCP manifest from the menu
   diff       — profile/instance schema-evolution diff
+  scrub      — sanitize cache + audit records already on disk
   backends   — list available sandbox backends
 """
 import argparse
@@ -48,6 +49,10 @@ def main():
     p_ask.add_argument("--model", action="store_true",
                        help="Load the on-device model as a fallback when no "
                             "probe matches (slower startup)")
+    p_ask.add_argument("--strict", action="store_true",
+                       help="Refuse when the answer would have dropped a "
+                            "filter named in the question, instead of "
+                            "returning it with a `discarded` ledger")
     p_ask.add_argument("question", nargs="+")
 
     # serve
@@ -56,6 +61,11 @@ def main():
     p_serve.add_argument("--port", type=int, default=8877)
     p_serve.add_argument("--model", action="store_true",
                          help="Load the on-device model as a fallback")
+    p_serve.add_argument("--strict", action="store_true",
+                         help="Refuse answers that would drop a filter")
+    p_serve.add_argument("--host", default="127.0.0.1",
+                         help="Bind address (default 127.0.0.1; use 0.0.0.0 "
+                              "to expose — there is NO authentication)")
 
     # lint
     p_lint = sub.add_parser("lint", help="Trigger collision linter")
@@ -101,6 +111,14 @@ def main():
     p_docs = sub.add_parser("docs", help="Read bundled documentation")
     p_docs.add_argument("topic", nargs="?", default=None)
     sub.add_parser("backends", help="List available sandbox backends")
+
+    # scrub
+    p_scrub = sub.add_parser(
+        "scrub", help="Sanitize cache + audit records already on disk")
+    p_scrub.add_argument("--instance-dir", required=True)
+    p_scrub.add_argument("--dry-run", action="store_true", help="report only")
+    p_scrub.add_argument("--purge-cache", action="store_true",
+                         help="delete the cache instead of rewriting it")
 
     # sidecar
     p_sc = sub.add_parser(
@@ -154,6 +172,9 @@ def main():
     elif a.command == "diff":
         from ._cmd import diff
         diff.run(a)
+    elif a.command == "scrub":
+        from ._cmd import scrub
+        raise SystemExit(scrub.run(a))
     elif a.command == "docs":
         import neuralosd as _mod
         print(_mod.docs(getattr(a, "topic", None)))

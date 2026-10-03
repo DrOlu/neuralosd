@@ -20,6 +20,15 @@ check() { # name, expected-substring, actual
     fail=$((fail+1))
   fi
 }
+check_not() { # name, forbidden-substring, actual
+  if grep -q "$2" <<<"$3"; then
+    echo "  ✗ $1"
+    echo "    must NOT contain: $2"
+    fail=$((fail+1))
+  else
+    echo "  ✓ $1"; pass=$((pass+1))
+  fi
+}
 run() { # capture stdout+stderr, never abort on non-zero
   "$NS" "$@" 2>&1 || true
 }
@@ -45,6 +54,29 @@ check "ask: row_count returns 4" '"count": 4' "$r"
 
 r="$(run ask --instance-dir ./inst 'distinct region')"
 check "ask: distinct region" '"probe": "distinct_region"' "$r"
+
+# 2b. the discarded ledger — absent when nothing was dropped. (The positive
+# case needs a filter no candidate can consume, which this menu has none of;
+# it is covered exhaustively in tests/test_discarded.py.)
+check_not "ask: clean answer carries no discarded ledger" '"discarded"' "$r"
+r="$(run ask --instance-dir ./inst 'total revenue by region')"
+check "ask: a named dimension routes to the breakdown" '"probe": "breakdown"' "$r"
+check_not "ask: a consumed filter is not reported as dropped" 'missing_' "$r"
+r="$(run ask --instance-dir ./inst 'total revenue')"
+check "ask: no dimension still hits the flat total" '"probe": "total_revenue"' "$r"
+
+# 2c. refuse, don't clamp — a refusal must be distinguishable from an answer
+"$NS" ask --instance-dir ./inst 'xyzzy plugh' >/dev/null 2>&1
+rc=$?
+if [ "$rc" -eq 2 ]; then
+  echo "  ✓ ask: a refusal exits 2"; pass=$((pass+1))
+else
+  echo "  ✗ ask: a refusal exits 2 (got $rc)"; fail=$((fail+1))
+fi
+
+# 2d. scrub — remediation of records already on disk
+r="$(run scrub --instance-dir ./inst --dry-run)"
+check "scrub: examines the state" 'entries examined\|audit' "$r"
 
 # 3. invariants
 r="$(run invariants --dir ./inst)"

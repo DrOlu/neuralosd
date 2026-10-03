@@ -25,13 +25,75 @@ STOP = set("the a an of in on for to and or is are was were what which who "
            "i we you this that those these there have has had more than one not "
            "use between during along per into over under about".split())
 
-PII_HINTS = ("email", "phone", "ssn", "iban", "tax_id", "passport")
+# Key-NAME hints: a field literally called `email` is masked whatever it holds.
+PII_HINTS = ("email", "e-mail", "phone", "mobile", "ssn", "iban", "tax_id",
+             "passport", "password", "passwd", "pwd", "pin", "token", "secret",
+             "api_key", "apikey", "api-key", "authorization", "auth_token",
+             "credential", "private_key", "access_key", "session_id",
+             "cookie", "cvv", "card_number", "account_number")
+
+# Key-name matching alone is trivially bypassed: a password stored under a key
+# called "notes" is still a password. These match the VALUE's shape instead.
+SECRET_PATTERNS = (
+    ("jwt", re.compile(r"\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}")),
+    ("aws_key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
+    ("github_token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b")),
+    ("openai_key", re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b")),
+    ("slack_token", re.compile(r"\bxox[aboprs]-[A-Za-z0-9-]{10,}\b")),
+    ("private_key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+    ("bearer", re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{16,}", re.I)),
+    # scheme://user:password@host — a connection string leaked into an error
+    ("conn_string", re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.]*://[^\s:/@]+:[^\s:@/]+@")),
+)
+
+# Off by default: long hex is ALSO what every hash column in your data looks
+# like, so masking it unconditionally would destroy legitimate answers.
+# Opt in with NEURALOSD_MASK_AGGRESSIVE=1 when auditing a suspected leak.
+AGGRESSIVE_PATTERNS = (
+    ("long_hex", re.compile(r"\b[0-9a-fA-F]{32,}\b")),
+)
+
+# Value shapes that are PII rather than credentials. Applied at STORAGE time
+# only. An email in a RESPONSE may be exactly the answer that was asked for
+# ("list customers by email"), so masking it there would be over-redaction; but
+# it has no business sitting in an append-only audit log forever.
+PII_VALUE_PATTERNS = (
+    ("email", re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")),
+    ("phone", re.compile(
+        r"(?<!\d)(?:\+\d{1,3}[ -]?)?(?:\(\d{3}\)[ -]?|\d{3}[ -])\d{3}[ -]\d{4}(?!\d)")),
+)
+
+MASKED = "***masked***"
+
+# Arg names whose enum values are MEASURES, not filters. A measure named in a
+# question ("sales") is normal. A categorical FILTER named in a question that
+# nothing consumed ("Western Europe") means the answer silently ignored it.
+MEASURE_ARG_NAMES = {"measure", "metric", "column", "field", "value", "agg"}
+
+
+def _aggressive():
+    return os.environ.get("NEURALOSD_MASK_AGGRESSIVE", "").lower() in ("1", "true", "yes")
 
 
 class NoResults(Exception):
     def __init__(self, envelope):
         self.envelope = envelope
         super().__init__(envelope.get("error", "no results produced"))
+
+
+class ArgOutOfRange(Exception):
+    """An argument's value fell outside its declared range.
+
+    Never clamp. Silently coercing `user 999` to the maximum returned a
+    DIFFERENT user's record than the one that was asked for — a substitution,
+    which is worse than a refusal.
+    """
+
+    def __init__(self, argname, value, lo, hi):
+        self.argname, self.value, self.lo, self.hi = argname, value, lo, hi
+        super().__init__(
+            f"{argname}={value} is outside the supported range ({lo}..{hi}) — "
+            f"widen the argument's min/max to accept it")
 
 
 def tokens(text):
@@ -51,13 +113,63 @@ def score_probe(meta: ProbeMeta, q_tokens):
     return s
 
 
-def mask_pii(x):
+def _mask_value(v):
+    """Mask secrets by SHAPE, whatever the key is called."""
+    if not isinstance(v, str):
+        return v
+    for _name, pat in SECRET_PATTERNS:
+        v = pat.sub(MASKED, v)
+    if _aggressive():
+        for _name, pat in AGGRESSIVE_PATTERNS:
+            v = pat.sub(MASKED, v)
+    return v
+
+
+def _mask_storage_value(v):
+    """Credentials by shape, plus PII by shape — for records going to disk."""
+    v = _mask_value(v)
+    if not isinstance(v, str):
+        return v
+    for _name, pat in PII_VALUE_PATTERNS:
+        v = pat.sub(MASKED, v)
+    return v
+
+
+def _storage_mask(x):
+    """Key hints AND value shapes (credentials + PII), at every depth."""
     if isinstance(x, dict):
-        return {k: ("***masked***" if any(h in k.lower() for h in PII_HINTS)
-                    and isinstance(v, str) else mask_pii(v))
-                for k, v in x.items()}
+        out = {}
+        for k, v in x.items():
+            if isinstance(v, str) and any(h in k.lower() for h in PII_HINTS):
+                out[k] = MASKED
+            else:
+                out[k] = _storage_mask(v)
+        return out
     if isinstance(x, list):
-        return [mask_pii(v) for v in x]
+        return [_storage_mask(v) for v in x]
+    if isinstance(x, str):
+        return _mask_storage_value(x)
+    return x
+
+
+def mask_pii(x, deep=True):
+    """Mask by key name AND (when deep) by value shape.
+
+    deep=False restores the old key-name-only behaviour, which cannot see a
+    secret stored under an innocuous key.
+    """
+    if isinstance(x, dict):
+        out = {}
+        for k, v in x.items():
+            if isinstance(v, str) and any(h in k.lower() for h in PII_HINTS):
+                out[k] = MASKED
+            else:
+                out[k] = mask_pii(v, deep)
+        return out
+    if isinstance(x, list):
+        return [mask_pii(v, deep) for v in x]
+    if deep and isinstance(x, str):
+        return _mask_value(x)
     return x
 
 
@@ -84,11 +196,15 @@ def _extract_one(argname, spec, question):
             return None
         return (m.group(1) if m.groups() else m.group(0)).strip()
     if t == "integer":
-        m = re.search(r"\b(\d{1,4})\b", question)
+        m = re.search(r"\b(\d{1,9})\b", question)
         if not m:
             return spec.get("default")
         v = int(m.group(1))
-        return max(spec.get("min", 1), min(v, spec.get("max", 100)))
+        lo, hi = spec.get("min", 1), spec.get("max", 100)
+        if v < lo or v > hi:
+            # Never clamp — see ArgOutOfRange.
+            raise ArgOutOfRange(argname, v, lo, hi)
+        return v
     if t == "string" and spec.get("required"):
         m = re.search(r"\b(?:by|for|from|of|does)\s+([A-Z][\w'&./ -]{1,60})", question)
         if not m:
@@ -97,33 +213,12 @@ def _extract_one(argname, spec, question):
     return spec.get("default")
 
 
-def extract_args(meta: ProbeMeta, question):
-    """Extract every REQUIRED arg from the question; None when uncertain.
-    Optional args use their declared defaults."""
-    kwargs = {}
-    for argname, spec in meta.args.items():
-        required = spec.get("required", True)
-        if "values" in spec or spec.get("type") == "enum":
-            val = _extract_one(argname, spec, question)
-            if val is None:
-                if required:
-                    return None
-                val = spec.get("default") or (spec.get("values") or ["all"])[0]
-            kwargs[argname] = val
-        elif spec.get("type") == "pattern" and required:
-            val = _extract_one(argname, spec, question)
-            if val is None:
-                return None
-            kwargs[argname] = val
-        elif spec.get("type") == "integer":
-            val = _extract_one(argname, spec, question)
-            if val is None and spec.get("required", True):
-                return None
-            if val is not None:
-                kwargs[argname] = val
-        elif spec.get("required", True):
-            return None      # unknown required extraction -> model fallback
-    return kwargs
+# NOTE: there is exactly ONE extract_args, at the bottom of this module.
+#
+# It used to be defined twice. This earlier copy was shadowed by the later one,
+# so ANY fix applied here silently did nothing — including the clamp fix that
+# was written here first, which is how the real one kept returning user 10 for
+# `user 999`. Two definitions of one function is a silent no-op generator.
 
 
 class Router:
@@ -131,7 +226,7 @@ class Router:
                  cache_file: str = ".ask_cache.json",
                  audit_file: str = "ask_audit.jsonl",
                  pii_mask: bool = True, ttl: int = 3600,
-                 name: str = "instance"):
+                 name: str = "instance", strict_discards: bool = False):
         self.probes = list(probes)
         self.metas = [getattr(p, "_probe") for p in self.probes]
         self.by_name = {m.name: p for p, m in zip(self.probes, self.metas)}
@@ -141,7 +236,90 @@ class Router:
         self.pii_mask = pii_mask
         self.ttl = ttl
         self.name = name
+        # When True, an answer that would have dropped a filter the user named
+        # is refused instead of returned. Off by default so existing callers
+        # keep working; the ledger is still always present in the envelope.
+        self.strict_discards = strict_discards
         self.menu_version = self._menu_version()
+        self._filter_vocab = self._build_filter_vocab()
+
+    def _build_filter_vocab(self):
+        """Enum values across the menu that act as FILTERS, not measures."""
+        filters, measures = {}, set()
+        for m in self.metas:
+            for an, spec in m.args.items():
+                for v in spec.get("values") or []:
+                    if an.lower() in MEASURE_ARG_NAMES:
+                        measures.add(str(v).lower())
+                    else:
+                        filters.setdefault(str(v).lower(), str(v))
+        for v in measures:
+            filters.pop(v, None)   # a measure is never a "dropped filter"
+        return filters
+
+    def _named_filters(self, question):
+        """Known FILTER values the user named in the question."""
+        return [orig for low, orig in self._filter_vocab.items()
+                if re.search(r"\b" + re.escape(low) + r"\b", question, re.I)]
+
+    def _unconsumed_for(self, meta, kwargs, question):
+        """Named filters that this probe had no way to consume.
+
+        Used in two places on purpose — to penalise such a probe at ROUTING
+        time, and to report it in the ledger at ANSWER time — so the two can
+        never drift apart the way two copies of one function did.
+        """
+        consumed = {str(v).lower() for v in (kwargs or {}).values()}
+        if meta is not None:
+            # An enum value this probe COULD have taken counts as consumed.
+            for spec in meta.args.values():
+                for v in spec.get("values") or []:
+                    if re.search(r"\b" + re.escape(str(v)) + r"\b",
+                                 question, re.I):
+                        consumed.add(str(v).lower())
+            # A value the probe is NAMED after, or TRIGGERED by, is consumed by
+            # identity: `distinct_region` answers "distinct region" without
+            # taking an argument at all, and reporting that as a dropped filter
+            # was a false positive. It does NOT rescue total_revenue, whose name
+            # and triggers never mention a region.
+            identity = tokens(meta.name.replace("_", " "))
+            for tr in meta.triggers:
+                identity |= tokens(tr)
+            for low in self._filter_vocab:
+                if low in identity:
+                    consumed.add(low)
+        return [v for v in self._named_filters(question)
+                if v.lower() not in consumed]
+
+    def _discarded(self, probe_name, kwargs, question, results):
+        """What this answer threw away.
+
+        Two vectors, one ledger:
+          terms — a known FILTER value named in the question that no extracted
+                  arg consumed. "who spends the most on jazz" used to answer
+                  the UNFILTERED top customers, with 'jazz' silently dropped.
+          rows  — rows the probe itself excluded, reported by the probe. 1418
+                  rows with no date are still counted by the grand total but
+                  are absent from every group in the breakdown.
+
+        A non-empty ledger means the answer is not an answer to the question
+        that was asked.
+        """
+        out = {}
+        meta = next((m for m in self.metas if m.name == probe_name), None)
+        terms = sorted(set(self._unconsumed_for(meta, kwargs, question)))
+        if terms:
+            out["terms"] = terms
+        rows = {}
+        if isinstance(results, list):
+            for r in results:
+                if isinstance(r, dict) and isinstance(r.get("skipped"), dict):
+                    for k, v in r["skipped"].items():
+                        if isinstance(v, (int, float)) and v:
+                            rows[k] = rows.get(k, 0) + v
+        if rows:
+            out["rows"] = rows
+        return out
 
     def _menu_version(self):
         blob = json.dumps([{"n": m.name, "t": m.triggers, "d": m.description,
@@ -218,6 +396,7 @@ class Router:
 
     def _cache_store(self, key, env):
         try:
+            env = self._for_storage(env)
             c = {}
             if os.path.exists(self.cache_file):
                 c = json.load(open(self.cache_file, encoding="utf-8"))
@@ -227,8 +406,27 @@ class Router:
         except Exception:
             pass
 
+    def _for_storage(self, env):
+        """Masking applied at WRITE time, unconditionally.
+
+        `pii_mask=False` means "do not hide fields in the RESPONSE". It is not
+        consent to persist secrets in the cache and the append-only audit log:
+        the cache expires, the audit log does not, and a leaked credential
+        cannot be un-disclosed by re-asking. Storage and presentation are
+        separate decisions.
+        """
+        out = dict(env)
+        for k in ("question", "normalized"):
+            if isinstance(out.get(k), str):
+                out[k] = _mask_storage_value(out[k])
+        if isinstance(out.get("error"), str):
+            out["error"] = _mask_storage_value(out["error"])
+        out["results"] = _storage_mask(out.get("results"))
+        return out
+
     def _audit(self, rec):
         try:
+            rec = self._for_storage(rec)
             with open(self.audit_file, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
         except Exception:
@@ -256,6 +454,7 @@ class Router:
         retrieved = self._retrieve(normalized, k)
 
         results, used_probe, mode, conf = None, None, "retrieval", None
+        exec_kwargs = {}
 
         if retrieved:
             used_probe = retrieved[0][0].name
@@ -270,8 +469,13 @@ class Router:
             # not asked. A probe that accounts for the question's own words
             # through its extracted arguments is the better match.
             best = None   # (effective score, rank score, meta, kwargs)
+            oor = None    # first out-of-range argument we hit
             for _meta, _score in retrieved:
-                kwargs = extract_args(_meta, normalized)
+                try:
+                    kwargs = extract_args(_meta, normalized)
+                except ArgOutOfRange as exc:
+                    oor = exc
+                    continue
                 if kwargs is None:
                     continue
                 # Strong-match rule: a probe with NO caged args is ambiguous
@@ -282,13 +486,35 @@ class Router:
                                 for s in _meta.args.values())
                 if not has_caged and _score < 0.5 * retrieved[0][1]:
                     continue
-                effective = _score + ARG_MATCH_BONUS * _args_seen(kwargs,
-                                                                 normalized)
+                # A probe that ignores a value the user NAMED is answering a
+                # different question, so it must lose to one that consumes it.
+                # Without this, "total revenue by region" matched the flat
+                # total_revenue (trigger "total revenue", overlap 2) and
+                # returned ONE grand total while 'region' was dropped.
+                ignored = self._unconsumed_for(_meta, kwargs, normalized)
+                effective = (_score
+                             + ARG_MATCH_BONUS * _args_seen(kwargs, normalized)
+                             - UNCONSUMED_PENALTY * len(ignored))
                 if best is None or effective > best[0]:
                     best = (effective, _score, _meta, kwargs)
 
+            if best is None and oor is not None:
+                # The user named a value outside every candidate's declared
+                # range. No model can repair that, so refuse with the reason
+                # rather than quietly answering about something else.
+                env = {"ask_id": ask_id, "ts": time.time(), "question": question,
+                       "normalized": normalized, "probe": None,
+                       "menu_version": self.menu_version, "mode": "refused",
+                       "error": str(oor), "results": None,
+                       "discarded": {"out_of_range": {
+                           oor.argname: {"value": oor.value,
+                                         "min": oor.lo, "max": oor.hi}}}}
+                self._audit(env)
+                raise NoResults(env)
+
             if best is not None:
                 _meta, kwargs = best[2], best[3]
+                exec_kwargs = dict(kwargs)
                 fn = self.by_name[_meta.name]
                 mode = "deterministic"
                 used_probe = _meta.name
@@ -334,14 +560,26 @@ class Router:
             results = mask_pii(results)
         empty = results in (None, [], {}) or (isinstance(results, list)
                                               and len(results) == 0)
+        discarded = self._discarded(used_probe, exec_kwargs, normalized, results)
         env = {"ask_id": ask_id, "ts": time.time(), "question": question,
                "normalized": normalized, "probe": used_probe,
                "menu_version": self.menu_version, "mode": mode,
                "confidence": conf,
                "latency_ms": int((time.time() - t0) * 1000),
                "results": None if empty else results}
+        if discarded:
+            env["discarded"] = discarded
         if empty:
             env["error"] = "no results produced for this question"
+            self._audit(env)
+            raise NoResults(env)
+
+        if discarded and self.strict_discards:
+            # Asked for a filtered answer; would have returned an unfiltered
+            # one. Refuse rather than answer a different question.
+            env["error"] = (f"would have ignored {_discard_summary(discarded)} "
+                            f"— refusing in strict mode")
+            env["results"] = None
             self._audit(env)
             raise NoResults(env)
 
@@ -350,7 +588,10 @@ class Router:
         # fixable (a missing library, a DB that was down, a timeout); caching
         # one for the whole TTL means the user installs the missing piece,
         # retries, and keeps getting the stale error for an hour.
-        if not _is_error_envelope(env):
+        #
+        # Nor cache a PARTIAL answer: memoizing it as though it were complete
+        # is how a dropped filter becomes permanent for the whole TTL.
+        if not _is_error_envelope(env) and not discarded:
             self._cache_store(key, env)
         return env
 
@@ -360,6 +601,11 @@ class Router:
 # them). Kept above the per-trigger weight so it can outrank a probe that
 # merely shares vocabulary.
 ARG_MATCH_BONUS = 3.0
+
+# Per named-but-ignored filter value. Kept above the per-trigger weight (4.0)
+# so that ignoring ONE word a candidate could have consumed is enough to lose
+# to a probe that consumes it: 17.6 - 5.0 < 9.6 + 2*3.0.
+UNCONSUMED_PENALTY = 5.0
 
 
 def _args_seen(kwargs, question: str) -> int:
@@ -377,6 +623,21 @@ def _tool_of(results):
     if isinstance(results, list) and results and isinstance(results[0], dict):
         return results[0].get("_tool")
     return None
+
+
+def _discard_summary(discarded):
+    """Human-readable ledger, for the refusal message."""
+    bits = []
+    if discarded.get("terms"):
+        bits.append("filter(s) " + ", ".join(map(str, discarded["terms"])))
+    if discarded.get("rows"):
+        bits.append("row(s) " + ", ".join(
+            f"{k}={v}" for k, v in discarded["rows"].items()))
+    if discarded.get("out_of_range"):
+        bits.append("out-of-range " + ", ".join(
+            f"{k}={v['value']} (max {v['max']})"
+            for k, v in discarded["out_of_range"].items()))
+    return "; ".join(bits) or "something"
 
 
 def _is_error_envelope(env) -> bool:
@@ -424,13 +685,15 @@ def extract_args(meta: ProbeMeta, question: str) -> Optional[Dict[str, Any]]:
                 continue
             kwargs[argname] = val
         elif t == "integer":
-            m = re.search(r"\b(\d{1,4})\b", question)
-            v = int(m.group(1)) if m else None
+            # Delegate to _extract_one so there is ONE integer implementation.
+            # It refuses rather than clamping, so `user 999` can never come
+            # back as user 10.
+            v = _extract_one(argname, spec, question)
             if v is None:
                 if required:
                     return None
                 continue
-            kwargs[argname] = max(spec.get("min", 1), min(v, spec.get("max", 100)))
+            kwargs[argname] = v
         else:
             m = re.search(r"\b(?:by|for|from|of|does)\s+([A-Z][\w'&./ -]{1,60})",
                           question)

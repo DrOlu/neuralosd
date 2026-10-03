@@ -291,6 +291,44 @@ constraining every token. The model:
 
 ---
 
+## 6b. The Accounting Principle
+
+> **Nothing is discarded silently.**
+
+Every dangerous bug this runtime has produced was the same bug: *a confident
+answer to a question that was not asked.* A filter named in the question that
+no argument consumed. A grand total that counted rows the breakdown had
+dropped. An argument clamped from 999 to 10 so the caller received a different
+record than the one they asked for. In each case the output was plausible, the
+parts looked internally consistent, and nothing said otherwise.
+
+Accounting is the structural fix, and it is a *runtime mechanism*, not a
+documentation claim:
+
+| Vector | Mechanism |
+|---|---|
+| a filter the question named, unconsumed | `discarded.terms` |
+| rows a probe excluded | `discarded.rows` (probe self-reports `skipped`) |
+| parts that disagree with the whole | `grand_total` / `unaccounted` |
+| an argument outside its declared range | `mode="refused"` + `discarded.out_of_range` |
+
+Three properties make it hold:
+
+1. **Probes self-account.** Every generated aggregate emits `rows_in`,
+   `rows_counted` and `skipped`. The invariant `rows_in == rows_counted +
+   sum(skipped)` is checkable from outside the probe.
+2. **The ledger reaches the envelope.** A caller does not have to trust the
+   number; it can see what was left out and decide. `--strict` turns the ledger
+   into a refusal.
+3. **Partial answers are never cached.** Memoizing one as if it were complete
+   is how a dropped filter becomes permanent for the whole TTL.
+
+The routing penalty (`UNCONSUMED_PENALTY`) and the ledger share one
+implementation (`_unconsumed_for`) on purpose. Two copies of one rule drift,
+and a drifted copy is a silent no-op — which is exactly what happened when
+`extract_args` was defined twice in `router.py`: a fix written into the first
+copy had no effect on any live code path while the source clearly showed it.
+
 ## 7. The Data Layer
 
 ### 7.1 The bridge

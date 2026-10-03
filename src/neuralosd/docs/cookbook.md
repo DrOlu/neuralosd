@@ -468,3 +468,72 @@ cd log_instance
 python3 ask.py "how many errors in the last 100 lines"
 python3 ask.py "what are the most common log levels"
 ```
+
+---
+
+## Recipe 11: Trust an answer before you use it
+
+A number you cannot audit is a number you should not report. Every envelope
+says what it left out.
+
+```python
+from neuralosd._cmd._common import load_instance
+from neuralosd.router import NoResults
+
+inst = load_instance("./inst")
+
+try:
+    env = inst.ask("revenue breakdown by year")
+except NoResults as e:
+    env = e.envelope
+    print("refused:", env["error"])          # results is None — do NOT report
+    raise
+
+# 1. Did anything get dropped?
+if env.get("discarded"):
+    print("PARTIAL:", env["discarded"])
+    # -> {"rows": {"missing_year": 1418}}  the answer is not the answer
+
+# 2. Do the parts reconcile with the whole?
+for r in env["results"]:
+    if "unaccounted" in r and r["unaccounted"]:
+        raise SystemExit(f"breakdown disagrees with the grand total "
+                         f"by {r['unaccounted']}")
+
+# 3. Only now is the number reportable
+print(env["results"][0]["total"])
+```
+
+**Refuse by default in a reporting pipeline.** A partial answer that reaches a
+dashboard is worse than an error, because nothing downstream can tell.
+
+```bash
+neuralosd ask --instance-dir ./inst --strict "revenue breakdown by year" \
+  || echo "not reportable (exit $?)"
+```
+
+**In a service**, the ledger travels with the response, so the caller decides:
+
+```python
+r = requests.post("http://127.0.0.1:8877/ask",
+                  json={"question": "sales by region"}).json()
+if r.get("discarded"):
+    return {"status": "partial", "ledger": r["discarded"]}
+```
+
+### Mine the ledger for menu gaps
+
+A recurring `discarded.terms` value is a filter your menu cannot express. That
+is a concrete to-do, not a mystery:
+
+```bash
+# which questions were refused, and which filters were dropped
+grep -h '"discarded"' inst/ask_audit.jsonl | python3 -c "
+import sys, json, collections
+c = collections.Counter()
+for line in sys.stdin:
+    for t in (json.loads(line).get('discarded') or {}).get('terms', []):
+        c[t] += 1
+for term, n in c.most_common(10):
+    print(f'{n:5}  {term}   <- add a probe or a trigger for this')"
+```
