@@ -245,3 +245,64 @@ def test_probes_without_min_coverage_are_unaffected():
     # 1 of the trigger's 2 tokens — the original scoring's blind spot, which
     # only probes that OPT IN to min_coverage are protected from.
     assert coverage(t._probe, tokens("total")) == pytest.approx(0.5)
+
+
+# ── truncated row lists: the trap that an oracle caught, deterministically ──
+#
+# chinook_albums returns 15 rows out of 347 albums. A model asked for
+# 'tracks per album' summed those 15 and divided by 347 -> 0.53 where the truth
+# is 10.09. Every id it used was real, the pick was stable, and the wording was
+# plausible. Only the observation itself shows the sum covers 15 of 347.
+
+TRUNCATED = {
+    "albums": {"total_in_source": 347, "returned": 15,
+               "rows": [{"id": 1, "tracks": 9}, {"id": 2, "tracks": 12}]},
+    "over": {"grand_total_revenue": 2328.60, "tracks_sold": 2240},
+}
+
+
+def test_summing_a_truncated_row_list_is_refused():
+    q = Quantity("albums.rows[].tracks", "albums", "rows[].tracks", "sum_rows")
+    with pytest.raises(DerivedError) as e:
+        resolve(q, TRUNCATED)
+    assert "TRUNCATED" in str(e.value)
+    assert "2 rows" in str(e.value) and "total_in_source=347" in str(e.value)
+
+
+def test_a_complete_row_list_still_sums():
+    complete = {"albums": {"total_in_source": 2, "returned": 2,
+                           "rows": [{"id": 1, "tracks": 9},
+                                    {"id": 2, "tracks": 12}]}}
+    q = Quantity("albums.rows[].tracks", "albums", "rows[].tracks", "sum_rows")
+    assert resolve(q, complete) == 21.0
+
+
+def test_strict_is_the_default_and_can_be_relaxed():
+    q = Quantity("albums.rows[].tracks", "albums", "rows[].tracks", "sum_rows")
+    with pytest.raises(DerivedError):
+        resolve(q, TRUNCATED)
+    assert resolve(q, TRUNCATED, strict=False) == 21.0
+
+
+def test_a_derived_metric_over_a_truncated_list_is_refused():
+    m = _metric(name="tracks_per_album",
+                numerator="albums.rows[].tracks",
+                denominator="over.tracks_sold")
+    with pytest.raises(DerivedError):
+        evaluate(m, TRUNCATED)
+
+
+def test_a_scalar_from_the_same_truncated_probe_is_still_fine():
+    """The denominator 347 is a real total; only the row SUM is partial."""
+    q = Quantity("albums.total_in_source", "albums", "total_in_source", "scalar")
+    assert resolve(q, TRUNCATED) == 347.0
+
+
+def test_matching_hint_also_catches_truncation():
+    obs = {"c": {"count": 59, "matching": 13,
+                 "rows": [{"spend": 49.62}]}}
+    q = Quantity("c.rows[].spend", "c", "rows[].spend", "sum_rows")
+    with pytest.raises(DerivedError) as e:
+        resolve(q, obs)
+    # 'count' is checked before 'matching' and both prove truncation
+    assert "count=59" in str(e.value)

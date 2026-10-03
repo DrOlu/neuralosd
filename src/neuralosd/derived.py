@@ -173,15 +173,50 @@ def _numeric(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
-def resolve(quantity: Quantity, observations: Dict[str, Dict]) -> Optional[float]:
-    """Turn a quantity into a NUMBER. The only place a number is produced."""
+def _truncation(observations: Dict[str, Dict], probe: str,
+                got: int) -> Optional[str]:
+    """A reason string when the rows we would sum are only PART of the set.
+
+    `chinook_albums` returns 15 rows out of 347 albums. A model asked for
+    'tracks per album' summed those 15 and divided by 347, producing 0.53 where
+    the truth is 10.09 - and every id it used was real, so no closed-list check
+    could object. The truncation is visible in the observation itself, so it can
+    be caught deterministically, without an oracle.
+    """
+    result = observations.get(probe)
+    if not isinstance(result, dict):
+        return None
+    for hint in ("total_in_source", "count", "total", "matching"):
+        total = result.get(hint)
+        if _numeric(total) and total > got > 0:
+            return (f"{probe} returned {got} rows but reports "
+                    f"{hint}={int(total)} — summing rows[] would use a "
+                    f"TRUNCATED sample")
+    return None
+
+
+def resolve(quantity: Quantity, observations: Dict[str, Dict],
+            strict: bool = True) -> Optional[float]:
+    """Turn a quantity into a NUMBER. The only place a number is produced.
+
+    strict=True refuses to sum a TRUNCATED row list. The alternative is a
+    plausible number computed from a sample, which is exactly the class of
+    wrong answer this module exists to prevent.
+    """
     result = observations.get(quantity.probe)
     if not isinstance(result, dict):
         return None
     if quantity.path.startswith("rows[]."):
         key = quantity.path.split(".", 1)[1]
-        vals = [r.get(key) for r in (result.get("rows") or [])
+        rows = result.get("rows") or []
+        vals = [r.get(key) for r in rows
                 if isinstance(r, dict) and _numeric(r.get(key))]
+        if not vals:
+            return None
+        if strict:
+            why = _truncation(observations, quantity.probe, len(vals))
+            if why:
+                raise DerivedError(why)
         return float(sum(vals)) if vals else None
     v = result.get(quantity.path)
     return float(v) if _numeric(v) else None
