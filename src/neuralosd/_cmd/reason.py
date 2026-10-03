@@ -98,9 +98,11 @@ def run(a):
     # ── 3-6. map, compute, check ───────────────────────────────────────────
     mapper = OllamaMapper(model=a.model, url=a.ollama, timeout=a.timeout)
     if not mapper.available():
-        print(f"\nerror: Ollama is not reachable at {a.ollama}, or the model "
-              f"{a.model!r} is not pulled.\n"
-              f"       try:  ollama pull {a.model}\n"
+        # Name the model the mapper will actually use, not the CLI default —
+        # printing `ollama pull None` is advice that cannot be followed.
+        print(f"\nerror: Ollama is not reachable at {mapper.url}, or the model "
+              f"{mapper.model!r} is not pulled.\n"
+              f"       try:  ollama pull {mapper.model}\n"
               f"       or:   --model <another model>", file=sys.stderr)
         return 3
     print(f"\nmapping with {mapper.model} (this takes ~30s x2 for the "

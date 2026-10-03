@@ -392,3 +392,17 @@ def test_observe_excludes_derived_probes_from_the_inventory(tmp_path):
 def test_an_empty_directory_observes_nothing(tmp_path):
     from neuralosd.menu_adapter import observe
     assert observe(str(tmp_path)) == {}
+
+
+# ── the mapper owns its own defaults ───────────────────────────────────────
+
+def test_the_mapper_defaults_itself_not_at_the_call_site():
+    """A CLI passing --model's None through must not blank the default.
+
+    The frozen binary advised `ollama pull None`, which cannot be followed.
+    """
+    from neuralosd.reasoning import MODEL_DEFAULT, OLLAMA_DEFAULT, OllamaMapper
+    m = OllamaMapper(model=None, url=None)
+    assert m.model == MODEL_DEFAULT
+    assert m.url == OLLAMA_DEFAULT.rstrip("/")
+    assert "None" not in m.model
