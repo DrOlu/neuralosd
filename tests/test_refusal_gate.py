@@ -76,7 +76,7 @@ def test_margin_tie_is_ambiguous_only_without_a_coverage_advantage(tmp_path):
 def test_a_true_tie_refuses_as_ambiguous(tmp_path):
     a = _probe("open_incidents", ["how many incidents", "incident count"],
                description="open incident count")
-    b = _probe("unresolved_incidents", ["how many incidents open",
+    b = _probe("unresolved_incidents", ["how many incidents",
                                         "unresolved count"],
                description="open incident count")
     r = _router(tmp_path, [a, b], margin=2.0)

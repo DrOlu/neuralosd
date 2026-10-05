@@ -577,6 +577,51 @@ curl -X POST http://localhost:8877/ask \
 }
 ```
 
+### Deploying into a Microsandbox (`--backend msb`)
+
+`neuralosd deploy --backend msb` is only "deployed" when a question asked
+through the HOST door returns real data. Everything before that is staging,
+and every step is verified:
+
+```
+neuralosd deploy --instance-dir ./inst --name myinst \
+                 --backend msb --port 8920
+```
+
+  R0  the host port must be free (a busy port fails loudly)
+  R1  idempotency: an existing sandbox fails without --force;
+      --force removes and redeploys (the instance lives on the host)
+  R2  the sandbox is CREATED with a native msb port forward
+      (`msb create -p BIND:HOST:GUEST` — create-time only: `msb modify`
+      cannot add forwards later, so a port change means recreating)
+  R3  the sandbox agent must answer ping
+  R4  neuralosd is pip-installed INSIDE the sandbox (slim ships nothing)
+      and import-verified
+  R5  the instance is staged to /app/<name>/ — probes.py, bridge.py,
+      golden.json, traps.json — AND the data file, with the bridge's
+      SOURCE rewritten on the host to the staged path
+  R6  `neuralosd serve` starts via the console script (-m does not exist)
+  R7  self-test INSIDE the VM: a real ask through localhost
+  R8  self-test from the HOST through the forward
+
+Only then: "deployed ... VERIFIED end to end", and the door is recorded in
+`~/.neuralosd/doors.json`.
+
+```bash
+neuralosd door list                 # every deployed door
+neuralosd door stop myinst          # stop the sandbox, forget the door
+neuralosd door proxy --name old-sandbox --port 8931
+                                    # fallback relay for sandboxes created
+                                    # WITHOUT a native forward (one relay
+                                    # process per connection; fine for Q&A)
+```
+
+**Sibling calls (VM -> VM) are not wired in this release.** Each microVM sits
+in its own network namespace and cannot address a sibling's inner port. The
+design: a small resident listener in each VM on a fixed intra-fleet port, with
+sibling calls relayed THROUGH THE HOST (the only namespace that can see every
+door). Not gold-plated until someone actually needs it.
+
 ### The three outcomes: answer, escalate, refuse
 
 The router no longer answers whatever scores highest. Every question lands in

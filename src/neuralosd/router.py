@@ -155,20 +155,38 @@ class ArgOutOfRange(Exception):
             f"widen the argument's min/max to accept it")
 
 
+def _strip_plural(tokens):
+    """'clinics' -> 'clinic'. Scoring is exact-token, so a plural question
+    word gave the RIGHT probe zero overlap while a generic 'how many' prefix
+    scored full marks - the router then answered from the wrong probe and the
+    gate could only refuse. Normalising plurals here applies everywhere the
+    tokens are compared (scoring, coverage, ambiguity)."""
+    return {t[:-1] if len(t) > 3 and t.endswith("s") else t for t in tokens}
+
+
 def tokens(text):
-    return set(re.findall(r"[a-z0-9_]+", str(text).lower())) - STOP
+    return _strip_plural(set(re.findall(r"[a-z0-9_]+", str(text).lower())) - STOP)
 
 
 def score_probe(meta: ProbeMeta, q_tokens):
     # The BEST single trigger match dominates, so a probe with one exact
     # phrase beats a probe with many partially-overlapping triggers.
     # (e.g. "how many rows" -> row_count, not list_rows.)
-    overlaps = [len(q_tokens & tokens(trig)) for trig in meta.triggers]
+    trig_tokens = [tokens(trig) for trig in meta.triggers]
+    overlaps = [len(q_tokens & tt) for tt in trig_tokens]
     best = max(overlaps, default=0)
     s = 4.0 * best
     s += 1.0 * sum(overlaps)                 # small bonus for breadth
     s += 1.0 * len(q_tokens & tokens(meta.name.replace("_", " ")))
     s += 0.3 * len(q_tokens & tokens(meta.description))
+    # EXACT PHRASE bonus: a trigger the question fully covers. Plural
+    # normalisation made token overlaps coarse - "top genres" now matches a
+    # probe merely mentioning "genre" as strongly as the probe triggered by
+    # the phrase "top genres". A fully-covered trigger is the strongest lexical
+    # evidence there is, so it is rewarded in proportion to its specificity.
+    covered = [len(tt) for tt in trig_tokens if tt and tt <= q_tokens]
+    if covered:
+        s += 5.0 * max(covered)
     return s
 
 
@@ -537,9 +555,17 @@ class Router:
         domain = {t for t in qt - GENERIC_INTENT if not t.isdigit()}
         domain = domain or (qt - GENERIC_INTENT) or qt
 
+        def _plural_insensitive(tokens):
+            # "clinics" must count as knowing "clinic": a question in the
+            # plural should not fail a probe that stores the singular.
+            return {t[:-1] if len(t) > 3 and t.endswith("s") else t
+                    for t in tokens}
+
         def cover(name):
-            return (len(domain & self._vocab.get(name, frozenset()))
-                    / max(1, len(domain)))
+            d = _plural_insensitive(domain)
+            return (len(d & _plural_insensitive(
+                        self._vocab.get(name, frozenset())))
+                    / max(1, len(d)))
 
         # A domain noun NO probe in the menu knows means the subject itself is
         # out of scope - refusing is correct no matter which probe scored top.
@@ -912,10 +938,11 @@ class Router:
 # merely shares vocabulary.
 ARG_MATCH_BONUS = 3.0
 
-# Per named-but-ignored filter value. Kept above the per-trigger weight (4.0)
-# so that ignoring ONE word a candidate could have consumed is enough to lose
-# to a probe that consumes it: 17.6 - 5.0 < 9.6 + 2*3.0.
-UNCONSUMED_PENALTY = 5.0
+# Per named-but-ignored filter value. Must outweigh BOTH the per-trigger
+# weight (4.0) AND the exact-phrase bonus (5.0 x trigger length): "total
+# revenue by region" contains the exact phrase "total revenue", and the flat
+# total must still lose to the breakdown that consumes "region".
+UNCONSUMED_PENALTY = 8.0
 
 
 def _args_seen(kwargs, question: str) -> int:

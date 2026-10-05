@@ -43,6 +43,12 @@ def main():
     p_deploy.add_argument("--backend", choices=["boxlite", "msb"], default="boxlite")
     p_deploy.add_argument("--port", type=int, default=8877)
     p_deploy.add_argument("--packages", default="pydantic")
+    p_deploy.add_argument("--bind", default="127.0.0.1",
+                          help="host bind address for the forwarded door")
+    p_deploy.add_argument("--force", action="store_true",
+                          help="remove and redeploy an existing sandbox")
+    p_deploy.add_argument("--index-url", default=None,
+                          help="extra pip index for the in-sandbox install")
 
     # ask
     p_ask = sub.add_parser("ask", help="Ask a question")
@@ -145,6 +151,22 @@ def main():
                            "less safe)")
     p_rs.add_argument("--timeout", type=float, default=240.0)
 
+    # door
+    p_door = sub.add_parser(
+        "door", help="Manage deployed instance doors (host -> sandbox)")
+    door_sub = p_door.add_subparsers(dest="door_cmd")
+    p_dl = door_sub.add_parser("list", help="List registered doors")
+    p_dl.add_argument("--json", action="store_true")
+    p_ds = door_sub.add_parser("stop", help="Stop a door's sandbox and forget it")
+    p_ds.add_argument("name")
+    p_dp = door_sub.add_parser(
+        "proxy", help="Fallback relay for sandboxes created WITHOUT a native "
+                      "forward (msb forwards are create-time only)")
+    p_dp.add_argument("--name", required=True, help="sandbox name")
+    p_dp.add_argument("--port", type=int, required=True, help="host port")
+    p_dp.add_argument("--target", type=int, help="VM port (default: same)")
+    p_dp.add_argument("--host", default="127.0.0.1")
+
     # scrub
     p_scrub = sub.add_parser(
         "scrub", help="Sanitize cache + audit records already on disk")
@@ -208,6 +230,9 @@ def main():
     elif a.command == "scrub":
         from ._cmd import scrub
         raise SystemExit(scrub.run(a))
+    elif a.command == "door":
+        from ._cmd import door
+        raise SystemExit(door.run(a))
     elif a.command == "reason":
         from ._cmd import reason
         raise SystemExit(reason.run(a))

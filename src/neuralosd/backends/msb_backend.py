@@ -71,10 +71,26 @@ class MSBBackend:
                               capture_output=True, text=True, timeout=timeout)
 
     def create(self, name: str, image: str = "python:3.12-slim",
-               cpus: int = 1, memory: str = "1G", **kwargs):
-        r = self._run(["create", "--name", name, "-c", str(cpus),
-                       "-m", memory, image])
+               cpus: int = 1, memory: str = "1G", ports=None, **kwargs):
+        """Create a sandbox. `ports` is a list of (bind, host, guest) tuples
+        forwarded natively by msb at CREATE time only - `msb modify` cannot add
+        forwards later, so a port change means recreating the sandbox."""
+        args = ["create", "--name", name, "-c", str(cpus), "-m", memory]
+        for bind, host, guest in (ports or []):
+            args += ["-p", f"{bind}:{host}:{guest}"]
+        args.append(image)
+        r = self._run(args)
         return {"exit": r.returncode, "stdout": r.stdout[-500:]}
+
+    def cp(self, host_path: str, name: str, vm_path: str):
+        """Copy a host file into the sandbox. The parent directory must exist
+        (`deploy` mkdir -p's it first) - msb cp does not create parents."""
+        r = self._run(["cp", host_path, f"{name}:{vm_path}"], timeout=300)
+        return {"exit": r.returncode, "stdout": r.stdout[-500:],
+                "stderr": r.stderr[-500:]}
+
+    def ping(self, name: str):
+        return self._run(["ping", name], timeout=30).returncode
 
     def start(self, name: str):
         return self._run(["start", name]).returncode
