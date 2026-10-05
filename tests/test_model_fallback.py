@@ -142,11 +142,16 @@ def test_no_fallback_and_unextractable_args_says_so(tmp_path):
     assert "no model fallback" in str(e.value)
 
 
-def test_model_returning_nothing_raises_no_results(tmp_path):
+def test_model_returning_nothing_is_an_honest_abstention(tmp_path):
+    """A fallback that returns nothing DECLINED. Surfacing that as a refusal
+    with model_abstained keeps the no-guessing contract one layer up."""
     inst = _inst(tmp_path, lambda q, metas: None)
     with pytest.raises(NoResults) as e:
         inst.ask("give me a quick briefing")
-    assert "no results produced" in str(e.value)
+    env = e.value.envelope
+    assert env["refusal_reason"] == "model_abstained"
+    assert env["results"] is None
+    assert "abstained" in str(e.value)
 
 
 def test_model_failure_is_not_cached(tmp_path):

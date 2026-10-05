@@ -73,6 +73,7 @@ GENERIC_INTENT = frozenset("""
     how many much show list give tell me find get what which who where when
     top best most least first last sample example preview all any
     are is there exist exists please number status break down
+    some few several couple
 """.split())
 
 # Status and time QUALIFIERS. If the question carries one and the winning
@@ -80,6 +81,17 @@ GENERIC_INTENT = frozenset("""
 # work orders are blocked" answered with an open count is a wrong answer that
 # looks right. Checked against the winner's STRONG vocabulary only: a
 # description that merely mentions "closed" is not a closed-filter.
+# Imperative ACTION verbs. neuralosd is read-only: it cannot play, erase,
+# delete or execute anything. When a question OPENS with one of these and no
+# probe claims the verb, the honest answer is "that is an action, not a
+# question I can answer" - not the nearest data that happens to match. Checked
+# on the FIRST word only (imperative form) to keep the false-refusal surface
+# minimal; the verb must also be unknown to every probe, so a probe named
+# play_logs would still answer play-related questions.
+ACTION_VERBS = ("play", "erase", "delete", "remove", "drop", "wipe", "purge",
+                "send", "execute", "restart", "shutdown", "kill", "exploit",
+                "deploy", "cancel")
+
 QUALIFIERS = ("blocked", "overdue", "rejected", "closed", "resolved",
               "pending", "escalated", "cancelled", "archived", "on hold",
               "last week", "last month", "last year", "this week",
@@ -497,12 +509,29 @@ class Router:
         if not chosen:
             return None                      # nothing executable; handled upstream
         meta, score, kwargs = chosen
+
+        # An imperative ACTION is not a question. This sits BEFORE the
+        # entity bypass on purpose: "play the rock music" extracts genre=Rock
+        # cleanly, and the extracted enum is strong evidence of SUBJECT - but
+        # the user asked for an action no probe can perform, and answering
+        # with the nearest data would be a confident wrong answer about what
+        # the system just did.
+        first = normalized.split()[:1]
+        if first and first[0] in ACTION_VERBS \
+                and first[0] not in self._menu_vocab:
+            return "action_intent"
+
         if _args_seen(kwargs, normalized) > 0:
             return None                      # explicit entity reference
         per_probe = meta.conf_gate if meta.conf_gate else 0.0
         if max(self.floor, per_probe) > 0 and score < max(self.floor, per_probe):
             return "below_floor"
 
+        for qual in QUALIFIERS:
+            if qual in normalized.lower():
+                head = qual.split()[0]
+                if head not in self._vocab.get(meta.name, frozenset()):
+                    return "dropped_filter"
         qt = tokens(normalized)
         # Numbers are entity references ("user 4"), not subjects.
         domain = {t for t in qt - GENERIC_INTENT if not t.isdigit()}
@@ -530,12 +559,6 @@ class Router:
         if self.min_question_coverage > 0 and cover(meta.name) < \
                 self.min_question_coverage:
             return "low_coverage"
-        for qual in QUALIFIERS:
-            if qual in normalized.lower():
-                head = qual.split()[0]
-                if (head not in self._vocab.get(meta.name, frozenset())
-                        and qual not in normalized.lower().split()):
-                    return "dropped_filter"
         if self.refuse_disjunction:
             q = normalized.lower()
             comparative = re.search(
@@ -823,6 +846,25 @@ class Router:
             # tool tag the bridge attaches rather than the top-ranked name.
             used_probe = (_tool_of(results)
                           or (retrieved[0][0].name if retrieved else None))
+            if _model_abstained(results):
+                # The fallback looked at the menu and declined - "none of
+                # these". That is an HONEST answer and must be surfaced as one:
+                # converting it into a refusal keeps the no-guessing contract
+                # one layer up, instead of answering whatever ranked first.
+                abstain_env = {"ask_id": ask_id, "ts": time.time(),
+                               "question": question, "normalized": normalized,
+                               "probe": None,
+                               "menu_version": self.menu_version,
+                               "mode": "refused",
+                               "error": "the model fallback examined the menu "
+                                        "and abstained - none of the "
+                                        "available probes answer this",
+                               "results": None,
+                               "refusal_reason": "model_abstained",
+                               "scores": [{"probe": m.name, "score": round(s2, 3)}
+                                          for m, s2 in (retrieved or [])[:3]]}
+                self._audit(abstain_env)
+                raise NoResults(abstain_env)
 
         if self.pii_mask:
             results = mask_pii(results)
@@ -884,6 +926,31 @@ def _args_seen(kwargs, question: str) -> int:
         if isinstance(value, str) and value and value.lower() in q:
             n += 1
     return n
+
+
+ABSTAIN_MARKERS = ("none_of_these", "none of these", "abstain", "no_probe",
+                   "no_match", "no match")
+
+
+def _model_abstained(results) -> bool:
+    """Did the model fallback DECLINE rather than answer?
+
+    The 121M selector can abstain (needle's none_of_these) and any custom
+    fallback can signal the same by returning None/empty or a result tagged
+    with an abstain marker. Treating a decline as an answer would be the
+    confident-wrong failure one layer up.
+    """
+    if results in (None, [], {}):
+        return True
+    if isinstance(results, list):
+        return any(_model_abstained(r) for r in results)
+    if isinstance(results, dict):
+        tool = str(results.get("_tool", "")).lower()
+        if any(marker in tool for marker in ABSTAIN_MARKERS):
+            return True
+        err = str(results.get("error", "")).lower()
+        return any(marker in err for marker in ABSTAIN_MARKERS)
+    return False
 
 
 def _tool_of(results):

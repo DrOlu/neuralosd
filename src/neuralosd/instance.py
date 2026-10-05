@@ -55,6 +55,7 @@ class Instance:
         run. Returns a summary dict; exit code is the caller's decision.
         """
         correct = refused_ok = answered_trap = wrong = refused_wrong = 0
+        skipped = 0
         total = len(golden.get("items", []))
         for item in golden.get("items", []):
             q = item.get("q")
@@ -82,7 +83,16 @@ class Instance:
                           f"  {q!r} -> {probe} [{refusal_reason}]")
             else:
                 expect = item.get("expect_probe")
-                ok = ((expect in (None, probe)) and answered)
+                if expect is None:
+                    # THE SCHEMA TRAP: an item with no expected probe used to
+                    # auto-pass on ANY answer, so a trap encoded as
+                    # expect_probe:null silently passed everything. A case that
+                    # declares no expectation asserts nothing and is skipped -
+                    # write it as expect_refusal instead.
+                    skipped += 1
+                    print(f"SKIP  {q!r} (no expect_probe / expect_refusal)")
+                    continue
+                ok = (expect == probe) and answered
                 if ok:
                     correct += 1
                     print(f"PASS  {q!r} -> {probe}")
@@ -92,9 +102,12 @@ class Instance:
                     print(f"FAIL  {q!r} -> {probe} (expected {expect})")
         summary = {"total": total, "correct": correct, "refused_ok": refused_ok,
                    "answered_traps": answered_trap, "wrong": wrong,
-                   "refused_when_should_answer": refused_wrong}
-        print(f"golden: {correct + refused_ok}/{total} PASS "
-              f"({wrong} wrong, {answered_trap} trap(s) confidently answered)")
+                   "refused_when_should_answer": refused_wrong,
+                   "skipped": skipped}
+        graded = correct + refused_ok + wrong
+        print(f"golden: {correct + refused_ok}/{graded} PASS "
+              f"({wrong} wrong, {answered_trap} trap(s) confidently answered, "
+              f"{skipped} skipped)")
         return summary
 
     def openapi(self, title=None):

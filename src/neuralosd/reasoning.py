@@ -174,6 +174,33 @@ class OllamaMapper:
         except Exception:
             return False
 
+    def _post(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """POST to Ollama. One automatic retry without `think` for models whose
+        template rejects the flag (HTTP 400)."""
+        req = urllib.request.Request(
+            f"{self.url}/api/chat", data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                return json.loads(r.read().decode())
+        except urllib.error.HTTPError as e:
+            if e.code == 400 and "think" in payload:
+                # Some templates reject the flag outright. The flag is an
+                # optimisation, not a requirement - retry without it.
+                payload.pop("think", None)
+                req = urllib.request.Request(
+                    f"{self.url}/api/chat", data=json.dumps(payload).encode(),
+                    headers={"Content-Type": "application/json"})
+                try:
+                    with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                        return json.loads(r.read().decode())
+                except urllib.error.URLError as e2:
+                    raise MapperError(
+                        f"cannot reach Ollama at {self.url}: {e2}") from e2
+            raise MapperError(f"Ollama returned HTTP {e.code}") from e
+        except urllib.error.URLError as e:
+            raise MapperError(f"cannot reach Ollama at {self.url}: {e}") from e
+
     def map_ids(self, question: str, served: str,
                 inventory: List[Quantity]) -> Dict[str, Any]:
         listing = "\n".join(
@@ -181,22 +208,22 @@ class OllamaMapper:
             for q in inventory)
         prompt = (PROMPT_HEAD + question + "\n\nQUESTION WAS ANSWERED WITH: "
                   + str(served) + "\n\nAVAILABLE QUANTITIES:\n" + listing + "\n")
-        body = json.dumps({
+        payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
             "format": "json",
             "options": {"temperature": 0, "seed": 42},
-        }).encode()
-        req = urllib.request.Request(
-            f"{self.url}/api/chat", data=body,
-            headers={"Content-Type": "application/json"})
+        }
+        # Default: no thinking. Qwen3.5-family models think by default in
+        # Ollama, which tripled mapper latency (130.8s vs materially less on a
+        # live run) and, under a constrained token budget, silently consumed
+        # num_predict and returned EMPTY content - a failure that looks like
+        # nothing. Set NEURALOSD_THINK=1 to allow it.
+        if os.environ.get("NEURALOSD_THINK", "0") != "1":
+            payload["think"] = False
         t0 = time.time()
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as r:
-                out = json.loads(r.read().decode())
-        except urllib.error.URLError as e:
-            raise MapperError(f"cannot reach Ollama at {self.url}: {e}") from e
+        out = self._post(payload)
         self.last_latency = time.time() - t0
         return parse_pick(out.get("message", {}).get("content", ""))
 

@@ -191,7 +191,35 @@ def run(a):
         print(json.dumps(p.to_json(), indent=2, ensure_ascii=False))
         return 0
 
-    # ── 7. snapshot BEFORE, install, snapshot AFTER, compare ───────────────
+    # ── 7. replay the SHIPPED banks before anything is written ─────────────
+    # golden.json and traps.json are behavioural contracts. A metric that
+    # answers a trap must not be installed, whatever its other checks said.
+    bank_problems = []
+    banks = {}
+    for name in ("golden.json", "traps.json"):
+        bp = os.path.join(instance_dir, name)
+        if os.path.isfile(bp):
+            try:
+                with open(bp, encoding="utf-8") as fh:
+                    banks[name] = json.load(fh)
+            except ValueError:
+                print(f"warning: {name} is not valid JSON — skipping its replay",
+                      file=sys.stderr)
+    if banks:
+        print(f"\n── replaying shipped banks: {', '.join(banks)} ──")
+        for name, bank in banks.items():
+            summary = inst.golden_run(bank)
+            if summary["answered_traps"] or summary["wrong"]:
+                bank_problems.append((name, summary))
+    if bank_problems:
+        for name, summary in bank_problems:
+            print(f"\n✗ {name}: {summary['answered_traps']} trap(s) "
+                  f"confidently answered, {summary['wrong']} wrong routing(s)")
+        print("\n✗ NOT INSTALLED — a behavioural bank regressed. Fix the "
+              "triggers or remove the conflicting bank entries first.")
+        return 4
+
+    # ── 7b. snapshot BEFORE, install, snapshot AFTER, compare ─────────────
     # The baseline is this router's OWN behaviour one moment ago. Comparing
     # against another engine's answers would report its pre-existing
     # disagreements as damage done by the new metric — the first run of this

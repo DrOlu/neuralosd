@@ -27,6 +27,7 @@ def run(a):
 
     _write_bridge(out, src, info)
     _write_probes(out, a.name, info)
+    _write_banks(out, info)
     _write_readme(out, a.name, src, info)
 
     n = len(info.get("columns", []))
@@ -35,8 +36,64 @@ def run(a):
     print(f"  probes.py     — {n} column(s) profiled")
     if info.get("sheets"):
         print(f"  sheets        — {', '.join(info['sheets'])}")
+    print("  golden.json   — positive bank (fill from verified sessions)")
+    print("  traps.json    — refusal bank (what this instance must NOT answer)")
     print("  README.md     — next steps")
     print(f"\ntry:  neuralosd ask --instance-dir {out} \"how many rows\"")
+
+
+def _write_banks(out, info):
+    """Ship behavioural banks with EVERY instance.
+
+    golden.json: positive cases, pre-filled with the probes whose routing is
+    unambiguous at generation time. Fill the rest from verified sessions.
+
+    traps.json: refusal cases. A generated instance cannot know its real traps,
+    but it CAN know that a nonsense question must refuse - and a bank that
+    starts empty stays empty, so two safe smoke traps ship in it.
+
+    These banks are what `neuralosd calibrate` fits thresholds from and what a
+    menu-changing install replays before it will complete.
+    """
+    probe_src = ""
+    probes_py = os.path.join(out, "probes.py")
+    if os.path.isfile(probes_py):
+        with open(probes_py, encoding="utf-8") as fh:
+            probe_src = fh.read()
+
+    positives = []
+    if "def row_count" in probe_src:
+        positives.append({"q": "how many rows", "expect_probe": "row_count"})
+    if "def list_rows" in probe_src:
+        positives.append({"q": "show me some rows", "expect_probe": "list_rows"})
+
+    golden = {
+        "_comment": "Positive bank. Every item must route to expect_probe. "
+                    "Fill from verified sessions and run: "
+                    "neuralosd golden --dir .",
+        "items": positives,
+    }
+    with open(os.path.join(out, "golden.json"), "w", encoding="utf-8") as fh:
+        json.dump(golden, fh, indent=2, ensure_ascii=False)
+        fh.write("\n")
+
+    traps = {
+        "_comment": "Refusal bank. A trap PASSES only when the router refuses. "
+                    "A confident answer to a trap is the worst failure this "
+                    "system has. Add one trap per capability you deliberately "
+                    "did NOT build.",
+        "items": [
+            {"q": "xyzzy plugh", "expect_refusal": True,
+             "refusal_reason": "no_probe_matches",
+             "note": "nonsense must never route"},
+            {"q": "how many rows are blocked", "expect_refusal": True,
+             "refusal_reason": "dropped_filter",
+             "note": "'blocked' is a status this instance cannot filter on"},
+        ],
+    }
+    with open(os.path.join(out, "traps.json"), "w", encoding="utf-8") as fh:
+        json.dump(traps, fh, indent=2, ensure_ascii=False)
+        fh.write("\n")
 
 
 def _profile_xlsx(path):

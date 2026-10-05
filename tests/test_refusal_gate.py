@@ -250,3 +250,35 @@ def test_chinook_refuses_the_worklog_question(inst=None):
     assert env["refusal_reason"] in ("no_probe_matches", "low_coverage",
                                      "ambiguous")
     assert env["results"] is None
+
+
+# ── imperative action verbs: the read-only contract ────────────────────────
+
+def test_an_imperative_action_unknown_to_the_menu_refuses(tmp_path):
+    """'play the rock music' extracts genre=Rock cleanly - but the user asked
+    for an ACTION no probe performs. The extracted enum is evidence of subject,
+    not of permission, so the refusal sits before the entity bypass."""
+    tracks = _probe("tracks_by_genre", ["tracks by genre", "rock music"],
+                    description="Tracks in one genre",
+                    args={"genre": {"type": "enum",
+                                    "values": ["Rock", "Jazz", "Metal"]}})
+    r = _router(tmp_path, [tracks])
+    with pytest.raises(NoResults) as e:
+        r.ask("play the rock music", use_cache=False)
+    assert e.value.envelope["refusal_reason"] == "action_intent"
+
+
+def test_an_action_verb_a_probe_claims_still_answers(tmp_path):
+    player = _probe("play_logs", ["play", "play logs"], description="play logs")
+    r = _router(tmp_path, [player])
+    assert r.ask("play the logs", use_cache=False)["probe"] == "play_logs"
+
+
+def test_the_action_check_is_first_word_only(tmp_path):
+    """'get the played tracks' - a mid-sentence action word must not refuse a
+    legitimate data question."""
+    played = _probe("played_tracks", ["played tracks", "played"],
+                    description="played tracks")
+    r = _router(tmp_path, [played])
+    assert r.ask("get the played tracks", use_cache=False)["probe"] == \
+        "played_tracks"
