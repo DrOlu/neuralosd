@@ -57,6 +57,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
 
       - name: Wait for the release to appear on PyPI
+        shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           echo "waiting for neuralosd==$VERSION on PyPI ..."
