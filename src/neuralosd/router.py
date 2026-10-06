@@ -938,11 +938,12 @@ class Router:
 # merely shares vocabulary.
 ARG_MATCH_BONUS = 3.0
 
-# Per named-but-ignored filter value. Must outweigh BOTH the per-trigger
-# weight (4.0) AND the exact-phrase bonus (5.0 x trigger length): "total
-# revenue by region" contains the exact phrase "total revenue", and the flat
-# total must still lose to the breakdown that consumes "region".
-UNCONSUMED_PENALTY = 8.0
+# Per named-but-ignored filter value. Must outweigh the per-trigger weight
+# (4.0), the exact-phrase bonus (5.0 x the covered trigger's length - the
+# question "total revenue by region" contains the exact phrase "total
+# revenue"), AND the arg-match bonus: consuming "region" must beat phrasing.
+# 27.6 + 6 - 12 < 13.6 + 6 + 12.
+UNCONSUMED_PENALTY = 12.0
 
 
 def _args_seen(kwargs, question: str) -> int:
