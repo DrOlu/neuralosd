@@ -56,6 +56,19 @@ jobs:
 
       - uses: astral-sh/setup-uv@v5
 
+      - name: Wait for the release to appear on PyPI
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "waiting for neuralosd==$VERSION on PyPI ..."
+          for i in $(seq 1 40); do
+            if curl -sf "https://pypi.org/pypi/neuralosd/json" | grep -q "\"version\": \"$VERSION\""; then
+              echo "  visible on PyPI after ${i}0s"; exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::neuralosd==$VERSION never appeared on PyPI (publish workflow lag or failure)"
+          exit 1
+
       - name: Install base dependencies
         run: |
           pip install neuralos pydantic pymysql nuitka pytest openpyxl
