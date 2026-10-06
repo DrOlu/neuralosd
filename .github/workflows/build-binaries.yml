@@ -61,7 +61,7 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           echo "waiting for neuralosd==$VERSION on PyPI ..."
           for i in $(seq 1 40); do
-            if curl -sf "https://pypi.org/pypi/neuralosd/json" | grep -q "\"version\": \"$VERSION\""; then
+            if curl -sf "https://pypi.org/pypi/neuralosd/json" | grep -q "\"version\": *\"$VERSION\""; then
               echo "  visible on PyPI after ${i}0s"; exit 0
             fi
             sleep 10
