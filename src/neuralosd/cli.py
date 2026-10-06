@@ -166,6 +166,8 @@ def main():
     p_dp.add_argument("--port", type=int, required=True, help="host port")
     p_dp.add_argument("--target", type=int, help="VM port (default: same)")
     p_dp.add_argument("--host", default="127.0.0.1")
+    p_dp.add_argument("--backend", default="msb", choices=["msb", "boxlite"],
+                      help="which exec channel the relay drives")
 
     # scrub
     p_scrub = sub.add_parser(

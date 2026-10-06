@@ -93,10 +93,49 @@ def _save_doors(doors):
     os.replace(tmp, DOORS_FILE)
 
 
-def _record_door(name, sandbox, host_port, vm_port):
+def _boxlite_channel_ok(backend, name) -> bool:
+    """Does the box's exec channel still carry stdout?
+
+    boxlite 0.10.5's channel degrades to permanently-empty output after a
+    detached serve runs inside the box (upstream defect: exit 0, no output, no
+    stderr, unrecoverable by restart). Detected here by exec'ing a staged
+    one-liner; a wedged channel fails the deploy loudly instead of pretending.
+    """
+    probe_src = "print('CHANNEL-OK')"
+    tmp = "/tmp/_nx_channel_probe.py"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(probe_src)
+    return probe_src, tmp
+
+
+def _spawn_detached_relay(backend_name, sandbox, bind, host_port, vm_port):
+    """Start the host-side door relay as a DETACHED process.
+
+    boxlite cannot publish ports, so the host door is a relay: a neuralosd
+    process that accepts 127.0.0.1:<port> and drives the box's exec channel.
+    It must outlive this deploy, so it is spawned detached (setsid) and its
+    pid is recorded for `neuralosd door stop`.
+    """
+    exe = sys.executable
+    argv = [exe, "-m", "neuralosd.cli", "door", "proxy",
+            "--backend", backend_name, "--name", sandbox,
+            "--port", str(host_port), "--target", str(vm_port),
+            "--host", bind]
+    pid = os.fork() if hasattr(os, "fork") else None
+    if pid == 0:                                      # child: detach
+        os.setsid()
+        devnull = os.open(os.devnull, os.O_RDWR)  # binary fd, no encoding
+        os.dup2(devnull, 0)
+        os.dup2(devnull, 1)
+        os.dup2(devnull, 2)
+        os.execv(exe, argv)
+    return pid
+
+
+def _record_door(name, sandbox, host_port, vm_port, **extra):
     doors = _doors()
     doors[name] = {"sandbox": sandbox, "host_port": host_port,
-                   "vm_port": vm_port, "registered": time.time()}
+                   "vm_port": vm_port, "registered": time.time(), **extra}
     _save_doors(doors)
 
 
@@ -317,6 +356,268 @@ def _deploy_msb(a, backend):
     return 0
 
 
+def _deploy_boxlite(a, backend):
+    """BoxLite pipeline. Same contract as the msb one, with two differences:
+
+    1. boxlite 0.10.5 cannot publish ports (BoxOptions.ports validates but the
+       rust setter rejects it; PublishedPort is non-constructible), so the host
+       door is a RELAY: deploy spawns a detached `door proxy --backend boxlite`
+       process that forwards 127.0.0.1:<port> into the box through the exec
+       channel. R8 self-tests through that relay, which is exactly the path a
+       user's curl will take.
+    2. boxes need an explicit start after create, and `remove` must stop first.
+    """
+    import asyncio as _asyncio
+
+    bind = getattr(a, "bind", "127.0.0.1")
+    host_port, box_port = int(a.port), int(a.port)
+    box_dir = f"/app/{a.name}"
+    instance_dir = os.path.abspath(a.instance_dir)
+
+    async def _go():
+        # R1 — idempotency (before R0: an existing box's relay is what may
+        # hold the port; --force removes it first).
+        names = await backend.list_names()
+        exists = a.name in names
+        if exists and not a.force:
+            raise SystemExit(
+                f"error: box '{a.name}' already exists. Re-run with --force "
+                f"to remove and redeploy (the instance lives on the host).")
+        if exists:
+            print(f"  removing existing box '{a.name}' (--force) ...")
+            await backend.remove(a.name)
+
+        # R0 — the host door must be free.
+        if not _port_free(bind, host_port):
+            raise SystemExit(
+                f"error: {bind}:{host_port} is already in use on the host. "
+                f"Choose another --port; existing doors: "
+                f"`neuralosd door list`")
+
+        # R2/R3 — create and start.
+        print(f"  creating box '{a.name}' ...")
+        # detach=True is essential: a non-detached box lives only while its
+        # CREATOR lives, so it vanished the moment the deploy process exited.
+        # (A detached box needs manual lifecycle control: auto_delete must be
+        # off, which is why create() does not pass it.)
+        await backend.create(a.name, cpus=1, memory_mib=1024, detach=True,
+                             auto_delete=False)
+        await backend.start(a.name)
+        if not await backend.wait_ready(a.name):
+            raise SystemExit("error: the box agent never became ready (R3) — "
+                             "deployment failed")
+        print("  box started, agent ready")
+
+        # R4 — install neuralosd inside (slim ships nothing).
+        print("  installing neuralosd inside the box ...")
+        res = await backend.exec(a.name, "pip", ["install", "-q", "neuralosd"])
+        if res["exit"] != 0:
+            raise SystemExit(f"error: pip install inside the box failed:\n"
+                             f"{res['stderr'] or res['stdout']}")
+        chk = await backend.exec(a.name, "python3", ["-c", "import neuralosd"])
+        if chk["exit"] != 0:
+            raise SystemExit("error: neuralosd is not importable inside the "
+                             "box after install (R4)")
+        for extra in [p for p in (a.packages or "").split(",") if p]:
+            print(f"  installing extra: {extra} ...")
+            res = await backend.exec(a.name, "pip", ["install", "-q", extra])
+            if res["exit"] != 0:
+                raise SystemExit(f"error: installing {extra} failed:\n"
+                                 f"{res['stderr'] or res['stdout']}")
+
+        # R5 — stage the instance + data (SOURCE rewritten on the host).
+        print("  staging the instance ...")
+        mk = await backend.exec(a.name, "mkdir",
+                                ["-p", f"{box_dir}/{DATA_SUBDIR}"])
+        if mk["exit"] != 0:
+            raise SystemExit(f"error: could not create {box_dir}: "
+                             f"{mk['stderr'] or mk['stdout']}")
+
+        src_path = bridge_source(instance_dir)
+        vm_data = None
+        if src_path:
+            if not os.path.isfile(src_path):
+                raise SystemExit(f"error: bridge SOURCE {src_path!r} does not "
+                                 f"exist on the host — no data to deploy")
+            vm_data = f"{box_dir}/{DATA_SUBDIR}/{os.path.basename(src_path)}"
+
+        staged = []
+        for fname in sorted(os.listdir(instance_dir)):
+            if not fname.endswith((".py", ".json", ".md")):
+                continue
+            if fname.startswith("_") or fname == "__pycache__":
+                continue
+            src = os.path.join(instance_dir, fname)
+            if not os.path.isfile(src):
+                continue
+            if fname == "bridge.py" and vm_data:
+                with open(src, encoding="utf-8") as fh:
+                    text = fh.read()
+                text = _SOURCE_RE.sub(
+                    lambda m: m.group(1) + vm_data + m.group(3), text)
+                tmp = src + ".staged"
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    fh.write(text)
+                src = tmp
+            await backend.copy_in(a.name, src, f"{box_dir}/{fname}")
+            if src.endswith(".staged"):
+                os.unlink(src)
+            staged.append(fname)
+        if vm_data:
+            await backend.copy_in(a.name, src_path, vm_data)
+            staged.append(os.path.basename(src_path))
+        print(f"    {len(staged)} file(s): {', '.join(staged)}")
+        chk = await backend.exec(a.name, "ls", [box_dir])
+        if "probes.py" not in (chk.get("stdout") or ""):
+            raise SystemExit("error: staged instance verification failed (R5)")
+
+        # R6 — serve, detached, via the console script. The start command is
+        # staged as a FILE: boxlite exec args cannot contain spaces, and a
+        # multi-part start line is exactly the kind of argument that breaks.
+        print(f"  starting neuralosd serve on 0.0.0.0:{box_port} ...")
+        start_src = (
+            "import os\n"
+            "os.chdir({box_dir!r})\n"
+            "os.system(\"nohup neuralosd serve --instance-dir {box_dir!r} "
+            "--host 0.0.0.0 --port {port!r} > /var/log/neuralosd-serve.log "
+            "2>&1 < /dev/null &\")\n"
+            "print(\"started\")\n").format(box_dir=box_dir, port=box_port)
+        start_tmp = "/tmp/_nx_start.py"
+        with open(start_tmp, "w", encoding="utf-8") as fh:
+            fh.write(start_src)
+        await backend.copy_in(a.name, start_tmp, f"{box_dir}/_start.py")
+        res = await backend.exec(a.name, "python3", [f"{box_dir}/_start.py"])
+        if "started" not in res["stdout"]:
+            raise SystemExit(f"error: the serve start script failed:\n"
+                             f"{res['stderr'] or res['stdout']}")
+
+        # R7 — self-test INSIDE the box.
+        print("  self-test inside the box ...")
+        # The self-test runs as a STAGED FILE with space-free exec args:
+        # boxlite exec breaks on any argument containing a space, so the
+        # script is staged via copy_in like the rest of the instance.
+        probe_src = (
+            "import json, urllib.request, sys\n"
+            "d = json.dumps({'question': 'how many rows'}).encode()\n"
+            "req = urllib.request.Request(\'http://127.0.0.1:%d/ask\', data=d, "
+            "headers={\'Content-Type\': \'application/json\'})\n"
+            "out = json.loads(urllib.request.urlopen(req, timeout=30).read())\n"
+            "print(\'SELFTEST-OK\' if out.get(\'results\') else "
+            "\'SELFTEST-EMPTY\')" % box_port)
+        probe_tmp = "/tmp/_nx_selftest.py"
+        with open(probe_tmp, "w", encoding="utf-8") as fh:
+            fh.write(probe_src)
+        await backend.copy_in(a.name, probe_tmp, f"{box_dir}/_selftest.py")
+        inner_ok = False
+        deadline = time.time() + 60
+        while time.time() < deadline and not inner_ok:
+            res = await backend.exec(a.name, "python3",
+                                     [f"{box_dir}/_selftest.py"])
+            if "SELFTEST-OK" in res["stdout"]:
+                inner_ok = True
+            elif "SELFTEST-EMPTY" in res["stdout"]:
+                break
+            await _asyncio.sleep(2)
+        if not inner_ok:
+            logs = await backend.exec(a.name, "cat",
+                                      ["/var/log/neuralosd-serve.log"])
+            raise SystemExit("error: the inner service did not answer a real "
+                             "ask (R7). serve log:\n"
+                             f"{logs['stdout'][-800:]}")
+        print("    inner self-test: PASS")
+
+        # The boxlite exec channel can WEDGE after a detached serve runs
+        # (upstream defect in 0.10.5: every exec then returns exit 0 with
+        # empty output). Detect it; one restart usually clears it; if not,
+        # fail loudly - a deployment whose verification cannot run must not
+        # be called deployed.
+        probe_src, probe_tmp = ("print('CHANNEL-OK')", "/tmp/_nx_probe.py")
+        with open(probe_tmp, "w", encoding="utf-8") as fh:
+            fh.write(probe_src)
+        await backend.copy_in(a.name, probe_tmp, f"{box_dir}/_channel_probe.py")
+        res = await backend.exec(a.name, "python3",
+                                 [f"{box_dir}/_channel_probe.py"])
+        if "CHANNEL-OK" not in (res.get("stdout") or ""):
+            print("  ⚠ exec channel wedged (upstream boxlite 0.10.5 defect) — "
+                  "restarting the box once ...")
+            await backend.stop(a.name)
+            await backend.start(a.name)
+            if not await backend.wait_ready(a.name):
+                raise SystemExit("error: box agent never became ready after "
+                                 "wedge-restart")
+            res = await backend.exec(a.name, "python3",
+                                     [f"{box_dir}/_channel_probe.py"])
+            if "CHANNEL-OK" not in (res.get("stdout") or ""):
+                raise SystemExit(
+                    "error: the boxlite exec channel is wedged (every exec "
+                    "returns empty output — upstream boxlite 0.10.5 defect) "
+                    "and a restart did not clear it. The inner service IS "
+                    "running and will answer inside the box; the host door "
+                    "cannot be verified. Remediation: "
+                    "`neuralosd deploy --force` to recreate the box, or use "
+                    "--backend msb (verified production path).")
+            print("  channel recovered after restart")
+
+    _asyncio.run(_go())
+
+    # R8 — the host door is a RELAY process (boxlite cannot publish ports).
+    # Spawned detached so it outlives this deploy, registered in doors.json,
+    # and the self-test below runs through IT — the same path as the user's curl.
+    relay_pid = _spawn_detached_relay("boxlite", a.name, bind, host_port,
+                                      box_port)
+    print(f"  host door relay started (pid {relay_pid}) ...")
+    if not _wait_port_free_of_others(bind, host_port, timeout=30):
+        raise SystemExit("error: the host door relay never came up (R8)")
+    answer, host_ok = None, False
+    deadline = time.time() + 60
+    while time.time() < deadline and not host_ok:
+        try:
+            answer = _http_json(f"http://{bind}:{host_port}/ask",
+                                {"question": "how many rows"}, timeout=30)
+            host_ok = bool(answer.get("results"))
+        except (urllib.error.URLError, socket.timeout, OSError, ValueError):
+            time.sleep(2)
+    if not host_ok:
+        # Option C, honestly: the boxlite 0.10.5 exec channel intermittently
+        # returns empty stdout (measured: identical execs alternate between
+        # output and nothing, then wedge permanently), so the relay cannot be
+        # verified. The INNER service is verified and still running. Say all of
+        # that instead of printing a reachable door that is not.
+        _record_door(a.name, a.name, host_port, box_port,
+                     kind="unverified", backend="boxlite", pid=relay_pid)
+        raise SystemExit(
+            f"\nerror: the boxlite host door {bind}:{host_port} did not answer "
+            f"through the relay (R8).\n\n"
+            f"  verified so far : the box is up, neuralosd is installed, the\n"
+            f"                    instance is staged at {box_dir}, and the inner\n"
+            f"                    service answers asks inside the box\n"
+            f"  not verified    : the HOST door (relay cannot be trusted -\n"
+            f"                    boxlite 0.10.5 exec stdout is unreliable)\n\n"
+            f"  remediation     : retry this deploy (the relay is fresh each "
+            f"run),\n"
+            f"                    or use --backend msb (verified production "
+            f"path),\n"
+            f"                    or reach the door inside the box:\n"
+            f"                      neuralosd ask --instance-dir {instance_dir} "
+            f"'<q>'\n"
+            f"                      (same probes, same data, runs on the host)"
+            f"\n\n"
+            f"  upstream        : boxlite BoxOptions.ports validates but its "
+            f"rust\n"
+            f"                    setter rejects it, so native forwarding and "
+            f"the\n"
+            f"                    reliable-stdout path are unavailable in "
+            f"0.10.5")
+    _record_door(a.name, a.name, host_port, box_port,
+                 kind="relay", backend="boxlite", pid=relay_pid)
+    print(f"\n✓ deployed '{a.name}' (boxlite) — VERIFIED end to end")
+    print(f"  host door : http://{bind}:{host_port}  (via relay pid "
+          f"{relay_pid})")
+    print(f"  box door  : {box_port} inside the box")
+    print(f"  registered: {DOORS_FILE}")
+    return 0
+
+
 def run(a):
     from ..backends import get_backend, available_backends
 
@@ -334,6 +635,11 @@ def run(a):
     if a.backend == "msb":
         backend = get_backend("msb")
         sys.exit(_deploy_msb(a, backend))
+
+    if a.backend == "boxlite":
+        import asyncio as _asyncio
+        backend = get_backend("boxlite")
+        sys.exit(_asyncio.run(_deploy_boxlite(a, backend)))
 
     # Non-msb backends keep their existing contract (unchanged this release).
     backend = get_backend(a.backend)

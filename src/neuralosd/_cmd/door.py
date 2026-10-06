@@ -76,11 +76,88 @@ def _forget(name):
         _save(doors)
 
 
+# ── the boxlite request-scoped forwarder ───────────────────────────────────
+#
+# boxlite's exec pipe has TWO verified halves: argv in, stdout out. Its stdin
+# convention is undocumented rust and does not survive introspection, so a
+# transparent byte relay is not honestly available for this backend. Instead
+# each accepted connection is treated as ONE HTTP request: read it fully,
+# run a one-shot exec inside the box that replays it against the inner door,
+# and copy the response back. Fine for Q&A; not a streaming proxy.
+#
+# MEASURED LIVE, and worse: `Boxlite.default()` takes an EXCLUSIVE lock on
+# ~/.boxlite. A long-running relay process would block neuralosd deploy, ask
+# and every other boxlite process for as long as it ran. So the LISTENER never
+# imports boxlite: each connection spawns a SHORT-LIVED child (_FORWARD_CHILD)
+# that opens the runtime, forwards the one request, and exits - the lock is
+# held only for the duration of a single request.
+
+# Runs INSIDE the box. argv[1] = base64 request. Talks to the inner door,
+# prints the response base64-encoded (text-safe through the exec channel).
+_INNER_PUMP = (
+    "import socket, sys, base64\n"
+    "raw = base64.b64decode(sys.argv[1])\n"
+    "s = socket.create_connection((\'127.0.0.1\', {port}), timeout=60)\n"
+    "s.sendall(raw)\n"
+    "s.settimeout(5)\n"
+    "resp = b\'\'\n"
+    "try:\n"
+    "    while True:\n"
+    "        c = s.recv(65536)\n"
+    "        if not c: break\n"
+    "        resp += c\n"
+    "except socket.timeout: pass\n"
+    "print(base64.b64encode(resp).decode())\n")
+
+# Runs ON THE HOST, one per connection. Opens the runtime, runs the inner
+# pump through the box's exec channel, prints the response base64-encoded.
+_FORWARD_CHILD = (
+    "import sys, base64, asyncio\n"
+    "name, req_b64, box_dir = sys.argv[1], sys.argv[2], sys.argv[3]\n"
+    "async def main():\n"
+    "    import boxlite\n"
+    "    rt = boxlite.Boxlite.default()\n"
+    "    box = await rt.get(name)\n"
+    "    # space-free argv: the staged pump file takes the b64 request\n"
+    "    ex = await box.exec(\'python3\', "
+    "[box_dir + \'/_pump.py\', req_b64], timeout_secs=120)\n"
+    "    lines = []\n"
+    "    async for line in ex.stdout():\n"
+    "        lines.append(line)\n"
+    "    await ex.wait()\n"
+    "    sys.stdout.write(\'\'.join(lines).strip())\n"
+    "asyncio.run(main())\n")
+
+
+def _forward_request(sandbox: str, vm_port: int, request: bytes) -> bytes:
+    """Forward ONE buffered HTTP request through a SHORT-LIVED child process.
+
+    The child imports boxlite, replays the request against the inner door via
+    exec, prints the response base64-encoded, and exits - releasing the
+    runtime lock. base64 in and out, because the SDK's stdout stream is text.
+    """
+    import base64 as _b64
+    req_b64 = _b64.b64encode(request).decode("ascii")
+    script = _FORWARD_CHILD.format(
+        inner=_INNER_PUMP.format(port=vm_port))
+    child = subprocess.Popen(
+        [sys.executable, "-c", script, sandbox, req_b64],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE)
+    out, err = child.communicate(timeout=180)
+    if child.returncode != 0:
+        raise RuntimeError(
+            f"forward child failed: {err.decode(errors='replace')[-200:]}")
+    return _b64.b64decode(out.strip())
+
+
 # ── the relay (Option B fallback) ──────────────────────────────────────────
 
-def _spawn_relay(msb_bin, sandbox, vm_port):
+def _spawn_relay(msb_bin, sandbox, vm_port, backend="msb"):
     """One relay process per accepted connection: host stdin/stdout <-> the
     inner port inside the VM, via `msb exec`."""
+    if backend == "boxlite":
+        return None          # request-scoped in-process forwarder, see handler
     return subprocess.Popen(
         [msb_bin, "exec", sandbox, "--", "python3", "-c",
          _RELAY_SNIPPET % vm_port],
@@ -89,7 +166,7 @@ def _spawn_relay(msb_bin, sandbox, vm_port):
 
 
 def proxy(msb_bin: str, sandbox: str, host: str, host_port: int, vm_port: int,
-          stop_flag=None):
+          stop_flag=None, backend: str = "msb"):
     """Accept host TCP connections and relay each through the exec channel.
 
     Long-running. Blocks. `stop_flag` (a threading.Event) ends the listener.
@@ -109,8 +186,33 @@ def proxy(msb_bin: str, sandbox: str, host: str, host_port: int, vm_port: int,
                 conn, _ = srv.accept()
             except socket.timeout:
                 continue
+            if backend == "boxlite":
+                # per-connection CHILD: the listener holds no boxlite, so the
+                # runtime lock is only taken for the life of one request
+                def handle_boxlite(conn=conn, sb=sandbox, vp=vm_port):
+                    try:
+                        request = _read_http_request(conn)
+                        if not request:
+                            return
+                        conn.sendall(_forward_request(
+                            sb, vp, request, box_dir=f"/app/{sb}"))
+                    except Exception as exc:          # noqa: BLE001
+                        try:
+                            conn.sendall(
+                                b"HTTP/1.1 502 Bad Gateway\r\n\r\n"
+                                b"door relay: forward failed")
+                        except Exception:             # noqa: BLE001
+                            pass
+                    finally:
+                        try:
+                            conn.close()
+                        except Exception:             # noqa: BLE001
+                            pass
+                threading.Thread(target=handle_boxlite, daemon=True).start()
+                continue
+
             def handle(conn=conn):
-                relay = _spawn_relay(msb_bin, sandbox, vm_port)
+                relay = _spawn_relay(msb_bin, sandbox, vm_port, backend)
                 stdin_w = relay.stdin
                 stdout_r = relay.stdout
 
@@ -183,17 +285,18 @@ def run(a):
         return 0
 
     if cmd == "proxy":
+        backend = getattr(a, "backend", "msb") or "msb"
         msb = msb_binary()
-        if not msb:
+        if backend == "msb" and not msb:
             print("error: msb CLI not found", file=sys.stderr)
             return 1
         vm_port = a.target or a.port
         doors[a.name] = {"sandbox": a.name, "host_port": a.port,
                          "vm_port": vm_port, "kind": "relay",
-                         "registered": time.time()}
+                         "backend": backend, "registered": time.time()}
         _save(doors)
         try:
-            proxy(msb, a.name, a.host, a.port, vm_port)
+            proxy(msb, a.name, a.host, a.port, vm_port, backend=backend)
         except KeyboardInterrupt:
             pass
         finally:

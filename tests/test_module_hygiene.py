@@ -91,7 +91,8 @@ def _encoding_offenders(path):
         if name in ("read_text", "write_text"):
             if not has_enc:
                 bad.append(f"{name}() at line {node.lineno}")
-        elif name == "open":
+        elif name == "open" and isinstance(f, ast.Name):
+            # builtins.open only: os.open is a flags-based fd with no encoding
             mode = None
             if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
                 mode = node.args[1].value

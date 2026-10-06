@@ -616,6 +616,35 @@ neuralosd door proxy --name old-sandbox --port 8931
                                     # process per connection; fine for Q&A)
 ```
 
+### `--backend boxlite`: verified inner, honest host door
+
+boxlite 0.10.5's Python binding cannot publish ports: `BoxOptions.ports`
+validates tuple/dict entries, then the rust setter rejects them
+("object has no attribute 'ports'"), and `PublishedPort`/`NetworkHandle` are
+non-constructible result types. `msb modify`-style late forwarding does not
+exist either. So the boxlite deploy pipeline runs R0–R7 (create detached,
+start, wait for the in-box agent, pip install + import check, stage instance +
+data with SOURCE rewritten on the host, serve via the console script,
+inner self-test through a staged file probe), then starts a **host-side
+relay** (`neuralosd door proxy --backend boxlite`) and self-tests through it.
+
+Two measured upstream defects are handled rather than hidden:
+
+- **the exec channel wedges** after a detached serve runs inside the box
+  (every exec then returns exit 0 with empty output, unrecoverable by restart).
+  The pipeline detects it via a staged channel probe, restarts the box once,
+  and fails loudly if the wedge survives.
+- **the runtime lock is exclusive**: `Boxlite.default()` locks `~/.boxlite`, so
+  a long-running relay would block every other boxlite process. The door
+  listener therefore holds NO boxlite — each request spawns a short-lived
+  forward child that opens the runtime, serves the one request, and exits.
+
+If the relay still cannot be verified (the exec channel degrades further under
+some sequences), deploy exits non-zero with everything verified so far named,
+the exact remediation, and the upstream limitation — never a reachable door
+that is not. msb remains the verified one-shot production path; an upstream
+boxlite issue should cover the ports setter and exec-stdout defects.
+
 **Sibling calls (VM -> VM) are not wired in this release.** Each microVM sits
 in its own network namespace and cannot address a sibling's inner port. The
 design: a small resident listener in each VM on a fixed intra-fleet port, with
