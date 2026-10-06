@@ -22,6 +22,7 @@ intra-fleet port; a sibling call becomes a door-proxy hop THROUGH THE HOST (VM
 relay -> host -> target VM relay), reusing exactly the machinery here. The host
 is the only namespace that can see every door, so the host is the switch.
 """
+import base64
 import json
 import os
 import socket
@@ -129,13 +130,83 @@ _FORWARD_CHILD = (
     "asyncio.run(main())\n")
 
 
-def _forward_request(sandbox: str, vm_port: int, request: bytes) -> bytes:
+def _rest_url():
+    """The boxlite REST endpoint, if configured AND reachable.
+
+    `boxlite serve` is the high-throughput path for boxlite doors: its exec
+    API needs no runtime lock and no process spawn. Opt in with
+    NEURALOSD_BOXLITE_URL (plus NEURALOSD_BOXLITE_API_KEY when the serve has
+    an api-key). Unreachable or unconfigured -> None, and callers fall back
+    to the short-lived child.
+    """
+    url = os.environ.get("NEURALOSD_BOXLITE_URL")
+    if not url:
+        return None
+    import urllib.request
+    try:
+        req = urllib.request.Request(url.rstrip("/") + "/v1/boxes")
+        key = os.environ.get("NEURALOSD_BOXLITE_API_KEY")
+        if key:
+            req.add_header("Authorization", f"Bearer {key}")
+        with urllib.request.urlopen(req, timeout=3) as r:
+            return url.rstrip("/") if r.status == 200 else None
+    except Exception:                                 # noqa: BLE001
+        return None
+
+
+_INNER_ONE_SHOT = (
+    "import sys, base64, socket\n"
+    "raw = base64.b64decode(sys.argv[1])\n"
+    "s = socket.create_connection((\'127.0.0.1\', {port}), timeout=60)\n"
+    "s.sendall(raw)\n"
+    "s.settimeout(5)\n"
+    "resp = b\'\'\n"
+    "try:\n"
+    "    while True:\n"
+    "        c = s.recv(65536)\n"
+    "        if not c: break\n"
+    "        resp += c\n"
+    "except socket.timeout: pass\n"
+    "print(base64.b64encode(resp).decode())\n")
+
+
+def _rest_forward(rest_url: str, sandbox: str, vm_port: int,
+                  request: bytes) -> bytes:
+    """One REST exec inside the box replays the request at the inner door."""
+    import base64 as _b64
+    import urllib.request
+    inner_code = _INNER_ONE_SHOT.format(port=vm_port)
+    payload = base64.b64encode(request).decode("ascii")
+    body = json.dumps({"command": inner_code,
+                       "args": [payload]}).encode()
+    req = urllib.request.Request(
+        rest_url.rstrip("/") + f"/v1/boxes/{sandbox}/exec", data=body,
+        headers={"Content-Type": "application/json",
+                 **({"Authorization": f"Bearer {key}"} if (key := os.environ.get(
+                     "NEURALOSD_BOXLITE_API_KEY")) else {})})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        out = json.loads(r.read().decode())
+    stdout = None
+    if isinstance(out, dict):
+        stdout = out.get("stdout") or out.get("output") or out.get("result")
+    if stdout is None and isinstance(out, str):
+        stdout = out
+    if stdout is None:
+        raise RuntimeError(f"unrecognized REST exec response: {str(out)[:120]}")
+    return _b64.b64decode(stdout.strip())
+
+
+
+def _forward_request(sandbox: str, vm_port: int, request: bytes, box_dir: str = None) -> bytes:
     """Forward ONE buffered HTTP request through a SHORT-LIVED child process.
 
     The child imports boxlite, replays the request against the inner door via
     exec, prints the response base64-encoded, and exits - releasing the
     runtime lock. base64 in and out, because the SDK's stdout stream is text.
     """
+    rest = _rest_url()
+    if rest:
+        return _rest_forward(rest, sandbox, vm_port, request)
     import base64 as _b64
     req_b64 = _b64.b64encode(request).decode("ascii")
     script = _FORWARD_CHILD.format(

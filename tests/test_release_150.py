@@ -90,6 +90,8 @@ class FakeResponse:
 
 
 def _mapper(monkeypatch, calls, status=200):
+    import neuralosd.reasoning as _r
+    _r.clear_mapper_cache()
     m = OllamaMapper(model="qwen3.5:9b", url="http://x")
 
     def fake_urlopen(req, timeout=None):

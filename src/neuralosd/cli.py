@@ -49,6 +49,14 @@ def main():
                           help="remove and redeploy an existing sandbox")
     p_deploy.add_argument("--index-url", default=None,
                           help="extra pip index for the in-sandbox install")
+    p_deploy.add_argument("--from-template", default=None,
+                          help="fork the sandbox from a baked template "
+                               "(msb: snapshot file; boxlite: box name) "
+                               "instead of create+pip-install")
+    p_deploy.add_argument("--save-template", default=None,
+                          help="after a verified deploy, bake this sandbox "
+                               "into a template for future --from-template "
+                               "deploys (msb: snapshot file)")
 
     # ask
     p_ask = sub.add_parser("ask", help="Ask a question")

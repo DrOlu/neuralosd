@@ -146,6 +146,14 @@ class MapperError(Exception):
     pass
 
 
+_VERDICT_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
+def clear_mapper_cache():
+    """Forget cached mapper verdicts (tests and NEURALOSD_REASON_NO_CACHE)."""
+    _VERDICT_CACHE.clear()
+
+
 class OllamaMapper:
     """The reasoning model, used ONLY as a closed-list classifier.
 
@@ -156,6 +164,7 @@ class OllamaMapper:
 
     def __init__(self, model: Optional[str] = None,
                  url: Optional[str] = None, timeout: float = 240.0):
+        self._cache: Dict[str, Dict[str, Any]] = {}
         # Default in here rather than at the call site: a CLI that passes
         # --model's None through would otherwise override the default with
         # nothing, which is a confusing way to fail.
@@ -163,6 +172,10 @@ class OllamaMapper:
         self.url = (url or OLLAMA_DEFAULT).rstrip("/")
         self.timeout = timeout
         self.last_latency = None
+        # transport cache: at temperature 0 + fixed seed the mapping is a
+        # deterministic function of (question, menu), so a cached verdict is
+        # semantically the call. NEURALOSD_REASON_NO_CACHE=1 disables.
+        self.cache = not os.environ.get("NEURALOSD_REASON_NO_CACHE") in ("1", "true", "yes")
 
     def available(self) -> bool:
         try:
@@ -203,6 +216,13 @@ class OllamaMapper:
 
     def map_ids(self, question: str, served: str,
                 inventory: List[Quantity]) -> Dict[str, Any]:
+        import hashlib as _hl
+        key = _hl.sha1(json.dumps(
+            [self.model, question.strip().lower(), served,
+             sorted(q.id for q in inventory)]).encode()).hexdigest()
+        if self.cache and key in _VERDICT_CACHE:
+            self.last_latency = 0.0
+            return dict(_VERDICT_CACHE[key])
         listing = "\n".join(
             f"- {q.id}  ({q.kind})" + (f"  \u2014 {q.about}" if q.about else "")
             for q in inventory)
@@ -225,7 +245,12 @@ class OllamaMapper:
         t0 = time.time()
         out = self._post(payload)
         self.last_latency = time.time() - t0
-        return parse_pick(out.get("message", {}).get("content", ""))
+        pick = parse_pick(out.get("message", {}).get("content", ""))
+        if pick and self.cache:
+            _VERDICT_CACHE[key] = dict(pick)
+            if len(_VERDICT_CACHE) > 256:
+                _VERDICT_CACHE.pop(next(iter(_VERDICT_CACHE)))
+        return pick
 
 
 def parse_pick(raw: str) -> Dict[str, Any]:
@@ -534,22 +559,56 @@ def install(metric: DerivedMetric, instance_dir: str,
 
 
 def observations_from(probes: List[Callable],
-                      kwargs: Optional[Dict[str, Dict]] = None
+                      kwargs: Optional[Dict[str, Dict]] = None,
+                      max_workers: Optional[int] = None
                       ) -> Dict[str, Dict]:
     """Call every probe once and record what it returned.
 
     Observation, so the closed inventory is true by construction. Probe
     failures are recorded as absent rather than aborting the sweep.
+
+    Probes are independent, so the sweep runs in a small thread pool by default
+    (NEURALOSD_OBSERVE_WORKERS, default 8; set 1 to force serial). Results are
+    reassembled in the ORIGINAL probe order, so the closed inventory is
+    identical to a serial sweep - same ids, same order, same omissions.
     """
+    from concurrent.futures import ThreadPoolExecutor
+
     kwargs = kwargs or {}
-    out: Dict[str, Dict] = {}
+    if max_workers is None:
+        try:
+            max_workers = int(os.environ.get("NEURALOSD_OBSERVE_WORKERS", "8"))
+        except (TypeError, ValueError):
+            max_workers = 8
+    max_workers = max(1, int(max_workers or 1))
+
+    items: List[Any] = []
     for fn in probes:
         meta = getattr(fn, "_probe", None)
         name = getattr(meta, "name", None) or getattr(fn, "__name__", "?")
+        items.append((fn, name))
+
+    def run(fn, name):
         try:
             r = fn(**kwargs.get(name, {}))
-        except Exception:
-            continue
-        if isinstance(r, dict):
-            out[name] = r
+        except Exception:                             # noqa: BLE001
+            return name, None
+        return name, (r if isinstance(r, dict) else None)
+
+    got: Dict[str, Any] = {}
+    if max_workers > 1 and len(items) > 3:
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(items))) as pool:
+            for name, value in pool.map(lambda pair: run(pair[0], pair[1]),
+                                        items):
+                got[name] = value
+    else:
+        for fn, name in items:
+            name_, value = run(fn, name)
+            got[name_] = value
+
+    out: Dict[str, Dict] = {}
+    for _fn, name in items:                           # stable, original order
+        value = got.get(name)
+        if isinstance(value, dict):
+            out[name] = value
     return out

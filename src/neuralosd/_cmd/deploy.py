@@ -236,11 +236,18 @@ def _deploy_msb(a, backend):
             f"Choose another --port; existing doors: "
             f"`neuralosd door list`")
 
-    # R2 — create WITH the native forward.
-    print(f"  creating sandbox '{a.name}' with forward "
-          f"{bind}:{host_port} -> vm:{vm_port} ...")
-    res = backend.create(a.name, ports=[(bind, host_port, vm_port)])
-    if res.get("exit") != 0:
+    # R2 — create WITH the native forward, or FORK from a baked template.
+    template = getattr(a, "from_template", None)
+    if template:
+        print(f"  forking sandbox '{a.name}' from template {template} ...")
+        res = backend.fork(template, a.name)
+        if isinstance(res, dict) and res.get("exit") != 0:
+            raise SystemExit(f"error: fork failed: {res}")
+    else:
+        print(f"  creating sandbox '{a.name}' with forward "
+              f"{bind}:{host_port} -> vm:{vm_port} ...")
+        res = backend.create(a.name, ports=[(bind, host_port, vm_port)])
+    if isinstance(res, dict) and res.get("exit") != 0:
         raise SystemExit(f"error: sandbox creation failed: {res}")
 
     # R3 — the agent must be reachable before anything can be staged.
@@ -252,14 +259,19 @@ def _deploy_msb(a, backend):
         time.sleep(2)
     print("  agent reachable")
 
-    # R4 — install neuralosd inside (slim ships nothing).
-    print("  installing neuralosd inside the sandbox ...")
-    res = backend.exec(a.name, "pip", ["install", "-q", "neuralosd"]
-                       + (["--extra-index-url", a.index_url] if
-                          getattr(a, "index_url", None) else []))
-    if res.get("exit") != 0:
-        raise SystemExit(f"error: pip install inside the sandbox failed:\n"
-                         f"{res.get('stderr') or res.get('stdout')}")
+    # R4 — install neuralosd inside (slim ships nothing). A FORKED sandbox
+    # already has it baked in: just verify the import instead of paying for
+    # the install again.
+    if template:
+        print("  template fork: skipping pip install (baked in) ...")
+    else:
+        print("  installing neuralosd inside the sandbox ...")
+        res = backend.exec(a.name, "pip", ["install", "-q", "neuralosd"]
+                           + (["--extra-index-url", a.index_url] if
+                              getattr(a, "index_url", None) else []))
+        if res.get("exit") != 0:
+            raise SystemExit(f"error: pip install inside the sandbox failed:\n"
+                             f"{res.get('stderr') or res.get('stdout')}")
     chk = backend.exec(a.name, "python3", ["-c", "import neuralosd"])
     if chk.get("exit") != 0:
         raise SystemExit("error: neuralosd is not importable inside the "
@@ -342,6 +354,14 @@ def _deploy_msb(a, backend):
     probe_name = (answer.get("probe") or "?")
 
     _record_door(a.name, a.name, host_port, vm_port)
+    save_template = getattr(a, "save_template", None)
+    if save_template:
+        res = backend.snapshot(a.name, save_template)
+        if isinstance(res, dict) and res.get("exit") != 0:
+            print(f"warning: template save failed: {res}", file=sys.stderr)
+        else:
+            print(f"  template baked: {save_template} "
+                  f"(future deploys: --from-template {save_template})")
     print(f"\n✓ deployed '{a.name}' ({a.backend}) — VERIFIED end to end")
     print(f"  host door : http://{bind}:{host_port}  "
           f"(ask answered by {probe_name})")
