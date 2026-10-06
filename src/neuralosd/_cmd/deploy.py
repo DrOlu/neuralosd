@@ -101,12 +101,6 @@ def _boxlite_channel_ok(backend, name) -> bool:
     stderr, unrecoverable by restart). Detected here by exec'ing a staged
     one-liner; a wedged channel fails the deploy loudly instead of pretending.
     """
-    probe_src = "print('CHANNEL-OK')"
-    tmp = "/tmp/_nx_channel_probe.py"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(probe_src)
-    return probe_src, tmp
-
 
 def _spawn_detached_relay(backend_name, sandbox, bind, host_port, vm_port):
     """Start the host-side door relay as a DETACHED process.
@@ -482,7 +476,8 @@ def _deploy_boxlite(a, backend):
             "--host 0.0.0.0 --port {port!r} > /var/log/neuralosd-serve.log "
             "2>&1 < /dev/null &\")\n"
             "print(\"started\")\n").format(box_dir=box_dir, port=box_port)
-        start_tmp = "/tmp/_nx_start.py"
+        import tempfile as _tf
+        start_tmp = os.path.join(_tf.gettempdir(), "_nx_start.py")
         with open(start_tmp, "w", encoding="utf-8") as fh:
             fh.write(start_src)
         await backend.copy_in(a.name, start_tmp, f"{box_dir}/_start.py")
@@ -504,7 +499,8 @@ def _deploy_boxlite(a, backend):
             "out = json.loads(urllib.request.urlopen(req, timeout=30).read())\n"
             "print(\'SELFTEST-OK\' if out.get(\'results\') else "
             "\'SELFTEST-EMPTY\')" % box_port)
-        probe_tmp = "/tmp/_nx_selftest.py"
+        import tempfile as _tf
+        probe_tmp = os.path.join(_tf.gettempdir(), "_nx_selftest.py")
         with open(probe_tmp, "w", encoding="utf-8") as fh:
             fh.write(probe_src)
         await backend.copy_in(a.name, probe_tmp, f"{box_dir}/_selftest.py")
@@ -531,7 +527,9 @@ def _deploy_boxlite(a, backend):
         # empty output). Detect it; one restart usually clears it; if not,
         # fail loudly - a deployment whose verification cannot run must not
         # be called deployed.
-        probe_src, probe_tmp = ("print('CHANNEL-OK')", "/tmp/_nx_probe.py")
+        import tempfile as _tf1
+        probe_src, probe_tmp = ("print('CHANNEL-OK')",
+                                os.path.join(_tf1.gettempdir(), "_nx_probe.py"))
         with open(probe_tmp, "w", encoding="utf-8") as fh:
             fh.write(probe_src)
         await backend.copy_in(a.name, probe_tmp, f"{box_dir}/_channel_probe.py")
