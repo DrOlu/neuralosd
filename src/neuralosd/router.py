@@ -458,9 +458,15 @@ class Router:
         for m in self.metas:
             props, req = {}, []
             for an, spec in m.args.items():
-                props[an] = {k: v for k, v in spec.items()
-                             if k in ("type", "enum", "pattern", "min", "max",
-                                      "description")}
+                allowed = {k: v for k, v in spec.items()
+                           if k in ("type", "values", "enum", "pattern",
+                                    "min", "max", "description", "default")}
+                # OpenAPI convention: the allowed values are under `enum`, not
+                # `values`. Emit both so the engine and the generator each see
+                # the key they expect.
+                if "values" in allowed and "enum" not in allowed:
+                    allowed["enum"] = allowed["values"]
+                props[an] = allowed
                 if spec.get("required", True):
                     req.append(an)
             entry = {"name": m.name, "description": m.description,
@@ -479,9 +485,15 @@ class Router:
         title = title or f"{self.name} — neuralOS probes"
         paths = {}
         for m in self.metas:
-            props = {k: {kk: vv for kk, vv in spec.items()
-                         if kk in ("type", "enum", "pattern", "min", "max")}
-                     for k, spec in m.args.items()}
+            props = {}
+            for k, spec in m.args.items():
+                allowed = {kk: vv for kk, vv in spec.items()
+                           if kk in ("type", "enum", "values", "pattern",
+                                     "min", "max", "default")}
+                # OpenAPI convention: the constraint list goes under `enum`
+                if "values" in allowed and "enum" not in allowed:
+                    allowed["enum"] = allowed["values"]
+                props[k] = allowed
             paths[f"/probes/{m.name}"] = {
                 "post": {"operationId": m.name, "summary": m.description,
                          "requestBody": {"content": {"application/json": {
