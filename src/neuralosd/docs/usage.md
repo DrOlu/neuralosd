@@ -401,7 +401,7 @@ This generates the complete instance directory:
 
 ```
 my_instance/
-├── needle_menu.json       # probe menu (triggers + grammar-caged args)
+├── needle_menu.json       # probe menu: BARE JSON array of {name, description, parameters, triggers}
 ├── bridge.py              # data layer
 ├── models.py              # strict Pydantic models
 ├── instance.py            # agentic agent
@@ -576,6 +576,20 @@ curl -X POST http://localhost:8877/ask \
   "results": [{"count": 3503}]
 }
 ```
+
+### The menu file shape
+
+`needle_menu.json` is a **bare JSON array** of
+`{name, description, parameters, triggers}` entries. This is the canonical
+shape: the engine's `--tools` parser, the app's generator, and the fleet
+guard all expect one.
+
+`Instance.export()` writes this shape. `read_menu()` tolerates two legacy
+wrappings (`{"menu": [...]}` and `{"probes": [...]}`) and **raises** on an
+unrecognised shape — a bad menu is a startup error, not a silent zero.
+
+If you need instance-level metadata (name, version), put it in a sibling
+`instance.json` — do not wrap the menu.
 
 ### Deploying into a Microsandbox (`--backend msb`)
 

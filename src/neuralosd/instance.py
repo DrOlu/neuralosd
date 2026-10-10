@@ -114,8 +114,17 @@ class Instance:
         return self.router.openapi(title)
 
     def export(self, path: str):
-        json.dump({"name": self.name, "menu": self.menu()},
-                  open(path, "w", encoding="utf-8"), indent=2, ensure_ascii=False)
+        """Write the probe menu as a bare JSON array.
+
+        The array is the canonical shape: the engine's --tools parser and the
+        app's generator both expect one, and a wrapped {"name": ..., "menu":
+        [...]} object reads as an EMPTY menu to anything that does not know
+        the wrapper. The instance name already lives in the directory name,
+        so the wrapper carries no information that is not recoverable.
+        """
+        json.dump(self.menu,
+                  open(path, "w", encoding="utf-8"),
+                  indent=2, ensure_ascii=False)
 
 
 import json  # noqa: E402
