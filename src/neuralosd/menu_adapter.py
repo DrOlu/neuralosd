@@ -36,13 +36,32 @@ def _load_module(path: str, name: str):
     return mod, None
 
 
+def _extract_menu(blob, path: str) -> list:
+    """Extract the menu list from any known wrapping shape.
+
+    Accepts: bare list, {"menu": [...]}, {"probes": [...]}. Anything else
+    raises ValueError naming the file and the shape — a silent empty menu
+    is how the wrapped-menu divergence stayed invisible for hours.
+    """
+    if isinstance(blob, list):
+        return blob
+    if isinstance(blob, dict):
+        for key in ("menu", "probes"):
+            if key in blob and isinstance(blob[key], list):
+                return blob[key]
+    raise ValueError(
+        f"{path}: expected a JSON array of menu entries, got "
+        f"{'a ' + type(blob).__name__ if not isinstance(blob, dict) else 'a dict with keys: ' + ', '.join(blob.keys())}"
+    )
+
+
 def read_menu(instance_dir: str) -> List[Dict[str, Any]]:
     path = os.path.join(instance_dir, MENU_FILE)
     if not os.path.isfile(path):
         return []
     with open(path, encoding="utf-8") as fh:
         blob = json.load(fh)
-    menu = blob.get("menu", blob) if isinstance(blob, dict) else blob
+    menu = _extract_menu(blob, path)
     return [e for e in menu if isinstance(e, dict) and e.get("name")]
 
 
