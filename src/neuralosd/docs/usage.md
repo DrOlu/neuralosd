@@ -401,7 +401,7 @@ This generates the complete instance directory:
 
 ```
 my_instance/
-├── needle_menu.json       # probe menu: BARE JSON array of {name, description, parameters, triggers}
+├── needle_menu.json       # probe menu: BARE JSON ARRAY of {name, description, parameters, triggers} entries
 ├── bridge.py              # data layer
 ├── models.py              # strict Pydantic models
 ├── instance.py            # agentic agent

@@ -88,6 +88,20 @@ GENERIC_INTENT = frozenset("""
 # on the FIRST word only (imperative form) to keep the false-refusal surface
 # minimal; the verb must also be unknown to every probe, so a probe named
 # play_logs would still answer play-related questions.
+def action_intent_reason(normalized, menu_vocab):
+    """'action_intent' when the question opens with an imperative verb the menu
+    does not know: the user asked for an ACTION, not for data.
+
+    Shared by the gate AND the floor-miss path — a destructive question that
+    scores nothing lexically must still be reported as action_intent rather
+    than degrading into a bland "no_probe_matches".
+    """
+    first = (normalized or "").split()[:1]
+    if first and first[0] in ACTION_VERBS and first[0] not in menu_vocab:
+        return "action_intent"
+    return None
+
+
 ACTION_VERBS = ("play", "erase", "delete", "remove", "drop", "wipe", "purge",
                 "send", "execute", "restart", "shutdown", "kill", "exploit",
                 "deploy", "cancel")
@@ -546,10 +560,9 @@ class Router:
         # the user asked for an action no probe can perform, and answering
         # with the nearest data would be a confident wrong answer about what
         # the system just did.
-        first = normalized.split()[:1]
-        if first and first[0] in ACTION_VERBS \
-                and first[0] not in self._menu_vocab:
-            return "action_intent"
+        action = action_intent_reason(normalized, self._menu_vocab)
+        if action:
+            return action
 
         if _args_seen(kwargs, normalized) > 0:
             return None                      # explicit entity reference
@@ -557,11 +570,12 @@ class Router:
         if max(self.floor, per_probe) > 0 and score < max(self.floor, per_probe):
             return "below_floor"
 
+        q_words = set(re.findall(r"[a-z0-9]+", normalized.lower()))
         for qual in QUALIFIERS:
-            if qual in normalized.lower():
-                head = qual.split()[0]
-                if head not in self._vocab.get(meta.name, frozenset()):
-                    return "dropped_filter"
+            head = qual.split()[0]
+            hit = head in q_words if len(qual.split()) == 1 else qual in normalized.lower()
+            if hit and head not in self._vocab.get(meta.name, frozenset()):
+                return "dropped_filter"
         qt = tokens(normalized)
         # Numbers are entity references ("user 4"), not subjects.
         domain = {t for t in qt - GENERIC_INTENT if not t.isdigit()}
@@ -864,8 +878,11 @@ class Router:
                               "required arguments (no model fallback "
                               "configured)")
                 else:
-                    refusal_reason = "no_probe_matches"
-                    reason = "no probe matched this question"
+                    refusal_reason = (action_intent_reason(normalized, self._menu_vocab)
+                                      or "no_probe_matches")
+                    reason = ("refused (action_intent): this instance only answers "
+                              "questions" if refusal_reason == "action_intent"
+                              else "no probe matched this question")
                 env = {"ask_id": ask_id, "question": question,
                        "normalized": normalized, "probe": None,
                        "menu_version": self.menu_version,
