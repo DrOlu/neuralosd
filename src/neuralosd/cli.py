@@ -130,6 +130,29 @@ def main():
     p_docs.add_argument("topic", nargs="?", default=None)
     sub.add_parser("backends", help="List available sandbox backends")
 
+    # mesh
+    p_mesh = sub.add_parser(
+        "mesh", help="Synapse mesh integration: serve, discover, delegate")
+    mesh_sub = p_mesh.add_subparsers(dest="mesh_cmd")
+    p_ms = mesh_sub.add_parser("serve", help="Serve this instance on the mesh")
+    p_ms.add_argument("--instance-dir", required=True)
+    p_ms.add_argument("--gateway", default="http://127.0.0.1:8090")
+    p_ms.add_argument("--timeout", type=float, default=30)
+    p_md = mesh_sub.add_parser("discover", help="Discover peers on the mesh")
+    p_md.add_argument("--gateway", default="http://127.0.0.1:8090")
+    p_md.add_argument("--skill", default="", help="skill to search for")
+    p_md.add_argument("--instance-name", default="")
+    p_md.add_argument("--timeout", type=float, default=30)
+    p_mr = mesh_sub.add_parser("register", help="Register this instance on the mesh")
+    p_mr.add_argument("--instance-dir", required=True)
+    p_mr.add_argument("--gateway", default="http://127.0.0.1:8090")
+    p_ma = mesh_sub.add_parser("ask", help="Ask a question (through the local router)")
+    p_ma.add_argument("--instance-dir", required=True)
+    p_ma.add_argument("--gateway", default="http://127.0.0.1:8090")
+    p_ma.add_argument("question", nargs="+")
+    p_mh = mesh_sub.add_parser("health", help="Check the Synapse gateway")
+    p_mh.add_argument("--gateway", default="http://127.0.0.1:8090")
+
     # reason
     p_rs = sub.add_parser(
         "reason",
@@ -240,6 +263,9 @@ def main():
     elif a.command == "scrub":
         from ._cmd import scrub
         raise SystemExit(scrub.run(a))
+    elif a.command == "mesh":
+        from ._cmd import mesh
+        raise SystemExit(mesh.run(a))
     elif a.command == "door":
         from ._cmd import door
         raise SystemExit(door.run(a))
