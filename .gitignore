@@ -14,3 +14,9 @@ _msb_stage/
 .ask_cache.json
 ask_audit.jsonl
 *.xlsx
+
+# template state files (generated at runtime)
+src/neuralosd/templates/itsm/.ask_cache.json
+src/neuralosd/templates/itsm/ask_audit.jsonl
+src/neuralosd/templates/__init__.py
+src/neuralosd/templates/itsm/__init__.py

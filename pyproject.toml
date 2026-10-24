@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "neuralosd"
-version = "1.10.1"
+version = "1.10.2"
 description = "Deterministic-first agentic runtime — @probe framework, chain runner, meta-selector, HITL guardrails, MCP/OpenAPI exposure, and microVM sandbox backends (BoxLite / Microsandbox)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -45,4 +45,18 @@ where = ["src"]
 testpaths = ["tests"]
 
 [tool.setuptools.package-data]
-neuralosd = ["docs/*.md", "skills/*"]
+neuralosd = [
+    "docs/*.md",
+    "skills/*",
+    "templates/itsm/*.py",
+    "templates/itsm/*.json",
+    "templates/itsm/data/*.csv",
+]
+
+[tool.setuptools.exclude-package-data]
+neuralosd = ["templates/itsm/.ask_cache.json",
+             "templates/itsm/ask_audit.jsonl",
+             "templates/itsm/_pump.py",
+             "templates/itsm/_selftest.py",
+             "templates/itsm/_channel_probe.py",
+             "templates/itsm/_start.py"]

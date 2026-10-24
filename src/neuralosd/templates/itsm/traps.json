@@ -1,0 +1,35 @@
+{
+  "_comment": "Refusal bank. A trap PASSES only when the router refuses. Add one trap per capability you deliberately did NOT build.",
+  "items": [
+    {
+      "q": "xyzzy plugh",
+      "expect_refusal": true,
+      "refusal_reason": "no_probe_matches",
+      "note": "nonsense must never route"
+    },
+    {
+      "q": "how many work orders are blocked",
+      "expect_refusal": true,
+      "refusal_reason": "dropped_filter",
+      "note": "'blocked' is a status the template cannot filter on"
+    },
+    {
+      "q": "how many incidents were reopened after resolution",
+      "expect_refusal": true,
+      "refusal_reason": "no_probe_matches",
+      "note": "reopened filter not available"
+    },
+    {
+      "q": "show me the change calendar for December",
+      "expect_refusal": true,
+      "refusal_reason": "no_probe_matches",
+      "note": "no calendar view"
+    },
+    {
+      "q": "what is the average time to resolve an incident",
+      "expect_refusal": true,
+      "refusal_reason": "no_probe_matches",
+      "note": "resolution time not tracked in this template"
+    }
+  ]
+}
