@@ -72,7 +72,11 @@ def main():
 
     # serve
     p_serve = sub.add_parser("serve", help="Start the HTTP service")
-    p_serve.add_argument("--instance-dir", required=True)
+    p_serve.add_argument("--instance-dir", default=None,
+                         help="single instance directory")
+    p_serve.add_argument("--instances-dir", default=None,
+                         help="directory containing MULTIPLE instance dirs; "
+                              "each is served at /{name}/ask")
     p_serve.add_argument("--port", type=int, default=8877)
     p_serve.add_argument("--model", action="store_true",
                          help="Load the on-device model as a fallback")
@@ -234,8 +238,14 @@ def main():
         from ._cmd import ask
         ask.run(a)
     elif a.command == "serve":
-        from ._cmd import serve
-        serve.run(a)
+        if getattr(a, "instances_dir", None):
+            from ._cmd import serve as serve_mod
+            serve_mod.run_multi(a)
+        else:
+            if not a.instance_dir:
+                ap.error("serve requires --instance-dir or --instances-dir")
+            from ._cmd import serve
+            serve.run(a)
     elif a.command == "lint":
         from ._cmd import lint
         lint.run(a)
