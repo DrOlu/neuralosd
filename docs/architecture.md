@@ -1,0 +1,1 @@
+../src/neuralosd/docs/architecture.md

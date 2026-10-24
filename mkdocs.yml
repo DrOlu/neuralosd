@@ -1,3 +1,4 @@
+docs_dir: docs
 site_name: neuralOSd
 site_description: >-
   An offline, on-device data-answering runtime that refuses what it cannot
