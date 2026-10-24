@@ -1,0 +1,15 @@
+ticket_id,ticket_type,priority,status,assigned_group,assignee,short_description,category,created_date,resolved_date
+TKT001,Incident,Critical,In Progress,Network Operations, Sarah Chen,Core switch unreachable,Network,2026-01-15,
+TKT002,Incident,High,Assigned,Database Services,Marcus Webb,Primary database failover triggered,Database,2026-01-15,
+TKT003,Incident,Medium,New,Service Desk,Elena Torres,User cannot access email portal,Email,2026-01-16,
+TKT004,Incident,Low,Resolved,Service Desk,David Kim,Password reset request,Access,2026-01-14,2026-01-14
+TKT005,Incident,High,In Progress,Security Operations,Priya Nair,Suspicious login detected,Security,2026-01-16,
+TKT006,Problem,High,Investigation,Network Operations,Sarah Chen,Recurring switch failures in Building B,Network,2026-01-10,
+TKT007,Problem,Medium,Root Cause Analysis,Database Services,Marcus Webb,Intermittent database connection timeouts,Database,2026-01-08,
+TKT008,Problem,Low,New,Email Platform,Elena Torres,Email delivery delays to external domains,Email,2026-01-05,
+TKT009,Change,Standard,Implementation,Database Services,Marcus Webb,Apply Q1 database security patches,Database,2026-01-20,
+TKT010,Change,Emergency,Approval,Security Operations,Priya Nair,Emergency firewall rule update,Security,2026-01-17,
+TKT011,Change,Standard,Planning,Network Operations,Sarah Chen,Replace end-of-life core switch,Network,2026-01-25,
+TKT012,Work Order,Low,Open,Service Desk,David Kim,Deploy new laptop for new hire,End User Computing,2026-01-18,
+TKT013,Work Order,Medium,In Progress,Field Services,Tom Nguyen,Replace faulty access point on Floor 3,Network,2026-01-17,
+TKT014,Work Order,Low,Closed,Service Desk,Elena Torres,Set up video conferencing room,Facilities,2026-01-12,2026-01-13

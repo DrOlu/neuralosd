@@ -1,0 +1,52 @@
+site_name: neuralOSd
+site_description: >-
+  An offline, on-device data-answering runtime that refuses what it cannot
+  verify, accounts for what it excludes, and ships with its own tests.
+site_url: https://drolu.github.io/neuralosd/
+repo_url: https://github.com/DrOlu/neuralosd
+repo_name: DrOlu/neuralosd
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - search.suggest
+    - search.highlight
+    - navigation.tabs
+    - navigation.sections
+    - content.code.copy
+    - content.code.annotate
+
+nav:
+  - Home: index.md
+  - Quick Start: usage.md
+  - API Reference: reference.md
+  - Cookbook: cookbook.md
+  - Architecture: architecture.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.tabbed
+  - pymdownx.details
+  - tables
+  - toc:
+      permalink: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/DrOlu/neuralosd

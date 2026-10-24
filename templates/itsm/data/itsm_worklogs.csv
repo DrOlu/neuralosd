@@ -1,0 +1,8 @@
+ticket_id,short_description
+TKT001,Core switch unreachable - impacting Building B network
+TKT002,Database failover - primary DB offline
+TKT005,Suspicious login from unknown IP
+TKT006,Recurring switch failures in Building B
+TKT007,Database connection timeouts during peak hours
+TKT009,Q1 database security patches
+TKT010,Emergency firewall rule update for security incident

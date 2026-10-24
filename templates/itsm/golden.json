@@ -1,0 +1,57 @@
+{
+  "_comment": "Positive bank. Every item must route to expect_probe. Fill from verified sessions and run: neuralosd golden --dir .",
+  "items": [
+    {
+      "q": "how many open incidents",
+      "expect_probe": "count_incidents"
+    },
+    {
+      "q": "how many problems",
+      "expect_probe": "count_problems"
+    },
+    {
+      "q": "how many work orders",
+      "expect_probe": "count_work_orders"
+    },
+    {
+      "q": "how many changes",
+      "expect_probe": "count_changes"
+    },
+    {
+      "q": "critical and high priority incidents",
+      "expect_probe": "critical_incidents"
+    },
+    {
+      "q": "incident status breakdown",
+      "expect_probe": "incident_status_breakdown"
+    },
+    {
+      "q": "incidents by priority",
+      "expect_probe": "open_incidents_by_priority"
+    },
+    {
+      "q": "support groups",
+      "expect_probe": "support_groups"
+    },
+    {
+      "q": "tickets by group",
+      "expect_probe": "tickets_by_group"
+    },
+    {
+      "q": "itsm overview",
+      "expect_probe": "itsm_overview"
+    },
+    {
+      "q": "how many known errors",
+      "expect_probe": "count_known_errors"
+    },
+    {
+      "q": "how many service requests",
+      "expect_probe": "count_service_requests"
+    },
+    {
+      "q": "how many worklog entries",
+      "expect_probe": "worklog_count"
+    }
+  ]
+}
