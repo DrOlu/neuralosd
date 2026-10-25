@@ -639,7 +639,7 @@ class Router:
             return True
         return False
 
-    def _refuse(self, ask_id, ts, question, normalized, reason, retrieved,
+    def _refuse(self, ask_id, ts, question, normalized, reason, retrieved=None,
                 extra=None):
         """Build, audit and raise a refusal envelope with its score vector."""
         scores = [{"probe": m.name, "score": round(s, 3)}
@@ -732,6 +732,14 @@ class Router:
         if moved:
             print("normalized:", normalized, flush=True)
         key = self._key(normalized)
+
+        # Destructive questions that score ZERO lexically ("delete all
+        # invoices") must still get the SPECIFIC action_intent reason, not
+        # the generic no_probe_matches. The check runs BEFORE the walk so it
+        # fires even when no probe is executable.
+        if action_intent_reason(normalized, self._menu_vocab):
+            self._refuse(ask_id, time.time(), question, normalized,
+                         "action_intent")
 
         if use_cache:
             hit = self._cache_load(key)

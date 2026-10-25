@@ -74,9 +74,13 @@ def test_resolve_sums_rows():
     assert resolve(q, OBS) == pytest.approx(97.24)
 
 
-def test_resolve_missing_probe_is_none():
+def test_resolve_missing_probe_raises_not_returns_none():
+    """An unknown probe must RAISE, not return None. A silent None would be
+    indistinguishable from a legitimate zero, and the derived metric would
+    silently compute 0 instead of failing loudly."""
     q = Quantity("nope.x", "nope", "x", "scalar")
-    assert resolve(q, OBS) is None
+    with pytest.raises(DerivedError):
+        resolve(q, OBS)
 
 
 # ── expectations, derived from the QUESTION not the model ──────────────────

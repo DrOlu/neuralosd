@@ -236,24 +236,42 @@ def resolve(quantity: Quantity, observations: Dict[str, Dict],
     strict=True refuses to sum a TRUNCATED row list. The alternative is a
     plausible number computed from a sample, which is exactly the class of
     wrong answer this module exists to prevent.
+
+    Raises DerivedError when the quantity is unknown or its probe failed,
+    rather than returning None — a silent None would be indistinguishable
+    from a legitimate zero.
     """
     result = observations.get(quantity.probe)
     if not isinstance(result, dict):
-        return None
+        raise DerivedError(
+            f"probe {quantity.probe!r} returned no result — the quantity "
+            f"{quantity.id!r} cannot be resolved")
     if quantity.path.startswith("rows[]."):
         key = quantity.path.split(".", 1)[1]
         rows = result.get("rows") or []
         vals = [r.get(key) for r in rows
                 if isinstance(r, dict) and _numeric(r.get(key))]
         if not vals:
+            if strict:
+                raise DerivedError(
+                    f"no numeric values found for {quantity.id!r} "
+                    f"in {len(rows)} rows")
             return None
         if strict:
             why = _truncation(observations, quantity.probe, len(vals))
             if why:
                 raise DerivedError(why)
-        return float(sum(vals)) if vals else None
+        return float(sum(vals))
     v = result.get(quantity.path)
-    return float(v) if _numeric(v) else None
+    if v is None:
+        raise DerivedError(
+            f"field {quantity.path!r} not found in the output of probe "
+            f"{quantity.probe!r}")
+    if not _numeric(v):
+        raise DerivedError(
+            f"field {quantity.path!r} in probe {quantity.probe!r} is not "
+            f"numeric (got {type(v).__name__}: {v!r})")
+    return float(v)
 
 
 # ── deterministic expectations ─────────────────────────────────────────────
