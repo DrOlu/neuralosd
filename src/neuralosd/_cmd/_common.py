@@ -86,6 +86,12 @@ def _load_menu_instance(instance_dir: str, with_model: bool = False):
             msg += ("\n\nmodule import failures (the real cause, most likely):\n"
                     f"{detail}")
         raise SystemExit(msg)
+    # Menu-lifted probes get the SAME sidecar machinery as probes.py probes:
+    # without this, a classic-layout instance (needle_menu.json + bridge.py)
+    # had no call-time ModuleNotFoundError retry at all — the wrapper is what
+    # turns a lazy helper import into a sidecar delegation (v2.0.4 gap).
+    inst.probes = _maybe_redirect_tier_sidecar(inst.probes, instance_dir)
+    inst.probes = _wrap_with_sidecar_fallback(inst.probes, instance_dir)
     if with_model:
         inst.router.model_fallback = _build_model_fallback(inst.probes)
     return inst
