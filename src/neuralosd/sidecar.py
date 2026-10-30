@@ -34,15 +34,20 @@ import sys
 
 
 def load_probe_functions(instance_dir: str):
-    """Import ``<instance_dir>/probes.py`` and return its probe functions.
+    """Import an instance's probes and return its probe functions.
 
-    Mirrors the loader in ``neuralosd._cmd._common`` (PROBES list first, then
-    any ``@probe``-decorated function) so both sides see the same capabilities.
+    Two layouts, same result:
+      - probes.py    — the standard instance layout (PROBES list, @probe)
+      - menu-only    — classic needle_menu.json + bridge.py[/instance.py]:
+        the menu entries are lifted onto the imported callables exactly like
+        the in-binary adapter does, so a sidecar can serve instances that
+        never had a probes.py (previously: FileNotFoundError, which silently
+        disabled sidecar delegation for classic-layout instances).
     """
     instance_dir = os.path.abspath(instance_dir)
     probes_py = os.path.join(instance_dir, "probes.py")
     if not os.path.isfile(probes_py):
-        raise FileNotFoundError(f"no probes.py in {instance_dir}")
+        return _load_menu_only_probes(instance_dir)
 
     if instance_dir not in sys.path:
         sys.path.insert(0, instance_dir)
@@ -60,6 +65,33 @@ def load_probe_functions(instance_dir: str):
                   if callable(v) and hasattr(v, "_probe")]
     if not probes:
         raise ValueError(f"{probes_py} defines no probes")
+    return probes
+
+
+def _load_menu_only_probes(instance_dir: str):
+    """Lift a classic menu onto bridge.py/instance.py callables, sidecar-side."""
+    from .menu_adapter import menu_backed_probes
+
+    if instance_dir not in sys.path:
+        sys.path.insert(0, instance_dir)
+    mods = []
+    name = os.path.basename(instance_dir.rstrip("/")) or "instance"
+    for m in ("bridge", "instance"):
+        path = os.path.join(instance_dir, m + ".py")
+        if not os.path.isfile(path):
+            continue
+        modname = f"neuralosd_sidecar_{name}_{m}"
+        spec = importlib.util.spec_from_file_location(modname, path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[modname] = mod
+        spec.loader.exec_module(mod)
+        mods.append(mod)
+    if not mods:
+        raise FileNotFoundError(
+            f"no probes.py, bridge.py or instance.py in {instance_dir}")
+    probes = menu_backed_probes(instance_dir, mods)
+    if not probes:
+        raise ValueError(f"{instance_dir}: no menu entry has a callable behind it")
     return probes
 
 

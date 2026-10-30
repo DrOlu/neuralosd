@@ -102,8 +102,6 @@ def probes_from_menu(instance_dir: str,
     a database driver that is not installed looks exactly like a menu whose
     names do not match its functions — and you go looking in the wrong place.
     """
-    from .probe import ProbeMeta
-
     menu = read_menu(instance_dir)
     if not menu:
         return []
@@ -121,6 +119,25 @@ def probes_from_menu(instance_dir: str,
             mods.append(m)
         elif errors is not None:
             errors[name] = err
+
+    return menu_backed_probes(instance_dir, mods, menu)
+
+
+def menu_backed_probes(instance_dir: str, mods: List,
+                       menu: Optional[List[Dict[str, Any]]] = None) -> List[Callable]:
+    """Lift menu entries onto imported callables, as routable probes.
+
+    Shared by the in-binary adapter (probes_from_menu) and the sidecar's
+    menu-only loader, so both sides lift identically.
+    """
+    from .probe import ProbeMeta
+
+    if menu is None:
+        menu = read_menu(instance_dir)
+    if not menu:
+        return []
+    if instance_dir not in sys.path:
+        sys.path.insert(0, instance_dir)
 
     out: List[Callable] = []
     for entry in menu:
@@ -148,7 +165,10 @@ def probes_from_menu(instance_dir: str,
             args=args,
             pii=list(entry.get("pii") or []),
             conf_gate=entry.get("conf_gate"),
-            tier="in-process",
+            # Honored from the menu entry — the classic-layout escape hatch:
+            # "tier": "sidecar" marks a probe as sidecar-bound, same as
+            # @probe(tier="sidecar") in a probes.py instance.
+            tier=str(entry.get("tier") or "in-process"),
             confirm=bool(entry.get("confirm")),
             function=w)
         out.append(w)

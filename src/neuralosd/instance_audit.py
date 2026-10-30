@@ -26,6 +26,7 @@ INSTANCE_MODULES = ("bridge", "instance", "probes")
 
 BUNDLED = "bundled"                # importable inside the frozen runtime
 HOST_ONLY = "host-only"            # not bundled, but the sidecar/host has it
+INSTANCE_LOCAL = "instance-local"  # a sibling .py/package in the instance dir
 MISSING_EVERYWHERE = "missing-everywhere"   # neither — instance WILL fail
 
 # NOTE: there is deliberately NO "known-bundled" fallback list here. A module
@@ -60,6 +61,29 @@ def instance_module_paths(instance_dir: str) -> List[str]:
     return [os.path.join(instance_dir, m + ".py")
             for m in INSTANCE_MODULES
             if os.path.isfile(os.path.join(instance_dir, m + ".py"))]
+
+
+def instance_local_modules(instance_dir: str) -> Set[str]:
+    """Module names that resolve INSIDE the instance directory: sibling .py
+    files (models.py, graph_bridge.py, ...) and local packages (dir with
+    __init__.py). The adapter puts the dir on sys.path before importing the
+    bridge, so these ALWAYS resolve at runtime — they must never be reported
+    as missing-everywhere (v2.0.4 false-positive bug).
+    """
+    names: Set[str] = set()
+    try:
+        entries = os.listdir(instance_dir)
+    except OSError:
+        return names
+    for entry in entries:
+        if entry.endswith(".py") and entry != "__init__.py":
+            names.add(entry[:-3])
+        else:
+            full = os.path.join(instance_dir, entry)
+            if os.path.isdir(full) and os.path.isfile(
+                    os.path.join(full, "__init__.py")):
+                names.add(entry)
+    return names
 
 
 def collect_instance_imports(instance_dir: str) -> Set[str]:
@@ -132,20 +156,25 @@ def sidecar_python() -> Optional[str]:
 
 # ── classification + report ─────────────────────────────────────────────────
 def classify_imports(modules: Iterable[str], bundled: Set[str],
-                     host: Optional[Set[str]]) -> Dict[str, str]:
-    """module → bundled | host-only | missing-everywhere.
+                     host: Optional[Set[str]],
+                     instance_local: Optional[Set[str]] = None) -> Dict[str, str]:
+    """module → bundled | host-only | instance-local | missing-everywhere.
 
     `bundled` = importable in the frozen payload (EMPIRICAL — find_spec in
     that runtime, never assumed); `host` = importable by the sidecar/host
     python (None = unknown → anything unproven is reported as
-    missing-everywhere, never silently passed). Genuine stdlib with an
-    unknown host is flagged host-only, since the payload ships most of the
-    stdlib subset it was built with — but always flagged, never 'bundled'
-    without proof.
+    missing-everywhere, never silently passed). `instance_local` = siblings
+    that live in the instance dir and resolve via its sys.path entry —
+    satisfied by construction. Genuine stdlib with an unknown host is
+    flagged host-only, since the payload ships most of the stdlib subset it
+    was built with — but always flagged, never 'bundled' without proof.
     """
+    local = instance_local or set()
     out: Dict[str, str] = {}
     for m in sorted(set(modules)):
-        if m in bundled:
+        if m in local:
+            out[m] = INSTANCE_LOCAL
+        elif m in bundled:
             out[m] = BUNDLED
         elif host is not None and m in host:
             out[m] = HOST_ONLY
@@ -167,7 +196,8 @@ def _stdlib(name: str) -> bool:
 def audit_instance(instance_dir: str, bundled: Set[str],
                    host: Optional[Set[str]]) -> Dict:
     mods = collect_instance_imports(instance_dir)
-    classes = classify_imports(mods, bundled, host)
+    classes = classify_imports(mods, bundled, host,
+                               instance_local=instance_local_modules(instance_dir))
     missing = sorted(m for m, c in classes.items() if c == MISSING_EVERYWHERE)
     return {"instance": os.path.basename(os.path.abspath(instance_dir)),
             "dir": instance_dir,
@@ -205,7 +235,7 @@ def print_report(report: Dict) -> str:
         status = "OK" if r["ok"] else "WILL FAIL"
         lines.append(f"{r['instance']:<40} [{status}]")
         for mod, cls in sorted(r["imports"].items()):
-            mark = {"bundled": "+", "host-only": "~",
+            mark = {"bundled": "+", "host-only": "~", "instance-local": "·",
                     "missing-everywhere": "✗"}[cls]
             lines.append(f"  {mark} {mod:<28} {cls}")
         if r["missing_everywhere"]:
