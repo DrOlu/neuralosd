@@ -200,5 +200,26 @@ fi
 cleanup_serve
 
 echo
+# ── auth: serve with a token, prove the door locks ─────────────────────────
+AUTH_PORT=8871
+"$NS" serve --instance-dir ./inst --port "$AUTH_PORT" --auth-token sdk-secret \
+    >auth_serve.log 2>&1 &
+AUTH_PID=$!
+for i in 1 2 3 4 5; do
+  sleep 1
+  curl -s --max-time 1 "http://127.0.0.1:$AUTH_PORT/healthz" >/dev/null 2>&1 && break
+done
+CODE_NO=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+  -H 'Content-Type: application/json' \
+  -d '{"question":"how many rows"}' "http://127.0.0.1:$AUTH_PORT/ask")
+CODE_OK=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+  -H 'Content-Type: application/json' -H 'Authorization: Bearer sdk-secret' \
+  -d '{"question":"how many rows"}' "http://127.0.0.1:$AUTH_PORT/ask")
+CODE_HZ=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$AUTH_PORT/healthz")
+kill "$AUTH_PID" 2>/dev/null; wait "$AUTH_PID" 2>/dev/null
+if [ "$CODE_NO" = "401" ]; then echo "  ✓ auth: no token -> 401"; pass=$((pass+1)); else echo "  ✗ auth: no token -> $CODE_NO (want 401)"; fail=$((fail+1)); fi
+if [ "$CODE_OK" = "200" ]; then echo "  ✓ auth: correct token -> 200"; pass=$((pass+1)); else echo "  ✗ auth: correct token -> $CODE_OK (want 200)"; fail=$((fail+1)); fi
+if [ "$CODE_HZ" = "200" ]; then echo "  ✓ auth: /healthz stays open"; pass=$((pass+1)); else echo "  ✗ auth: /healthz -> $CODE_HZ (want 200)"; fail=$((fail+1)); fi
+
 echo "smoke: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
