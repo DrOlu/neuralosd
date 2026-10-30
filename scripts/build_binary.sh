@@ -24,6 +24,14 @@ VERSION="${3:-0.0.0}"
 # (`import boxlite` inside a method), and Nuitka still follows that import.
 # Without it, every variant built in a job that has boxlite installed ends
 # up bundling boxlite — so the msb binary reported BOTH backends available.
+#
+# sqlite3 is ALWAYS force-included: menu-instance bridges (bridge.py /
+# instance.py, loaded dynamically at runtime) commonly `import sqlite3` at
+# module level, but Nuitka cannot see dynamic imports, so the stdlib module
+# was missing from the frozen payload — on Windows the _sqlite3.pyd DLL
+# load failed outright ("declares no probe that a callable actually backs").
+# User bridges that need THIRD-PARTY packages are a different class: they
+# should use the sidecar (tier="sidecar" / `neuralosd sidecar --setup`).
 NOFOLLOW_BOX="--nofollow-import-to=boxlite"
 NOFOLLOW_MSB="--nofollow-import-to=microsandbox"
 EXTRA="$NOFOLLOW_BOX $NOFOLLOW_MSB"
@@ -69,6 +77,8 @@ python -m nuitka \
   --include-package=needle \
   --include-package=pydantic \
   --include-package=openpyxl \
+  --include-package=sqlite3 \
+  --include-module=sqlite3 \
   --include-package-data=needle \
   --include-package-data=neuralosd \
   --include-package-data=openpyxl \

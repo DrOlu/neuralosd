@@ -224,11 +224,17 @@ def observe(instance_dir: str,
     return observations_from([p for p in probes if not is_derived(p)])
 
 
-def load_menu_instance(instance_dir: str):
-    """Build an `Instance` from a needle_menu.json directory."""
+def load_menu_instance(instance_dir: str,
+                       errors: Optional[Dict[str, str]] = None):
+    """Build an `Instance` from a needle_menu.json directory.
+
+    Pass `errors` (a dict) to collect why a module failed to import — the
+    caller should surface it, because "menu names do not match functions"
+    and "bridge.py raised ImportError" look identical from the outside.
+    """
     from .instance import Instance
 
-    probes = probes_from_menu(instance_dir)
+    probes = probes_from_menu(instance_dir, errors=errors)
     if not probes:
         return None
     probes = dedup_probes(probes, derived_probes(instance_dir))
