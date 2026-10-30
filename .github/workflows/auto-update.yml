@@ -96,6 +96,12 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          # A PAT, not the default GITHUB_TOKEN: pushes made with GITHUB_TOKEN
+          # do not trigger other workflows, so the v2.0.1 tag silently woke
+          # neither build-binaries.yml nor any release. With a PAT the tag
+          # push fires build-binaries.yml and the GitHub release appears.
+          token: ${{ secrets.RELEASES_PAT }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

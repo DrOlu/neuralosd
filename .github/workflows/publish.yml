@@ -29,6 +29,12 @@ jobs:
           python-version: "3.12"
       - run: pip install build && python -m build
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          skip-existing: true
+        # Trusted publishing (OIDC) fails with `invalid-publisher` — the
+        # project's Trusted Publisher mapping on PyPI does not match this
+        # workflow. Use the same API-token path auto-update.yml uses.
+        env:
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          pip install twine
+          twine upload dist/* --username __token__ --password "$PYPI_API_TOKEN" \
+            --non-interactive --skip-existing
