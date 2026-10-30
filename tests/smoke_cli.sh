@@ -104,6 +104,46 @@ check "docs usage" 'neuralOS Usage' "$r"
 r="$(run backends)"
 check "backends list" 'boxlite' "$r"
 
+# 6b. classic menu instance whose bridge imports sqlite3 at module level.
+# Frozen binaries once shipped without the sqlite3 stdlib module (Nuitka
+# cannot see dynamic imports from user bridge.py files), so such instances
+# failed with the misleading "declares no probe that a callable actually
+# backs". This check fails in the frozen binary unless sqlite3 is bundled —
+# and now also asserts the diagnostic names the real cause.
+mkdir -p ./inst_sqlite
+cat > ./inst_sqlite/needle_menu.json <<'JSON'
+[{"name": "x_count", "description": "Count rows in the demo table", "triggers": ["how many x"], "parameters": {"type": "object", "properties": {}}}]
+JSON
+cat > ./inst_sqlite/bridge.py <<'PY'
+import sqlite3
+
+
+def x_count():
+    con = sqlite3.connect(":memory:")
+    n = con.execute("SELECT 1").fetchone()[0]
+    con.close()
+    return {"n": n}
+PY
+r="$(run ask --instance-dir ./inst_sqlite 'how many x')"
+check "menu bridge importing sqlite3 answers" '"n": 1' "$r"
+check_not "sqlite3 instance not misdiagnosed" 'declares no probe' "$r"
+
+# 6c. a bridge that fails to import must name the cause, not just the hint
+mkdir -p ./inst_bad
+cat > ./inst_bad/needle_menu.json <<'JSON'
+[{"name": "x_count", "description": "x", "triggers": ["how many x"], "parameters": {"type": "object", "properties": {}}}]
+JSON
+printf 'import sqlite3  # fine
+import module_that_does_not_exist_xyz
+
+
+def x_count():
+    return {"n": 0}
+' > ./inst_bad/bridge.py
+r="$(run ask --instance-dir ./inst_bad 'how many x')"
+check "import failure names the module" 'module_that_does_not_exist_xyz' "$r"
+check "import failure names the file" 'bridge.py:' "$r"
+
 # 7. serve + HTTP
 # Two hazards this guards against:
 #  - a Nuitka onefile runs the real server in a CHILD of the pid we launch,

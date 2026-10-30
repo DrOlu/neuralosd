@@ -71,13 +71,21 @@ def _load_menu_instance(instance_dir: str, with_model: bool = False):
     """Load a classic needle-menu instance (menu JSON + callables)."""
     from ..menu_adapter import load_menu_instance
 
-    inst = load_menu_instance(instance_dir)
+    errors: Dict[str, str] = {}
+    inst = load_menu_instance(instance_dir, errors=errors)
     if inst is None:
-        raise SystemExit(
-            f"error: {instance_dir}/needle_menu.json declares no probe that a "
-            f"callable actually backs\n"
-            f"hint: the menu names must match functions in bridge.py or "
-            f"instance.py in the same directory")
+        msg = (f"error: {instance_dir}/needle_menu.json declares no probe that a "
+               f"callable actually backs\n"
+               f"hint: the menu names must match functions in bridge.py or "
+               f"instance.py in the same directory")
+        # An import failure inside bridge.py/instance.py looks exactly like a
+        # name mismatch from the outside — surface it, or the user debugs the
+        # wrong thing (e.g. a frozen Windows binary missing the sqlite3 DLL).
+        if errors:
+            detail = "\n".join(f"  {mod}.py: {err}" for mod, err in sorted(errors.items()))
+            msg += ("\n\nmodule import failures (the real cause, most likely):\n"
+                    f"{detail}")
+        raise SystemExit(msg)
     if with_model:
         inst.router.model_fallback = _build_model_fallback(inst.probes)
     return inst
