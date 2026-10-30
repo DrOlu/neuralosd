@@ -41,6 +41,24 @@ def run(a):
     print("  README.md     — next steps")
     print(f"\ntry:  neuralosd ask --instance-dir {out} \"how many rows\"")
 
+    # Prevention: a bridge import the frozen binary can't satisfy fails at
+    # runtime with (at best) an ImportError and (at worst) silence. Catch it
+    # at BIRTH — non-fatal here, loud in the report.
+    try:
+        from .instance_audit import audit_instance, current_runtime_importable, \
+            collect_instance_imports, print_report
+        mods = collect_instance_imports(out)
+        bundled = current_runtime_importable(mods)
+        rep = audit_instance(out, bundled, set(bundled))
+        if not rep["ok"]:
+            print("\n⚠ import audit — this instance will NOT load in the frozen "
+                  "binary until fixed:\n")
+            print(print_report({"instances": [rep]}))
+            print("\n  fix: install the modules into the sidecar "
+                  "(neuralosd sidecar --setup --with <mods>) or set NEURALOSD_SIDECAR")
+    except Exception:                                    # noqa: BLE001
+        pass                                             # never block scaffolding
+
 
 def _write_banks(out, info):
     """Ship behavioural banks with EVERY instance.

@@ -212,6 +212,16 @@ def main():
     p_scrub.add_argument("--purge-cache", action="store_true",
                          help="delete the cache instead of rewriting it")
 
+    # audit — instance import classification (frozen-binary gap)
+    p_audit = sub.add_parser(
+        "audit", help="Classify instance imports: bundled | host-only | missing-everywhere")
+    p_audit.add_argument("--instance-dir", help="audit one instance")
+    p_audit.add_argument("--root", help="audit every instance under DIR")
+    p_audit.add_argument("--host-python",
+                         help="sidecar/host python (default: $NEURALOSD_SIDECAR, "
+                              "or this runtime when not frozen)")
+    p_audit.add_argument("--json", action="store_true", help="machine-readable report")
+
     # sidecar
     p_sc = sub.add_parser(
         "sidecar",
@@ -273,6 +283,9 @@ def main():
     elif a.command == "scrub":
         from ._cmd import scrub
         raise SystemExit(scrub.run(a))
+    elif a.command == "audit":
+        from ._cmd import audit
+        audit.run(a)
     elif a.command == "mesh":
         from ._cmd import mesh
         raise SystemExit(mesh.run(a))
