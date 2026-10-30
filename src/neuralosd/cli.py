@@ -82,6 +82,10 @@ def main():
                          help="Load the on-device model as a fallback")
     p_serve.add_argument("--strict", action="store_true",
                          help="Refuse answers that would drop a filter")
+    p_serve.add_argument("--auth-token",
+                         help="require Authorization: Bearer <token> on every "
+                              "endpoint except /healthz and /ready (or set "
+                              "$NEURALOSD_API_TOKEN)")
     p_serve.add_argument("--host", default="127.0.0.1",
                          help="Bind address (default 127.0.0.1; use 0.0.0.0 "
                               "to expose — there is NO authentication)")
