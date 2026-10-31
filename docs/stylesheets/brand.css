@@ -1,0 +1,26 @@
+/* neuralOSd brand — matches neuralosd.neuralos.ng
+   deep green #4a9018 (primary) · lime #a0e030 (accent)
+   light surface #f6faf4 · near-black #061a0a */
+
+/* light scheme (default) */
+:root > * {
+  --md-primary-fg-color: #4a9018;
+  --md-primary-fg-color--light: #5a9a28;
+  --md-primary-fg-color--dark: #2d5c2d;
+  --md-primary-bg-color: #f6faf4;
+  --md-accent-fg-color: #4a9018;
+  --md-typeset-a-color: #4a9018;
+  --md-default-bg-color: #f6faf4;
+  --md-code-bg-color: #eef6ec;
+}
+
+/* dark (slate) scheme — the marketing site's native look */
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #061a0a;
+  --md-primary-bg-color: #020e08;
+  --md-accent-fg-color: #a0e030;
+  --md-typeset-a-color: #a0e030;
+  --md-default-bg-color: #061a0a;
+  --md-code-bg-color: #010a05;
+  --md-footer-bg-color: #010a05;
+}
