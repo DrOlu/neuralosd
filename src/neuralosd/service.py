@@ -59,31 +59,35 @@ def serve(instance, port: int = 8877, host: str = "0.0.0.0",
             self.wfile.write(body)
 
         def do_GET(self):
-            # /healthz and /ready stay open: liveness probes must not need
-            # credentials, and they expose nothing but instance NAME.
-            if not self._authorized() and self.path not in ("/healthz", "/ready"):
+            # normalize: "/healthz?lb=1" and "/healthz/" are still liveness
+            path = self.path.split("?", 1)[0].rstrip("/") or "/"
+            # /healthz stays open: liveness must not need credentials, and it
+            # exposes nothing but the instance NAME. /ready EXECUTES a real
+            # probe, so it requires auth whenever auth is enabled.
+            if not self._authorized() and path != "/healthz":
                 self._send(401, {"error": "unauthorized: pass Authorization: "
                                            "Bearer <token> or X-API-Token"})
                 return
-            if self.path == "/healthz":
+            if path == "/healthz":
                 self._send(200, {"ok": True, "instance": inst.name})
-            elif self.path == "/ready":
+            elif path == "/ready":
                 try:
                     r = inst.ask(inst.menu[0]["triggers"][0])
                     self._send(200, {"ok": True, "probe": r.get("probe")})
                 except Exception as exc:
                     self._send(503, {"ok": False, "error": str(exc)[:200]})
-            elif self.path == "/openapi.json":
+            elif path == "/openapi.json":
                 self._send(200, inst.openapi())
             else:
                 self._send(404, {"error": "not found"})
 
         def do_POST(self):
+            path = self.path.split("?", 1)[0].rstrip("/") or "/"
             if not self._authorized():
                 self._send(401, {"error": "unauthorized: pass Authorization: "
                                            "Bearer <token> or X-API-Token"})
                 return
-            if self.path != "/ask":
+            if path != "/ask":
                 self._send(404, {"error": "not found"})
                 return
             try:
