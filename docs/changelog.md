@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.10.0 — multi-instance & mesh era
+
+- **Multi-instance serving**: one process, many instances, routed by path
+- **Parallel probe sweep**: the reason loop's probe scan is now concurrent
+- **Mapper verdict cache**: repeat reason runs skip the model entirely
+- **Template fork**: deploy from a baked sandbox snapshot in seconds
+- **Synapse mesh integration**: register, serve, discover, delegate
+- **REST-preferred boxlite door**: no runtime lock when boxlite serve is available
+- **Plural-normalized scoring**: "clinics" matches "clinic" everywhere
+- **Exact-phrase bonus**: a fully-covered trigger beats a partial match
+- **Shared action-intent check**: the gate and the floor-miss path use the same code
+- **Whole-word qualifier matching**: "resolved" doesn't fire inside "unresolved"
+
 ## 2.0.6 — the SDK release
 
 - **`neuralosd serve --auth-token`** (or `$NEURALOSD_API_TOKEN`): bearer/X-API-Token
