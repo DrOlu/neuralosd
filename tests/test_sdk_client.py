@@ -134,3 +134,31 @@ def test_connection_failure_raises_transport_error():
                         timeout=2)
     with pytest.raises(TransportError):
         c.ask("anything", )
+
+
+def test_non_json_200_is_transport_error_not_crash():
+    """A 200 that is not JSON is a broken server — TransportError with a
+    snippet, never a bare ValueError/JSONDecodeError."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Raw(BaseHTTPRequestHandler):
+        def do_GET(self):
+            b = b"<html>gateway timeout page</html>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+
+        def log_message(self, *a):
+            pass
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Raw)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    c = NeuralOSDClient(f"http://127.0.0.1:{srv.server_address[1]}")
+    try:
+        with pytest.raises(TransportError, match="non-JSON response"):
+            c.health()
+    finally:
+        srv.shutdown()

@@ -991,7 +991,9 @@ neuralosd serve --instance-dir ./inst --port 8877 \
 
 - Every endpoint except **`/healthz`** and **`/ready`** requires
   `Authorization: Bearer <token>` (or `X-API-Token: <token>`).
-- Liveness probes stay open on purpose: they expose only the instance name.
+- **`/healthz` stays open** on purpose: it exposes only the instance name.
+  **`/ready` requires the token** — it executes a real probe, and an
+  unauthenticated readiness check would let anyone run queries.
 - Token comparison is constant-time.
 - Equivalent: `export NEURALOSD_API_TOKEN=...` instead of the flag.
 - Non-loopback binding without a token still prints the explicit warning.

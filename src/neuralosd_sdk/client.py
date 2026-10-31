@@ -128,7 +128,15 @@ class NeuralOSDClient:
                                          method=method)
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as r:
-                    return json.loads(r.read().decode() or "{}")
+                    raw = r.read().decode(errors="replace")
+                try:
+                    return json.loads(raw or "{}")
+                except (ValueError, TypeError) as exc:
+                    # a 200 that is not JSON is a broken server, not data —
+                    # surface it as transport, never as a traceback
+                    raise TransportError(
+                        f"non-JSON response from {path}: {raw[:120]!r}"
+                    ) from exc
             except urllib.error.HTTPError as e:
                 detail = e.read().decode(errors="replace")[:300]
                 try:

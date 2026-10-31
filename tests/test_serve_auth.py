@@ -77,3 +77,60 @@ def test_serve_auth_real():
     c = NeuralOSDClient(base, token=TOKEN)
     r = c.ask("how many rows")
     assert r.results[0]["count"] == 4
+
+
+def test_serve_auth_path_normalization_and_ready():
+    """Edges found in the robustness sweep:
+    - '/healthz?lb=1' and '/healthz/' are still liveness (no 401)
+    - '/ask?x=1' still routes (no 404)
+    - '/ready' EXECUTES a real probe, so it requires the token — an
+      unauthenticated readiness check must not be able to run queries.
+    """
+    import socket
+    import time
+    import urllib.error
+    import urllib.request
+
+    from neuralosd.probe import probe
+
+    @probe(description="Count rows", triggers=["how many rows"])
+    def row_count():
+        return {"count": 4}
+
+    inst = Instance(name="auth-e2e-2", probes=[row_count])
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+
+    threading.Thread(target=serve,
+                     args=(inst,),
+                     kwargs={"port": port, "host": "127.0.0.1",
+                             "auth_token": TOKEN},
+                     daemon=True).start()
+    base = f"http://127.0.0.1:{port}"
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        try:
+            urllib.request.urlopen(f"{base}/healthz", timeout=1)
+            break
+        except Exception:
+            time.sleep(0.1)
+
+    def code(path, token=TOKEN, method="GET", body=None):
+        r = urllib.request.Request(f"{base}{path}", method=method,
+                                   data=json.dumps(body).encode() if body else None)
+        if token:
+            r.add_header("Authorization", f"Bearer {token}")
+        try:
+            resp = urllib.request.urlopen(r, timeout=5)
+            return resp.status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    assert code("/healthz?lb=1") == 200              # query string ≠ auth bypass
+    assert code("/healthz/") == 200                  # trailing slash fine
+    assert code("/ready") == 200                     # with token: fine
+    assert code("/ready", token=None) == 401         # runs a probe → needs token
+    assert code("/ask?x=1", method="POST",
+                body={"question": "how many rows"}) == 200

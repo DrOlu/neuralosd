@@ -29,13 +29,19 @@ HOST_ONLY = "host-only"            # not bundled, but the sidecar/host has it
 INSTANCE_LOCAL = "instance-local"  # a sibling .py/package in the instance dir
 MISSING_EVERYWHERE = "missing-everywhere"   # neither — instance WILL fail
 
+# Modules that ship with CPython itself — find_spec can never miss them in a
+# working interpreter, so they can never be a deployment gap.
+INTERPRETER_GUARANTEED = {"__future__", "sys", "builtins", "_thread",
+                          "exceptions"}
+
 # NOTE: there is deliberately NO "known-bundled" fallback list here. A module
 # counts as bundled only when find_spec proved it in the actual runtime — an
 # assumption is exactly the failure mode this module exists to prevent.
 
 
 # ── collection ──────────────────────────────────────────────────────────────
-def collect_imports(path: str) -> Set[str]:
+def collect_imports(path: str,
+                    parse_errors: Optional[List[str]] = None) -> Set[str]:
     """Every top-level module name imported anywhere in `path`.
 
     AST-based (not regex): catches top-level AND function-level imports,
@@ -43,8 +49,25 @@ def collect_imports(path: str) -> Set[str]:
     fallbacks, and aliases. Relative imports (level > 0) are skipped — they
     resolve inside the instance dir, not the runtime.
     """
-    with open(path, encoding="utf-8") as fh:
-        tree = ast.parse(fh.read(), filename=path)
+    try:
+        with open(path, encoding="utf-8") as fh:   # strict: CPython requires it
+            src = fh.read()
+    except UnicodeDecodeError as exc:
+        # CPython source loading is strict-UTF-8: a file the auditor cannot
+        # decode is a file the interpreter cannot import, either.
+        if parse_errors is not None:
+            parse_errors.append(
+                f"{os.path.basename(path)}: not valid UTF-8 ({exc})")
+        return set()
+    try:
+        tree = ast.parse(src, filename=path)
+    except (SyntaxError, ValueError) as exc:
+        # Unparseable bridge: the instance will fail at load time regardless
+        # of imports. Return nothing here; the caller records the file so the
+        # REPORT carries the bad news instead of the tool crashing.
+        if parse_errors is not None:
+            parse_errors.append(f"{os.path.basename(path)}: {exc.msg if isinstance(exc, SyntaxError) else exc}")
+        return set()
     mods: Set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -76,20 +99,21 @@ def instance_local_modules(instance_dir: str) -> Set[str]:
     except OSError:
         return names
     for entry in entries:
-        if entry.endswith(".py") and entry != "__init__.py":
+        full = os.path.join(instance_dir, entry)
+        if entry.endswith(".py") and entry != "__init__.py" \
+                and not entry.startswith(".") and os.path.isfile(full):
             names.add(entry[:-3])
-        else:
-            full = os.path.join(instance_dir, entry)
-            if os.path.isdir(full) and os.path.isfile(
-                    os.path.join(full, "__init__.py")):
-                names.add(entry)
+        elif os.path.isdir(full) and os.path.isfile(
+                os.path.join(full, "__init__.py")):
+            names.add(entry)
     return names
 
 
-def collect_instance_imports(instance_dir: str) -> Set[str]:
+def collect_instance_imports(instance_dir: str,
+                             parse_errors: Optional[List[str]] = None) -> Set[str]:
     mods: Set[str] = set()
     for path in instance_module_paths(instance_dir):
-        mods |= collect_imports(path)
+        mods |= collect_imports(path, parse_errors=parse_errors)
     # instance-internal cross-imports (probes.py doing `import bridge`) resolve
     # inside the instance dir — the adapter puts it on sys.path — so they can
     # never be a runtime gap. Only imports the RUNTIME must satisfy remain.
@@ -172,7 +196,9 @@ def classify_imports(modules: Iterable[str], bundled: Set[str],
     local = instance_local or set()
     out: Dict[str, str] = {}
     for m in sorted(set(modules)):
-        if m in local:
+        if m in INTERPRETER_GUARANTEED:
+            out[m] = BUNDLED            # ships with CPython itself
+        elif m in local:
             out[m] = INSTANCE_LOCAL
         elif m in bundled:
             out[m] = BUNDLED
@@ -195,15 +221,19 @@ def _stdlib(name: str) -> bool:
 
 def audit_instance(instance_dir: str, bundled: Set[str],
                    host: Optional[Set[str]]) -> Dict:
-    mods = collect_instance_imports(instance_dir)
+    parse_errors: List[str] = []
+    mods = collect_instance_imports(instance_dir, parse_errors=parse_errors)
     classes = classify_imports(mods, bundled, host,
                                instance_local=instance_local_modules(instance_dir))
     missing = sorted(m for m, c in classes.items() if c == MISSING_EVERYWHERE)
+    # a module that cannot even be parsed will fail at load time — that is a
+    # deployment gap exactly like a missing import, so the audit reports it
     return {"instance": os.path.basename(os.path.abspath(instance_dir)),
             "dir": instance_dir,
             "imports": classes,
             "missing_everywhere": missing,
-            "ok": not missing}
+            "parse_errors": sorted(parse_errors),
+            "ok": not missing and not parse_errors}
 
 
 def audit_root(root: str, host_exe: Optional[str] = None) -> Dict:
