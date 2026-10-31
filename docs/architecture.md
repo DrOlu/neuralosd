@@ -17,7 +17,7 @@ is designed the way it is, not just *how* to use it.
 7. [The Data Layer](#7-the-data-layer)
 8. [The Guardrail Chain](#8-the-guardrail-chain)
 9. [State Management](#9-state-management)
-10. [Networking & Isolation](#10-networking--isolation)
+10. [Networking & Isolation](#10-networking-isolation)
 11. [Security Model](#11-security-model)
 12. [Performance Model](#12-performance-model)
 13. [Deployment Patterns](#13-deployment-patterns)

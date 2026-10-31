@@ -2,7 +2,7 @@ name: Deploy Docs to GitHub Pages
 on:
   push:
     branches: [main]
-    paths: ["docs_src/**", "mkdocs.yml"]
+    paths: ["docs/**", "mkdocs.yml"]
 permissions:
   contents: read
   pages: write

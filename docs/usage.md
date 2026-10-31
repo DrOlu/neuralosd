@@ -81,6 +81,8 @@ pip install pypdf pywinrm    # whatever your probes need
 | all of a probe's imports resolve in the binary | runs in-process (fast) |
 | an import is missing, even lazily inside the function | retried in the sidecar |
 | probe declared `tier="sidecar"` | always runs in the sidecar |
+| menu entry declared `"tier": "sidecar"` | always runs in the sidecar (classic layouts) |
+| **classic menu-only instance** (no probes.py) | fully supported: the sidecar lifts `needle_menu.json` onto bridge.py |
 | missing import and no sidecar | exits with `pip install <lib>` |
 
 `NEURALOSD_SIDECAR=off` disables delegation; `NEURALOSD_SIDECAR=/path/to/helper`
@@ -980,6 +982,20 @@ neuralosd serve --instance-dir ./inst --port 8877
 # → http://127.0.0.1:8877
 ```
 
+### 7.1b Token auth (recommended whenever the port is reachable)
+
+```bash
+neuralosd serve --instance-dir ./inst --port 8877 \
+                --auth-token "$NEURALOSD_API_TOKEN"
+```
+
+- Every endpoint except **`/healthz`** and **`/ready`** requires
+  `Authorization: Bearer <token>` (or `X-API-Token: <token>`).
+- Liveness probes stay open on purpose: they expose only the instance name.
+- Token comparison is constant-time.
+- Equivalent: `export NEURALOSD_API_TOKEN=...` instead of the flag.
+- Non-loopback binding without a token still prints the explicit warning.
+
 `serve` binds **loopback by default**. `/ask` exposes the data behind every
 probe and has **no authentication**, so binding wide is a deliberate act:
 
@@ -1027,6 +1043,40 @@ curl -X POST http://localhost:8877/ask \
 ---
 
 ## 8. Monitor and Audit
+
+### 8.0 Instance import audit — `neuralosd audit`
+
+The frozen binary loads instance `bridge.py` / `instance.py` / `probes.py`
+dynamically, so the build cannot know their imports. The audit closes that
+gap at birth: it AST-parses every instance module and classifies each import
+against the runtime and the sidecar — empirically (find_spec), never assumed.
+
+```bash
+# one instance
+neuralosd audit --instance-dir ./inst
+
+# a whole fleet (every dir with needle_menu.json under root)
+neuralosd audit --root /srv/fleet --host-python /path/to/sidecar/python
+
+# machine-readable (for CI / the instance-creation gate)
+neuralosd audit --instance-dir ./inst --json
+```
+
+Classification:
+
+| Class | Meaning |
+|---|---|
+| `bundled` | importable in the frozen runtime (proven, not assumed) |
+| `host-only` | not bundled; the sidecar/host python has it |
+| `instance-local` | a sibling `.py`/package in the instance dir — resolves via the dir's sys.path entry |
+| `missing-everywhere` | **this instance will fail** — install the module into the sidecar |
+
+Exit code is non-zero when anything is `missing-everywhere`, so the
+instance-creation flow can refuse to declare done. `neuralosd init` runs the
+audit automatically and warns before an under-provisioned instance ships.
+Instance-internal cross-imports (`probes.py` doing `import bridge`) and
+sibling modules (`models.py`, `graph_bridge.py`) are recognized as
+instance-local, never false-flagged.
 
 ### Audit log
 

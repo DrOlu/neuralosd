@@ -619,3 +619,55 @@ grep -c esca /dev/null || true
 - **Do not hand-edit `derived.json` to add a quantity id you have not seen a
   probe return.** An id that resolves to nothing fails at ask time.
 
+
+
+## Recipe 9: Serve with token auth + SDK client
+
+Put the lock on before the port is reachable.
+
+```bash
+export NEURALOSD_API_TOKEN="$(openssl rand -hex 32)"
+neuralosd serve --instance-dir ./inst --port 8877 --auth-token "$NEURALOSD_API_TOKEN"
+# /healthz and /ready stay open (liveness); everything else needs the token
+```
+
+```python
+from neuralosd_sdk import NeuralOSDClient, RefusalError
+
+c = NeuralOSDClient("http://127.0.0.1:8877", token=os.environ["NEURALOSD_API_TOKEN"])
+try:
+    r = c.ask("total revenue by region")
+    print(r.probe, r.results)     # verified data
+except RefusalError as e:
+    print("honest refusal:", e.envelope.get("refusal_reason"))
+```
+
+A matching zero-dependency JavaScript client lives at
+`clients/javascript/neuralosd-client.mjs` (browsers + Node 18+). Retry
+policy in both clients: connection errors and 5xx retry with exponential
+backoff; 4xx never — retrying a refusal would be asking for a
+hallucination.
+
+## Recipe 10: Fleet import audit as a CI gate
+
+The frozen binary loads instance modules dynamically, so its build cannot
+know their imports. The audit closes that gap at birth — and in CI, before
+a broken instance ships.
+
+```bash
+# locally: every instance under the fleet root
+neuralosd audit --root /srv/fleet --host-python /path/to/sidecar/python
+```
+
+```yaml
+# .github/workflows or any CI step
+- name: Instance import audit
+  run: |
+    neuralosd audit --root ./fleet --json > audit.json
+    python -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d['ok'] else 1)"
+```
+
+Classification: `bundled` (proven in the runtime), `host-only` (sidecar has
+it), `instance-local` (sibling in the instance dir — always resolves),
+`missing-everywhere` (instance WILL fail — fix before shipping). Exit code
+is non-zero on any missing-everywhere, so the gate just works.

@@ -405,6 +405,42 @@ damage done by the new metric.
 Replay against explicit golden expectations; write `derived.json` without
 touching `probes.py`.
 
+## neuralosd.instance_audit
+
+AST-based import audit for instances: closes the "frozen binary can't see
+instance imports" gap at birth.
+
+- `collect_imports(path)` — every top-level module name imported anywhere in
+  a module (top-level AND function-level, try/except fallbacks, aliases;
+  relative imports skipped).
+- `collect_instance_imports(instance_dir)` — union over
+  bridge/instance/probes, minus instance-internal cross-imports.
+- `instance_local_modules(instance_dir)` — sibling `.py` files and local
+  packages; these resolve via the dir's sys.path entry and are classified
+  `instance-local`, never missing.
+- `importable_set(exe, modules)` — EMPIRICAL check: which modules can a
+  given python actually import (find_spec, one subprocess).
+- `classify_imports(mods, bundled, host, instance_local)` — each module →
+  `bundled | host-only | instance-local | missing-everywhere`. With an
+  unknown host, unproven modules are NEVER passed silently.
+- `audit_instance(dir, bundled, host)` / `audit_root(root, host_exe)` —
+  report dicts; `ok` is False iff anything is missing-everywhere.
+
+## neuralosd_sdk
+
+The zero-dependency client for `neuralosd serve` (Python; a matching ESM
+client lives at `clients/javascript/neuralosd-client.mjs`).
+
+- `NeuralOSDClient(base_url, token=None, timeout=30, max_retries=2,
+  backoff=0.5)` — token auth via `Authorization: Bearer`.
+- `.ask(question) -> AskResult` — typed result (probe, results, mode,
+  cached, latency_ms, raw envelope). Retries connection errors and 5xx with
+  exponential backoff; **4xx is never retried** (retrying a refusal would
+  be asking for a hallucination).
+- `.health()` / `.ready()` / `.openapi()`.
+- Errors: `AuthError` (401), `RefusalError` (422 — the instance honestly
+  declined; `.envelope` carries the reason), `TransportError`.
+
 ## neuralosd.menu_adapter
 
 ### `probes_from_menu(instance_dir, module_names=None, errors=None)`

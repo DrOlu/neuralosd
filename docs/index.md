@@ -1,7 +1,9 @@
 # neuralOSd
 
-An offline, on-device data-answering runtime that **refuses what it cannot
-verify**, **accounts for what it excludes**, and **ships with its own tests**.
+**The verified agent runtime.** An offline, on-device data-answering runtime
+that **refuses what it cannot verify**, **accounts for what it excludes**,
+and **ships with its own tests**. The model picks; the runtime verifies; the
+code answers.
 
 ## Quick Start
 
@@ -25,18 +27,24 @@ it's what makes it safe for regulated environments.
 | Errors are silent | Discards are **visible** |
 | Deployment = "it should work" | Deployment = **verified end to end** |
 
-## What's new in 1.10.0
+## What's new in 2.0.6
 
-- **Multi-instance serving**: one process, many instances, routed by path
-- **Parallel probe sweep**: the reason loop's probe scan is now concurrent
-- **Mapper verdict cache**: repeat reason runs skip the model entirely
-- **Template fork**: deploy from a baked sandbox snapshot in seconds
-- **Synapse mesh integration**: register, serve, discover, delegate
-- **REST-preferred boxlite door**: no runtime lock when boxlite serve is available
-- **Plural-normalized scoring**: "clinics" matches "clinic" everywhere
-- **Exact-phrase bonus**: a fully-covered trigger beats a partial match
-- **action_intent_reason shared function**: the gate and the floor-miss path
-  use the same check
-- **Whole-word qualifier matching**: "resolved" doesn't fire inside "unresolved"
-- **Conformance suite**: 16 cases that all pass
-- **Shipped behavioural banks**: golden.json + traps.json with every instance
+- **SDK layer** — `neuralosd_sdk` (zero-dependency Python client) and a
+  zero-dep JavaScript client: typed `ask()`, retries with backoff, refusals
+  as exceptions. See the [SDK guide](sdk.md).
+- **Token auth on `serve`** — `--auth-token` / `$NEURALOSD_API_TOKEN`
+  requires a bearer token on every endpoint except liveness
+  (`/healthz`, `/ready`); constant-time comparison.
+- **Instance import audit** — `neuralosd audit` AST-parses every instance
+  module and classifies imports as `bundled` / `host-only` /
+  `instance-local` / `missing-everywhere` against the runtime and the
+  sidecar. Exit code gates instance creation; `--root` scans a whole fleet.
+- **Sidecar delegation, complete** — works for classic menu-only instances
+  (no `probes.py` needed), for imports nested in helper functions, and
+  `"tier": "sidecar"` is honored from menu entries.
+- **sqlite3 bundled in frozen binaries** — menu bridges that
+  `import sqlite3` load on every platform; the CLI now names the real
+  import failure instead of a misleading hint.
+- **Menu-instance tier honored** — `"tier": "sidecar"` in
+  `needle_menu.json` is the classic-layout escape hatch.
+- **Test gate in CI** — unit tests + the CLI smoke suite run on every PR.

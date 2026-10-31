@@ -33,9 +33,11 @@ theme:
 nav:
   - Home: index.md
   - Quick Start: usage.md
+  - SDK: sdk.md
   - API Reference: reference.md
   - Cookbook: cookbook.md
   - Architecture: architecture.md
+  - Changelog: changelog.md
 
 markdown_extensions:
   - admonition
