@@ -1,0 +1,34 @@
+{
+  "name": "neuralosd",
+  "version": "2.0.7",
+  "description": "neuralOSd CLI — installer for the verified agent-runtime binaries (gateway/runtime for neuralOS instances).",
+  "license": "Apache-2.0",
+  "author": "Hyperspace Technologies <agent@superagent.ng>",
+  "homepage": "https://drolu.github.io/neuralosd/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DrOlu/neuralosd.git"
+  },
+  "bugs": {
+    "url": "https://github.com/DrOlu/neuralosd/issues"
+  },
+  "keywords": [
+    "neuralosd",
+    "neuralos",
+    "ai-agent",
+    "agent-runtime",
+    "data-answers",
+    "on-device"
+  ],
+  "type": "module",
+  "bin": {
+    "neuralosd": "bin/neuralosd.mjs"
+  },
+  "files": [
+    "bin/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

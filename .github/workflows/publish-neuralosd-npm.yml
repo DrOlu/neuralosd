@@ -1,0 +1,128 @@
+name: Publish neuralosd (npm)
+
+# The `neuralosd` npm package is the tiny CLI launcher (npx neuralosd) that
+# installs the neuralOSd binaries from the matching GitHub release. Keep it
+# version-for-version with the app: whenever a release is published, push
+# npm/neuralosd to the public registry.
+#
+# Dispatchable with an existing tag to (re)publish or backfill:
+#   gh workflow run publish-neuralosd-npm.yml -f tag=v2.0.8
+#
+# NOTE: the release is created by build-binaries.yml with GITHUB_TOKEN, and
+# events from GITHUB_TOKEN never trigger other workflows — hence this
+# workflow also runs on a daily schedule as a drift-guard, and can be
+# dispatched manually right after a release lands.
+
+on:
+  release:
+    types: [released]
+  schedule:
+    - cron: "23 6 * * *"   # drift-guard: publish when the newest release is missing on npm
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish, for example v2.0.8
+        required: true
+      npm_tag:
+        description: npm dist-tag to publish under (default latest)
+        required: false
+        default: latest
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-neuralosd-npm-${{ github.event.release.tag_name || github.event.inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+      NPM_TAG: ${{ github.event.inputs.npm_tag || 'latest' }}
+    steps:
+      - name: Resolve the release tag
+        run: |
+          set -euo pipefail
+          if [ -z "$RELEASE_TAG" ]; then
+            # drift-guard path: newest release vs npm
+            LATEST=$(gh api repos/${{ github.repository }}/releases/latest --jq .tag_name)
+            PKGVER="${LATEST#v}"
+            if curl -sf "https://registry.npmjs.org/neuralosd" | \
+               python3 -c "import json,sys,os; d=json.load(sys.stdin); v=os.environ['PKGVER']; sys.exit(0 if v in d.get('versions',{}) else 1)"; then
+              echo "neuralosd $PKGVER already on npm — nothing to do"
+              echo "SKIP=true" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            echo "::notice::npm drift: $LATEST is not on npm — publishing"
+            RELEASE_TAG="$LATEST"
+          fi
+          if [ -z "$RELEASE_TAG" ]; then
+            echo "::error::no release tag resolved"
+            exit 1
+          fi
+          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
+          echo "publishing neuralosd from $RELEASE_TAG (npm dist-tag: $NPM_TAG)"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: No-op on schedule when in sync
+        if: env.SKIP == 'true'
+        run: echo "in sync; nothing to publish"
+
+      # Publish exactly what was tagged, not whatever main holds today.
+      - uses: actions/checkout@v6
+        if: env.SKIP != 'true'
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - uses: actions/setup-node@v4
+        if: env.SKIP != 'true'
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Verify npm auth
+        if: env.SKIP != 'true'
+        working-directory: npm/neuralosd
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::secret NPM_TOKEN is not set"
+            exit 1
+          fi
+          echo "authenticated to npm as: $(npm whoami)"
+
+      - name: Assert the launcher derives its version from package.json
+        if: env.SKIP != 'true'
+        working-directory: npm/neuralosd
+        run: |
+          set -euo pipefail
+          if grep -q 'const VERSION = "' bin/neuralosd.mjs; then
+            echo "::error::bin/neuralosd.mjs hardcodes VERSION — it must derive it from package.json (the same literal shipped stale binaries in the reactorpro launcher)"
+            exit 1
+          fi
+          echo "launcher version resolves to: $(node bin/neuralosd.mjs --version)"
+
+      - name: Publish npm/neuralosd
+        if: env.SKIP != 'true'
+        working-directory: npm/neuralosd
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          name=$(node -p "require('./package.json').name")
+          tag_version="${RELEASE_TAG#v}"
+          committed=$(node -p "require('./package.json').version")
+          if [ "${committed}" != "${tag_version}" ]; then
+            echo "::warning::package.json is at ${committed} but ${RELEASE_TAG} was released — publishing ${tag_version}"
+            npm pkg set version="${tag_version}"
+          fi
+          if npm view "${name}@${tag_version}" version >/dev/null 2>&1; then
+            echo "already on registry: ${name}@${tag_version} — skipping"
+            exit 0
+          fi
+          npm publish --access public --tag "$NPM_TAG"
