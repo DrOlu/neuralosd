@@ -256,7 +256,23 @@ def _load_probes_in_process(probes_py, instance_dir, name):
     spec = importlib.util.spec_from_file_location(modname, probes_py)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[modname] = mod
+    before = frozenset(sys.modules)
     spec.loader.exec_module(mod)
+
+    # An instance's sibling modules (bridge.py, models.py, ...) import under
+    # BARE names, so the second instance loaded in one process would silently
+    # reuse the FIRST instance's bridge and answer from the wrong data file
+    # (a sqlite ledger counted through a CSV bridge from another tmp dir).
+    # Drop the modules this exec freshly imported from the instance dir: the
+    # loaded probes keep their references via their module globals, so
+    # nothing that already loaded can break.
+    for mname, m in list(sys.modules.items()):
+        if mname in before or mname == modname:
+            continue
+        f = getattr(m, "__file__", None)
+        if f and os.path.dirname(os.path.realpath(f)) == \
+                os.path.realpath(instance_dir):
+            del sys.modules[mname]
 
     probes = list(getattr(mod, "PROBES", []))
     if not probes:

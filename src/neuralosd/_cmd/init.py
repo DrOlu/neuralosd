@@ -4,6 +4,8 @@ Supported sources (self-contained, no external scripts):
   *.csv / *.tsv    — column profiled; count / list / distinct / sum probes
   *.xlsx / *.xlsm  — Excel workbook profiled (needs openpyxl; all sheets)
   *.json / *.jsonl — key profiled; count / list / lookup probes
+  *.db / *.sqlite  — SQLite database profiled (stdlib sqlite3; tables,
+                     columns, row counts; first table drives the probes)
   anything else    — a contract template the user fills in
 """
 import json
@@ -22,6 +24,8 @@ def run(a):
         info = _profile_delimited(src)
     elif src.endswith((".json", ".jsonl")):
         info = _profile_json(src)
+    elif src.endswith((".db", ".sqlite", ".sqlite3")):
+        info = _profile_sqlite(src)
     else:
         info = {"kind": "opaque", "columns": [], "rows": None}
 
@@ -36,6 +40,10 @@ def run(a):
     print(f"  probes.py     — {n} column(s) profiled")
     if info.get("sheets"):
         print(f"  sheets        — {', '.join(info['sheets'])}")
+    if info.get("tables"):
+        print("  tables        — " + ", ".join(
+            f"{t} ({v['rows']} rows)"
+            for t, v in info["tables"].items()))
     print("  golden.json   — positive bank (fill from verified sessions)")
     print("  traps.json    — refusal bank (what this instance must NOT answer)")
     print("  README.md     — next steps")
@@ -247,6 +255,55 @@ def _profile_delimited(path):
             "columns": _annotate(columns), "rows": len(rows), "delim": delim}
 
 
+def _profile_sqlite(path):
+    """Profile a SQLite database with stdlib sqlite3 — zero new deps, which
+    is the whole point: the bundled-sqlite3 story means a frozen neuralosd
+    binary can profile a .db file anywhere.
+
+    Every table is profiled (columns, declared types, row counts); the FIRST
+    table in creation order is the primary and drives the column-driven
+    probes, exactly the scaffold a single-sheet workbook gets. All table
+    names ship in the generated probes.py so the menu documents the schema.
+    """
+    import sqlite3
+    conn = sqlite3.connect(f"file:{os.path.abspath(path)}?mode=ro", uri=True)
+    try:
+        names = [r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+            " AND name NOT LIKE 'sqlite_%'")]
+        tables = {}
+        for t in names:
+            info_rows = list(conn.execute(f'PRAGMA table_info("{t}")'))
+            sample = [tuple(r) for r in conn.execute(
+                f'SELECT * FROM "{t}" LIMIT 500')]
+            n = conn.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]
+            cols = []
+            for i, cid in enumerate(info_rows):
+                cname, decl = cid[1], (cid[2] or "").upper()
+                if decl.startswith(("INT", "BIGINT", "SMALLINT", "TINYINT")):
+                    infer = "int"
+                elif decl.startswith(("REAL", "FLOA", "DOUB", "NUM",
+                                      "DEC")):
+                    infer = "float"
+                else:
+                    vals = [r[i] for r in sample
+                            if i < len(r) and r[i] is not None]
+                    infer = _infer_type([str(v) for v in vals])
+                seen = {r[i] for r in sample if i < len(r)
+                        and r[i] is not None}
+                cols.append({"name": cname, "type": infer,
+                             "card": len(seen)})
+            tables[t] = {"columns": _annotate(cols), "rows": n}
+    finally:
+        conn.close()
+    primary = names[0] if names else ""
+    return {"kind": "sqlite", "path": os.path.abspath(path),
+            "table": primary, "tables": tables,
+            "columns": tables[primary]["columns"] if primary else [],
+            "rows": tables[primary]["rows"] if primary else 0,
+            "total_rows": sum(v["rows"] for v in tables.values())}
+
+
 def _profile_json(path):
     rows = []
     if path.endswith(".jsonl"):
@@ -284,6 +341,8 @@ def _safe(name):
 
 def _write_bridge(out, src, info):
     sheet = info.get("sheet") or ""
+    table = info.get("table") or ""
+    kind = info.get("kind") or "opaque"
     date_column = ""
     for c in (info.get("columns") or []):
         if c.get("date_column"):
@@ -296,8 +355,21 @@ import os
 
 SOURCE = {json.dumps(os.path.abspath(src))}
 SHEET = {json.dumps(sheet)}
+TABLE = {json.dumps(table)}
+KIND = {json.dumps(kind)}
 DATE_COLUMN = {json.dumps(date_column)}
 _DATE_PARTS = ("year", "quarter", "month")
+
+
+def _sqlite_rows():
+    import sqlite3
+    conn = sqlite3.connect("file:" + SOURCE + "?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in conn.execute(
+            'SELECT * FROM "' + TABLE + '"')]
+    finally:
+        conn.close()
 
 
 def _xlsx_rows():
@@ -316,6 +388,8 @@ def _xlsx_rows():
 
 
 def rows():
+    if KIND == "sqlite":
+        return _sqlite_rows()
     if SOURCE.endswith((".xlsx", ".xlsm")):
         return _xlsx_rows()
     if SOURCE.endswith((".csv", ".tsv")):
@@ -498,6 +572,13 @@ def _write_probes(out, name, info):
              "from neuralosd import probe",
              "import bridge",
              ""]
+    tables = info.get("tables") or {}
+    if tables:
+        # The menu documents the whole schema, not just the primary table.
+        lines.append("# Source tables: " + ", ".join(
+            f"{t} ({v['rows']} rows)" for t, v in tables.items()))
+        lines.append(f"TABLES = {sorted(tables)!r}")
+        lines.append("")
 
     lines += [
         '@probe(description="Count rows in the data source",',

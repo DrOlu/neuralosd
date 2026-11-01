@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import sys
 from typing import Any, Callable, Dict, List, Optional
 
 from .probe import ProbeMeta
@@ -26,6 +27,28 @@ class Instance:
             audit_file=os.path.join(self.state_dir, "ask_audit.jsonl"),
             pii_mask=pii_mask, ttl=ttl, name=name,
         )
+        self._synthesize_birth_traps()
+
+    def _synthesize_birth_traps(self):
+        """Every registered probe gets its misuse trap in the bank at birth
+        (v2.1.0). The trap embeds the probe's raw name — a token no trigger
+        knows — so it refuses while routing is conformant and fails the moment
+        the router starts answering out-of-vocabulary phrasings. Idempotent.
+        Golden items are NOT auto-added: they need human verification.
+        """
+        from .banks import auto_traps_enabled, synthesize_trap_for
+        if not auto_traps_enabled() or not self.probes:
+            return
+        path = os.path.join(self.state_dir, "traps.json")
+        for p in self.probes:
+            meta = getattr(p, "_probe", None)
+            if meta is None:
+                continue
+            try:
+                synthesize_trap_for(meta, path)
+            except OSError as e:
+                print(f"warning: could not auto-trap {meta.name}: {e}",
+                      file=sys.stderr)
 
     @property
     def menu(self):

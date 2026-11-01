@@ -317,6 +317,24 @@ An "instance" is a named set of probes that answer questions about a
 specific data source. You build one by profiling your data, generating
 the models and probes, and verifying the results.
 
+### 3.0 `neuralosd init` sources
+
+`neuralosd init --source <file>` profiles the source itself (no separate
+profiler step) and scaffolds a working instance. Supported sources:
+
+| Source | Profile |
+|---|---|
+| `*.csv` / `*.tsv` | columns + types + cardinality; count / list / distinct / sum probes |
+| `*.xlsx` / `*.xlsm` | every sheet (needs `openpyxl`); first sheet drives the menu |
+| `*.json` / `*.jsonl` | keys profiled; count / list / lookup probes |
+| `*.db` / `*.sqlite` / `*.sqlite3` | **SQLite database** — every table profiled with stdlib `sqlite3` (zero extra deps, works in the frozen binary); all tables named in the generated `probes.py`, the first table drives the column probes |
+| anything else | a contract template the user fills in |
+
+```bash
+neuralosd init --source ledger.db --name ledger --out ./ledger-inst
+neuralosd ask --instance-dir ./ledger-inst "how many rows"
+```
+
 ### 3.1 Profile your data
 
 The profiler reads your actual data and records every field, type, range,
