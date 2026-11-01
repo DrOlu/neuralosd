@@ -52,6 +52,23 @@ r="$(run ask --instance-dir ./inst 'how many rows')"
 check "ask: how many rows -> row_count" '"probe": "row_count"' "$r"
 check "ask: row_count returns 4" '"count": 4' "$r"
 
+# 2a. init from a SQLite database — profiled, scaffolded, immediately
+# askable (v2.1.0: stdlib sqlite3, zero new deps).
+python3 - <<'PY'
+import sqlite3
+con = sqlite3.connect("ledger.db")
+con.execute("CREATE TABLE payments (id INTEGER PRIMARY KEY, region TEXT, amount REAL)")
+con.executemany("INSERT INTO payments (region, amount) VALUES (?, ?)",
+                [("North", 100.0), ("South", 200.0), ("North", 50.0)])
+con.commit(); con.close()
+PY
+run init --source ledger.db --name ledger --out ./inst-db >/dev/null
+if [ -f ./inst-db/probes.py ]; then echo "  ✓ init (sqlite) created probes.py"; pass=$((pass+1)); else echo "  ✗ init (sqlite) created probes.py"; fail=$((fail+1)); fi
+check "init (sqlite) profiled the table" 'payments' "$(cat ./inst-db/probes.py)"
+r="$(run ask --instance-dir ./inst-db 'how many rows')"
+check "ask (sqlite): how many rows -> 3" '"count": 3' "$r"
+check "ask (sqlite): auto-trap banked at birth" 'how many rows row_count' "$(cat ./inst-db/traps.json)"
+
 r="$(run ask --instance-dir ./inst 'distinct region')"
 check "ask: distinct region" '"probe": "distinct_region"' "$r"
 

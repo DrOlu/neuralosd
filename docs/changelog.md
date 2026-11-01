@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.1.0 — SQLite connector + auto-trap synthesis
+
+- **SQLite source connector** — `neuralosd init --source app.db` profiles a
+  SQLite database with stdlib `sqlite3` (zero new deps, works in the frozen
+  binary): every table profiled (columns, types, row counts), all tables
+  named in the generated `probes.py`, first table drives the column probes,
+  and the scaffolded instance answers `"how many rows"` immediately.
+- **Auto-trap synthesis** — every registered probe gets its misuse trap in
+  `traps.json` at birth: `"<first trigger> <probe name>"` with
+  `expect_refusal: true`. The probe's raw name (e.g. `row_count`) is a token
+  no trigger knows, so a conforming router refuses the trap and a router
+  that drifts answers it — the refusal contract is regression-tested from
+  the moment a capability exists. Idempotent, deduped across loads, gated
+  by `NEURALOSD_AUTO_TRAPS=0`. Golden items are never auto-added — they
+  need human verification.
+- **Cross-instance bridge fix** — loading a second instance in one process
+  no longer reuses the first instance's `bridge.py`; each instance's
+  sibling modules are dropped from `sys.modules` after load, so every
+  instance answers from its own data file.
+- **Docs** — SQLite source documented in usage §3.0 and a new cookbook
+  recipe; smoke suite grew an end-to-end `.db` init check (31 checks).
+
 ## 1.10.0 — multi-instance & mesh era
 
 - **Multi-instance serving**: one process, many instances, routed by path

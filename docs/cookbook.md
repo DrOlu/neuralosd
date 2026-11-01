@@ -6,6 +6,33 @@ step by step without human intervention.
 
 ---
 
+## Recipe: SQLite database → instance in 60 seconds
+
+`neuralosd init` reads SQLite files directly with the Python standard
+library — no drivers, no server, works in the frozen binary:
+
+```bash
+neuralosd init --source ledger.db --name ledger --out ./ledger-inst
+neuralosd ask --instance-dir ./ledger-inst "how many rows"
+neuralosd ask --instance-dir ./ledger-inst "total amount by region"
+```
+
+What you get:
+
+- **Every table profiled** — columns, declared types, row counts; all tables
+  are named in the generated `probes.py` so the menu documents the schema.
+- **The first table drives the probes** — the same scaffold a single-sheet
+  workbook gets: `row_count`, `list_rows`, `distinct_<col>`,
+  `total_<col>` / `average_<col>`, and the caged `breakdown` probe.
+- **Auto-trap bank** — every probe ships with its misuse trap in
+  `traps.json` from birth (see the 2.1.0 changelog), so the refusal
+  contract is regression-tested from the first ask.
+
+Works for app databases, downloaded `.sqlite` exports, and WAL-mode files
+(opened read-only — init never writes to your data).
+
+---
+
 ## Recipe: Group-by / breakdowns
 
 Any instance built by `neuralosd init` already has a `breakdown` probe:
