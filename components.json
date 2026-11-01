@@ -3,10 +3,10 @@
   "components": {
     "neuralos": "3.10.2",
     "boxlite": "0.11.0",
-    "microsandbox": "0.7.11",
+    "microsandbox": "0.7.12",
     "pydantic": "2.14.2",
     "pymysql": "1.2.3",
     "openpyxl": "3.1.5",
-    "nuitka": "4.3.3"
+    "nuitka": "4.3.4"
   }
 }
