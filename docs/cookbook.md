@@ -671,3 +671,16 @@ Classification: `bundled` (proven in the runtime), `host-only` (sidecar has
 it), `instance-local` (sibling in the instance dir — always resolves),
 `missing-everywhere` (instance WILL fail — fix before shipping). Exit code
 is non-zero on any missing-everywhere, so the gate just works.
+
+
+## Recipe 9: Pair with synapse-gateway (cross-org verified answers)
+
+Run the gateway + agentd on the instance host and expose the instance as an
+MCP toolbox; mesh peers then delegate data questions and receive verified
+answers or typed refusals. Full guide:
+[drolu.github.io/synapse-gateway](https://drolu.github.io/synapse-gateway/integrate/).
+
+For cross-org meshes, enable the gateway's payload encryption (1.7.15+):
+`-mesh-encryption require` seals cross-org payloads to the receiving edge's
+X25519 key — the central broker routes ciphertext only, and the JetStream
+mailbox stores ciphertext at rest.
