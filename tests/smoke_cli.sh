@@ -102,7 +102,10 @@ fi
 
 # 2c. syslog source — stdlib only, always available
 printf 'Nov  2 03:11:22 web01 sshd[4123]: Accepted publickey for olu\nNov  2 03:12:01 web01 systemd[1]: Started nginx.service.\nNov  2 03:13:44 db01 postgres[900]: checkpoint complete\nnot syslog at all\n' > system.log
-run init --source "syslog:$PWD/system.log" --name syslog --out ./inst-syslog >/dev/null
+# RELATIVE source: init resolves it against its own cwd and embeds the
+# absolute path — a literal "$PWD/..." would be an MSYS path the native
+# Windows binary cannot open.
+run init --source "syslog:system.log" --name syslog --out ./inst-syslog >/dev/null
 if [ -f ./inst-syslog/probes.py ]; then echo "  ✓ init (syslog) created probes.py"; pass=$((pass+1)); else echo "  ✗ init (syslog) created probes.py"; fail=$((fail+1)); fi
 r="$(run ask --instance-dir ./inst-syslog 'how many rows')"
 check "syslog: 3 events parsed, garbage line excluded" '"count": 3' "$r"
