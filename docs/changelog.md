@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.2.1 — Windows event-log hotfix
+
+- **wevtutil UTF-16 decode** — wevtutil writes UTF-16LE when its output is
+  captured, so the Windows binary's event-log connector parsed ZERO events
+  from a healthy capture. Tool output is now decoded BOM-aware (UTF-16 on
+  BOM, UTF-8 otherwise), pinned by a unit test.
+
 ## 2.2.0 — deep Excel + log source connectors
 
 - **Deep Excel connector** — `init --source book.xlsx` now profiles formulas
