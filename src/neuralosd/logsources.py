@@ -187,25 +187,33 @@ def wevt_rows(channel, cap=None, runner=None):
 
 
 def parse_wevt_xml(text):
-    """Parse concatenated wevtutil XML <Event> fragments into rows."""
+    """Parse concatenated wevtutil XML <Event> fragments into rows.
+
+    Defensive on purpose — wevtutil's redirected render varies by Windows
+    release: XML namespaces in double OR single quotes, an XML declaration
+    before (or between) fragments, BOM'd UTF-16 already decoded upstream.
+    A capture that parses to zero rows is the classic silent failure, so
+    every quirk is normalized here rather than trusted.
+    """
     import xml.etree.ElementTree as ET
     rows = []
     if not text or not text.strip():
         return rows
+    # normalize: strip declarations, namespaces (both quote styles), BOMs
+    text = re.sub(r"<\?xml[^>]*\?>", "", text)
+    text = text.replace("\ufeff", "").replace("\ufffe", "")
+    text = re.sub(r"\sxmlns='[^']*'", "", text)
     wrapped = "<__events__>" + text + "</__events__>"
-    # wevtutil fragments declare nothing hostile, but namespaces appear on
-    # the root Event tag only; strip them for flat System/... paths.
-    wrapped = re.sub(r"\sxmlns=\"[^\"]*\"", "", wrapped)
+    wrapped = re.sub(r'\sxmlns="[^"]*"', "", wrapped)
     try:
         root = ET.fromstring(wrapped)
     except ET.ParseError:
         # tolerate a truncated capture: salvage complete <Event> blocks
-        blocks = re.findall(r"<Event[\s>].*?</Event>", text, flags=re.S)
+        blocks = re.findall(r"<Event[\s>].*?</Event>", wrapped, flags=re.S)
         salvaged = []
         for b in blocks:
             try:
-                salvaged.append(ET.fromstring(
-                    re.sub(r"\sxmlns=\"[^\"]*\"", "", b)))
+                salvaged.append(ET.fromstring(b))
             except ET.ParseError:
                 continue
         root = {"__salvaged__": salvaged}
@@ -239,17 +247,24 @@ def parse_wevt_xml(text):
 # ── execution ──────────────────────────────────────────────────────────────
 
 def decode_tool_output(data):
-    """Decode native-tool stdout, BOM-aware.
+    """Decode native-tool stdout, BOM-aware — with a NUL heuristic fallback.
 
     wevtutil writes UTF-16LE when its output is redirected (the classic way
     a Windows Event Log capture comes back as zero parseable events: the
-    XML is there, every other byte is a NUL). Everything else (journalctl,
-    text logs) is UTF-8.
+    XML is there, every other byte is a NUL). Some Windows builds emit the
+    UTF-16 WITHOUT the BOM, so decoded-as-UTF-8-with-NULs is detected and
+    retried as UTF-16LE. Everything else (journalctl, text logs) is UTF-8.
     """
     if isinstance(data, str):
         return data
     if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
         return data.decode("utf-16")
+    if b"\x00" in data[:4096]:
+        # text tool output never contains NULs — this is UTF-16 without BOM
+        try:
+            return data.decode("utf-16-le", errors="strict")
+        except UnicodeDecodeError:
+            pass
     return data.decode("utf-8", errors="replace")
 
 
