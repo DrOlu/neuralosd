@@ -458,3 +458,243 @@ def audit_drift(instance_dir, src):
             "action": ("re-audit required — regenerate or retrigger the "
                        "flagged probes before they fail at runtime")
                        if stale else "clean"}
+
+
+# ── v2.4.0: pinning, SLO, fleet, badge, synonyms ───────────────────────────
+
+def pin_snapshot(instance_dir, label):
+    """Freeze every probe's current observation under a label, with the
+    content hash. `ask --as-of <label>` answers from the pin — reproducible
+    evidence, even after the source changes."""
+    from .menu_adapter import observe
+    obs = observe(instance_dir)
+    blob = {"label": label, "ts": time.time(), "observations": obs}
+    blob["hash"] = hashlib.sha256(
+        json.dumps(obs, sort_keys=True, default=str).encode()).hexdigest()[:16]
+    d = os.path.join(instance_dir, "snapshots")
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, f"{label}.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(blob, fh, indent=2, default=str)
+        fh.write("\n")
+    return {"label": label, "hash": blob["hash"], "path": path}
+
+
+def ask_as_of(instance_dir, question, label):
+    """Answer from a PINNED snapshot: derived metrics evaluate against the
+    frozen observations. The envelope carries the pin's label + hash — the
+    answer is reproducible evidence, not a vibe."""
+    from ._cmd._common import load_instance
+    path = os.path.join(instance_dir, "snapshots", f"{label}.json")
+    if not os.path.isfile(path):
+        raise SystemExit(f"error: no snapshot labeled {label!r} in "
+                         f"{instance_dir} (neuralosd snapshot --label {label})")
+    with open(path, encoding="utf-8") as fh:
+        blob = json.load(fh)
+    inst = load_instance(instance_dir,
+                         observations_override=blob["observations"])
+    try:
+        env = inst.ask(question, use_cache=False)
+    except Exception as e:
+        env = getattr(e, "envelope", None) or {}
+    env["snapshot"] = {"label": label, "hash": blob.get("hash"),
+                       "ts": blob.get("ts")}
+    env["pinned"] = True
+    return env
+
+
+def refusal_rate(instance_dir, window_hours=24, max_refusal_rate=0.4):
+    """The refusal rate over the window IS the menu-gap signal. A breach is
+    not a failure of the router — it is a capability gap, quantified."""
+    audit_path = os.path.join(instance_dir, "ask_audit.jsonl")
+    cutoff = time.time() - window_hours * 3600.0
+    asks = refused = 0
+    reasons = {}
+    if os.path.isfile(audit_path):
+        with open(audit_path, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                ts = r.get("ts")
+                if not isinstance(ts, (int, float)) or ts < cutoff:
+                    continue
+                asks += 1
+                if r.get("results") in (None, [], {}):
+                    refused += 1
+                    why = r.get("refusal_reason") or "refused"
+                    reasons[why] = reasons.get(why, 0) + 1
+    rate = (refused / asks) if asks else 0.0
+    return {"asks": asks, "refused": refused,
+            "refusal_rate": round(rate, 4),
+            "slo": max_refusal_rate,
+            "breach": asks > 0 and rate > max_refusal_rate,
+            "top_reasons": sorted(reasons.items(), key=lambda kv: -kv[1])[:5]}
+
+
+def fleet_report(dirs, window_hours=24, max_refusal_rate=0.4):
+    """Per-instance health across a fleet: menu size, activity, refusal
+    rate vs SLO. The dashboard (and the exit code) read this."""
+    instances = []
+    breached = healthy = 0
+    for d in dirs:
+        d = os.path.abspath(d)
+        entry = {"instance": os.path.basename(d.rstrip("/")), "path": d}
+        try:
+            from ._cmd._common import load_instance
+            entry["probes"] = len(load_instance(d).router.metas)
+        except Exception as e:
+            entry["probes"] = None
+            entry["error"] = str(e)[:120]
+        stats = refusal_rate(d, window_hours=window_hours,
+                             max_refusal_rate=max_refusal_rate)
+        entry.update({k: stats[k] for k in
+                      ("asks", "refused", "refusal_rate", "breach")})
+        if stats["breach"]:
+            breached += 1
+        else:
+            healthy += 1
+        entry["mothballed"] = len(mothballed_names(d))
+        instances.append(entry)
+    return {"instances": instances, "breached": breached, "healthy": healthy,
+            "slo": max_refusal_rate}
+
+
+def write_badge(instance_dir, out_path, actions_out=None):
+    """Run the golden bank and emit a shields.io endpoint JSON — trust
+    signaling that lives OUTSIDE the box, in the README."""
+    from ._cmd._common import load_instance
+    inst = load_instance(instance_dir)
+    golden_path = os.path.join(instance_dir, "golden.json")
+    bank = json.loads(open(golden_path, encoding="utf-8").read()) \
+        if os.path.isfile(golden_path) else {"items": []}
+    summary = inst.golden_run(bank)
+    total = summary["total"]
+    passed = summary["correct"] + summary["refused_ok"]
+    ok = summary["wrong"] == 0 and summary["answered_traps"] == 0
+    badge = {"schemaVersion": 1,
+             "label": "golden bank",
+             "message": f"{passed}/{total} passing" if total else "empty",
+             "color": "brightgreen" if ok and total else
+                      ("yellow" if total == 0 else "red")}
+    with open(out_path, "w", encoding="utf-8") as fh:
+        json.dump(badge, fh, indent=2)
+        fh.write("\n")
+    if actions_out:
+        with open(actions_out, "w", encoding="utf-8") as fh:
+            fh.write(
+                "name: golden bank\n"
+                "on: [push, workflow_dispatch]\n"
+                "jobs:\n"
+                "  golden:\n"
+                "    runs-on: ubuntu-latest\n"
+                "    steps:\n"
+                "      - uses: actions/checkout@v4\n"
+                "      - uses: actions/setup-python@v5\n"
+                "        with: {python-version: \"3.12\"}\n"
+                "      - run: pip install 'neuralosd[data]'\n"
+                "      - run: neuralosd golden --dir .\n")
+    return badge
+
+
+def propose_synonyms(instance_dir, audit_path=None, min_cluster=2):
+    """Gap clusters -> PROPOSED triggers for the probe that most plausibly
+    owns the pattern. Human-approved by default (approved: False); applying
+    is a separate, explicit step. Refusal rate drops WITHOUT loosening the
+    gate — the gate gets better vocabulary instead."""
+    from ._cmd._common import load_instance
+    audit_path = audit_path or os.path.join(instance_dir,
+                                            "ask_audit.jsonl")
+    gaps = []
+    if os.path.isfile(audit_path):
+        with open(audit_path, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if r.get("results") in (None, [], {}):
+                    gaps.append({"question": r.get("question")})
+    clusters = [c for c in cluster_gaps(gaps) if c["size"] >= min_cluster]
+    inst = load_instance(instance_dir)
+
+    def _tokens(text):
+        from .router import tokens as _t
+        return _t(text or "")
+
+    proposals = []
+    for c in clusters:
+        common = [t for t in c.get("common_terms", []) if t]
+        if len(common) < 2:
+            continue
+        cs = set(common)
+        # the audit's OWN score vectors are the strongest ownership evidence:
+        # a refusal whose scores nearly crowned a probe names it.
+        votes = {}
+        for g in gaps:
+            if g.get("question") in c.get("questions", []):
+                for probe, _s in (g.get("scores") or {}).items():
+                    votes[probe] = votes.get(probe, 0) + 3
+        best, best_score = None, 0
+        for meta in inst.router.metas:
+            score = votes.get(meta.name, 0)
+            score += 5 * len(cs & set(
+                v for spec in (meta.args or {}).values()
+                for v in spec.get("values") or []))
+            score += 2 * len(cs & _tokens((meta.name or "").replace("_", " ")))
+            score += len(cs & _tokens(meta.description or ""))
+            score += len(cs & _tokens(" ".join(meta.triggers or [])))
+            if score > best_score:
+                best, best_score = meta, score
+        if best is None or best_score <= 0:
+            continue                       # no plausible owner: a capability
+            # gap, not a synonym gap — stays in `gaps`, not here
+        trigger = " ".join(sorted(common)[:2])
+        if trigger in (best.triggers or []):
+            continue                       # already covered — not a gap
+        proposals.append({"probe": best.name, "trigger": trigger,
+                          "cluster_size": c["size"],
+                          "questions": c["questions"][:5],
+                          "approved": False})
+    blob = {"instance": instance_dir, "ts": time.time(),
+            "proposals": proposals}
+    path = os.path.join(instance_dir, "synonym_proposals.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(blob, fh, indent=2, ensure_ascii=False)
+        fh.write("\n")
+    return blob
+
+
+def apply_synonyms(instance_dir, proposals_path):
+    """Apply APPROVED synonym proposals. Derived metrics (the loop's own
+    probes) are extended in derived.json — the menu's code is not edited by
+    a machine. probes.py probes get an exact EDIT SUGGESTION instead: a
+    human makes that change, because generated code is never silently
+    rewritten."""
+    from .derived import (load as load_derived, save as save_derived)
+    with open(proposals_path, encoding="utf-8") as fh:
+        blob = json.load(fh)
+    metrics = load_derived(os.path.join(instance_dir, "derived.json"))
+    by_name = {m.name: m for m in metrics}
+    applied = suggested = 0
+    for p in blob.get("proposals", []):
+        if not p.get("approved"):
+            continue
+        m = by_name.get(p["probe"])
+        if m is not None:
+            if p["trigger"] not in (m.triggers or []):
+                m.triggers = list(m.triggers or []) + [p["trigger"]]
+                applied += 1
+        else:
+            p["suggestion"] = (
+                f"human action: add {p['trigger']!r} to the triggers of "
+                f"@{p['probe']} in probes.py")
+            suggested += 1
+    save_derived(os.path.join(instance_dir, "derived.json"), metrics)
+    blob["applied"] = applied
+    blob["suggested"] = suggested
+    with open(proposals_path, "w", encoding="utf-8") as fh:
+        json.dump(blob, fh, indent=2, ensure_ascii=False)
+        fh.write("\n")
+    return {"applied": applied, "suggested": suggested}

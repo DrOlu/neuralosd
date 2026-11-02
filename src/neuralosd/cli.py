@@ -31,6 +31,18 @@ def main():
 
     # init
     p_init = sub.add_parser("init", help="Scaffold a new instance from a data source")
+    p_init.add_argument("--extra-source", action="append", default=None,
+                        help="additional delimited source (repeatable)")
+    p_init.add_argument("--on", dest="join_on", default=None,
+                        help="join key between main and extra source: "
+                             "leftcol=rightcol")
+    p_init.add_argument("--since", default=None,
+                        help="journal window, e.g. 1h (journal sources)")
+    p_init.add_argument("--header", default=None,
+                        help="header name carrying the credential (api)")
+    p_init.add_argument("--secret-ref", default=None,
+                        help="credential REFERENCE: env:VAR | scrt:<store>:<key>"
+                             " | op:<vault>/<item>/<field> — never the secret")
     p_init.add_argument("--source", required=True, help="Data source (CSV, DB DSN, JSON, log, API URL)")
     p_init.add_argument("--name", required=True)
     p_init.add_argument("--out", help="Output dir (default: ./<name>)")
@@ -68,6 +80,12 @@ def main():
                        help="Refuse when the answer would have dropped a "
                             "filter named in the question, instead of "
                             "returning it with a `discarded` ledger")
+    p_ask.add_argument("--as-of", default=None, metavar="LABEL",
+                       help="answer from a pinned snapshot "
+                            "(neuralosd snapshot --label LABEL)")
+    p_ask.add_argument("--role", default=None,
+                       help="answer AS this role (acl.json controls the "
+                            "probe allow-list and row filters)")
     p_ask.add_argument("question", nargs="+")
 
     # serve
@@ -208,6 +226,52 @@ def main():
     p_sh.add_argument("--min-agreement", type=float, default=0.9)
     p_sh.add_argument("--min-runs", type=int, default=3)
     p_sh.add_argument("--max-age-days", type=int, default=14)
+
+    # browser — agent-browser session passthrough (v2.4.0)
+    p_br = sub.add_parser(
+        "browser",
+        help="Drive a named agent-browser session (open/snapshot/click/fill)")
+    p_br.add_argument("--session", default=None)
+    p_br.add_argument("op", choices=["open", "snapshot", "click", "fill",
+                                     "type", "network", "text"])
+    p_br.add_argument("--url", default=None)
+    p_br.add_argument("--target", default=None, help="ref or selector")
+    p_br.add_argument("--text", default=None)
+
+    # snapshot — pin hashed observations (v2.4.0)
+    p_snap = sub.add_parser(
+        "snapshot", help="Pin a hashed snapshot of every probe's observation")
+    p_snap.add_argument("--instance-dir", required=True)
+    p_snap.add_argument("--label", required=True)
+
+    # slo — refusal-rate SLO (v2.4.0)
+    p_slo = sub.add_parser(
+        "slo", help="Refusal-rate SLO for one instance")
+    p_slo.add_argument("--instance-dir", required=True)
+    p_slo.add_argument("--window-hours", type=int, default=24)
+    p_slo.add_argument("--max-refusal-rate", type=float, default=0.4)
+
+    # fleet — multi-instance dashboard (v2.4.0)
+    p_fl = sub.add_parser(
+        "fleet", help="Multi-instance health dashboard")
+    p_fl.add_argument("dirs", nargs="+", help="instance dirs (globs ok)")
+    p_fl.add_argument("--window-hours", type=int, default=24)
+    p_fl.add_argument("--max-refusal-rate", type=float, default=0.4)
+
+    # badge — golden-bank shields + CI gate (v2.4.0)
+    p_bd = sub.add_parser(
+        "badge", help="Golden-bank health badge + GitHub Actions snippet")
+    p_bd.add_argument("--instance-dir", required=True)
+    p_bd.add_argument("--out", default="badge.json")
+    p_bd.add_argument("--actions-out", default=None)
+
+    # synonyms — cluster-driven trigger proposals (v2.4.0)
+    p_syn = sub.add_parser(
+        "synonyms",
+        help="Propose (and, when approved, apply) triggers from gap clusters")
+    p_syn.add_argument("--instance-dir", required=True)
+    p_syn.add_argument("--audit", default=None)
+    p_syn.add_argument("--apply", metavar="PROPOSALS_JSON", default=None)
 
     p_mesh = sub.add_parser(
         "mesh", help="Synapse mesh integration: serve, discover, delegate")
@@ -371,6 +435,24 @@ def main():
     elif a.command == "shadow":
         from ._cmd import shadow
         shadow.run(a)
+    elif a.command == "browser":
+        from ._cmd import browser
+        browser.run(a)
+    elif a.command == "snapshot":
+        from ._cmd import snapshot
+        snapshot.run(a)
+    elif a.command == "slo":
+        from ._cmd import slo
+        slo.run(a)
+    elif a.command == "fleet":
+        from ._cmd import fleet
+        fleet.run(a)
+    elif a.command == "badge":
+        from ._cmd import badge
+        badge.run(a)
+    elif a.command == "synonyms":
+        from ._cmd import synonyms
+        synonyms.run(a)
     elif a.command == "openapi":
         from ._cmd import openapi
         openapi.run(a)

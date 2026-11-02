@@ -1082,6 +1082,63 @@ flagged — the value was proven on ANOTHER estate); missing probes are
 proposed with their definitions. A proposal is a proposal: nothing installs
 itself.
 
+## 6c. Web, APIs, and trust (v2.4.0)
+
+**The browser is a source.** With [agent-browser](https://github.com/vercel/agent-browser)
+installed (`npm i -g agent-browser`):
+
+```bash
+neuralosd init --source browser:https://portal.corp/dashboard --name portal
+neuralosd ask --instance-dir ./portal "distinct role"
+neuralosd ask --instance-dir ./portal "nodes with role" --help  # caged by role
+neuralosd browser --session portal snapshot          # persistent session ops
+neuralosd browser --session portal click e12
+```
+
+**Authenticated APIs, with the credential caged.** The instance stores only
+the secret REFERENCE — resolved at ask time through scrt / 1Password / env:
+
+```bash
+neuralosd init --source api:https://api.corp/v1/tickets \
+    --header Authorization --secret-ref op:Corp/infra/token
+```
+
+**One instance, several sources, a deterministic join:**
+
+```bash
+neuralosd init --source sales.csv --extra-source prices.csv \
+    --on region=region --name priced
+neuralosd ask --instance-dir ./priced "how many rows in prices"
+neuralosd ask --instance-dir ./priced "joined count"
+```
+
+**Answers as reproducible evidence:**
+
+```bash
+neuralosd snapshot --instance-dir . --label q3        # hashed observations
+neuralosd ask --instance-dir . --as-of q3 "units per row"
+```
+
+**Typed oracles** — record the expected ANSWER, not just the route:
+
+```bash
+neuralosd golden --dir . --record --question "how many tickets open" \
+    --expect-probe row_count --value 214 --shape count \
+    --by olu --source "service-now, saved search" --method "UI cross-check"
+neuralosd golden --dir .        # wrong value = FAIL, separately counted
+```
+
+**Trust ops:**
+
+```bash
+neuralosd slo --instance-dir . --max-refusal-rate 0.4      # exit 1 on breach
+neuralosd fleet ~/instances/*                               # fleet dashboard
+neuralosd badge --instance-dir . --out badge.json \
+    --actions-out .github/workflows/golden.yml              # README shield
+neuralosd synonyms --instance-dir .                         # trigger proposals
+ask --instance-dir . --role analyst "units by region"       # RBAC row caging
+```
+
 ## 7. Run as a Service
 
 ### 7.1 Start the standard service

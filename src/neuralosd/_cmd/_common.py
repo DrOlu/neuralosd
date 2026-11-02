@@ -98,6 +98,65 @@ def _load_menu_instance(instance_dir: str, with_model: bool = False):
     return inst
 
 
+def _load_acl(instance_dir):
+    path = os.path.join(instance_dir, "acl.json")
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (ValueError, OSError):
+        return {}
+
+
+def _apply_role(probes, spec, role):
+    allow = spec.get("allow")
+    if allow is not None:
+        probes = [p for p in probes
+                  if getattr(p, "_probe", None) is None
+                  or getattr(p, "_probe").name in set(allow)]
+    if not probes:
+        raise SystemExit(f"error: role {role!r} allows no probes — an empty "
+                         f"menu cannot serve")
+    row_filter = spec.get("row_filter") or {}
+    if row_filter.get("column"):
+        probes = [_cage_rows(p, row_filter) for p in probes]
+    return probes
+
+
+def _cage_rows(p, row_filter):
+    """Wrap a probe so its served ROWS respect the role's filter. Structured
+    results (lists of dicts, and dicts carrying a "rows" list) are filtered;
+    scalars pass — the filter is about WHOSE rows, not the number."""
+    def caged(*args, **kwargs):
+        res = p(*args, **kwargs)
+        return _filter_rows(res, row_filter)
+    caged._probe = getattr(p, "_probe", None)
+    caged.__name__ = getattr(p, "__name__", "caged")
+    return caged
+
+
+def _filter_rows(res, row_filter):
+    col = row_filter.get("column")
+    allowed = set(row_filter.get("in") or [])
+
+    def keep(r):
+        if not isinstance(r, dict):
+            return True
+        v = r.get(col)
+        return v is None or str(v) in allowed
+
+    if isinstance(res, list):
+        return [r for r in res if keep(r)]
+    if isinstance(res, dict):
+        out = dict(res)
+        for key in ("rows",):
+            if isinstance(out.get(key), list):
+                out[key] = [r for r in out[key] if keep(r)]
+        return out
+    return res
+
+
 def _mothballed_names(instance_dir):
     path = os.path.join(instance_dir, "mothballed.json")
     if not os.path.isfile(path):
@@ -110,7 +169,9 @@ def _mothballed_names(instance_dir):
 
 
 def load_instance(instance_dir: str, with_model: bool = False,
-                  router_overrides: Optional[Dict[str, Any]] = None):
+                  router_overrides: Optional[Dict[str, Any]] = None,
+                  role: Optional[str] = None,
+                  observations_override=None):
     """Load an :class:`~neuralosd.instance.Instance` from a directory.
 
     Resolution order:
@@ -180,8 +241,15 @@ def load_instance(instance_dir: str, with_model: bool = False,
     # from the STORED observation snapshot — zero probe calls here. Loading must
     # never fire a probe: they may be slow, remote or rate-limited, and this
     # runs on every single ask.
-    from ..menu_adapter import dedup_probes, derived_probes as _derived_probes
-    probes = dedup_probes(probes, _derived_probes(instance_dir))
+    from ..menu_adapter import (dedup_probes, derived_probes as _derived_probes)
+    probes = dedup_probes(probes, _derived_probes(
+        instance_dir, observations=observations_override))
+
+    # RBAC (v2.4.0): a role limits the probe allow-list and cages the served
+    # rows. No acl.json / no role = today's behaviour, unchanged.
+    acl = _load_acl(instance_dir)
+    if role and role in acl.get("roles", {}):
+        probes = _apply_role(probes, acl["roles"][role], role)
 
     # MENU HYGIENE (v2.3.0): mothballed probes are kept on disk but demoted
     # from the menu. The filter never empties the menu — a mute instance is

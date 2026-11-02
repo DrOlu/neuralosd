@@ -7,7 +7,16 @@ def run(a):
     from ._common import load_instance
     from ..router import NoResults
 
-    inst = load_instance(a.instance_dir, with_model=getattr(a, "model", False))
+    # v2.4.0 time travel: --as-of answers from a pinned snapshot
+    if getattr(a, "as_of", None):
+        from ..loop import ask_as_of
+        env = ask_as_of(a.instance_dir, " ".join(a.question or []),
+                        label=a.as_of)
+        print(json.dumps(env, indent=2, ensure_ascii=False, default=str))
+        return 0 if env.get("results") not in (None, [], {}) else 2
+
+    inst = load_instance(a.instance_dir, with_model=getattr(a, "model", False),
+                         role=getattr(a, "role", None))
     if getattr(a, "strict", False):
         # Refuse an answer that would have dropped a filter the user named,
         # rather than returning it with a `discarded` ledger.

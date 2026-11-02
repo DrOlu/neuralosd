@@ -210,16 +210,21 @@ def apply_feedback(instance_dir):
 
 
 def record_golden(instance_dir, q, expect_probe=None, expect_refusal=False,
-                  value=None, by=None, source=None, method=None, ts=None):
+                  value=None, by=None, source=None, method=None, ts=None,
+                  shape=None):
     """Append a golden item WITH its receipt: who verified the expected
     value, when, from what source, and how. An oracle value without these
-    four fields is a number nobody can defend."""
+    four fields is a number nobody can defend.
+
+    With `shape` (count | percent | ratio | date | text), the bank verifies
+    the ANSWER against the value — not just the routing (v2.4.0)."""
     golden_path = os.path.join(instance_dir, "golden.json")
     bank = json.loads(open(golden_path, encoding="utf-8").read()) \
         if os.path.isfile(golden_path) else {"items": []}
     item = {"q": q, "oracle": {"value": value, "by": by,
                                "when": ts if ts is not None else time.time(),
-                               "source": source, "method": method}}
+                               "source": source, "method": method,
+                               "shape": shape}}
     if expect_refusal:
         item["expect_refusal"] = True
     else:

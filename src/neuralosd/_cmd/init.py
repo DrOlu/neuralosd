@@ -33,6 +33,10 @@ def profile_any(src):
         return _profile_wevt(src)
     if src.startswith("syslog:"):
         return _profile_syslog(src)
+    if src.startswith("browser:"):
+        return _profile_browser(src)
+    if src.startswith("api:"):
+        return _profile_api(src)
     return {"kind": "opaque", "columns": [], "rows": None}
 
 
@@ -42,9 +46,27 @@ def run(a):
     os.makedirs(out, exist_ok=True)
 
     info = profile_any(src)
+    if info.get("kind") == "api":
+        # re-profile with the credential cage (the reference, not the secret)
+        info = _profile_api(src, header=getattr(a, "header", None),
+                            secret_ref=getattr(a, "secret_ref", None))
 
-    _write_bridge(out, src, info)
-    _write_probes(out, a.name, info)
+    # v2.4.0 multi-source: extra delimited sources + an optional join key
+    extras = []
+    for extra_path in (getattr(a, "extra_sources", None) or []):
+        if not str(extra_path).endswith((".csv", ".tsv")):
+            raise SystemExit(
+                "error: --extra-source supports delimited files (.csv/.tsv) "
+                "in this release")
+        ei = _profile_delimited(str(extra_path))
+        ei["_name"] = _safe(os.path.splitext(
+            os.path.basename(str(extra_path)))[0])
+        ei["_path"] = os.path.abspath(str(extra_path))
+        extras.append(ei)
+    join_on = getattr(a, "join_on", None)
+
+    _write_bridge(out, src, info, extras=extras, join_on=join_on)
+    _write_probes(out, a.name, info, extras=extras, join_on=join_on)
     _write_banks(out, info)
     _write_readme(out, a.name, src, info)
 
@@ -430,6 +452,49 @@ def _log_info(kind, rows, cap, columns, parse_errors=0, truncated=False,
     return info
 
 
+def _profile_browser(src):
+    """Profile a page through the agent-browser CLI: the accessibility-tree
+    snapshot becomes rows ({role, name, ref, depth}); roles become caged
+    enums; refs are the action handles."""
+    from ..websources import browser_rows
+    url = src.split(":", 1)[1].strip()
+    cap = 500
+    rows = browser_rows(url, cap=cap, runner=_capture_cmd)
+    role_cards = {}
+    for r in rows:
+        role_cards[r["role"]] = role_cards.get(r["role"], 0) + 1
+    cols = [{"name": "role", "type": "str", "card": len(role_cards)},
+            {"name": "name", "type": "str", "card": len(rows)},
+            {"name": "ref", "type": "str", "card": len(rows)},
+            {"name": "depth", "type": "int", "card": 4}]
+    return {"kind": "browser", "url": url, "log": False,
+            "columns": _annotate(cols), "rows": len(rows), "cap": cap,
+            "roles": sorted(role_cards)}
+
+
+def _profile_api(src, header=None, secret_ref=None):
+    """Profile a JSON API (v2.4.0). The instance stores only the secret
+    REFERENCE; the header is resolved through the scrt/op/env CLIs at ask
+    time and never written to disk."""
+    from ..apisources import api_rows
+    url = src.split(":", 1)[1].strip()
+    rows = api_rows(url, header_name=header, secret_ref=secret_ref)
+    keys, seen = [], set()
+    for r in rows[:1000]:
+        for k in r:
+            if k not in seen:
+                seen.add(k)
+                vals = [str(r[k]) for r in rows[:500] if r.get(k) is not None]
+                infer = "int" if vals and all(_is_int(v) for v in vals) else (
+                    "float" if vals and all(_is_float(v) for v in vals)
+                    else "str")
+                keys.append({"name": k, "type": infer,
+                             "card": len(set(vals))})
+    return {"kind": "api", "url": url, "columns": _annotate(keys),
+            "rows": len(rows),
+            "header": header or "", "secret_ref": secret_ref or ""}
+
+
 def _profile_journal(src):
     from ..logsources import journal_rows, log_cap_default
     unit = src.split(":", 1)[1].strip() or None
@@ -496,7 +561,7 @@ def _safe(name):
                    for ch in str(name)).lower().strip("_")
 
 
-def _write_bridge(out, src, info):
+def _write_bridge(out, src, info, extras=None, join_on=None):
     sheet = info.get("sheet") or ""
     table = info.get("table") or ""
     kind = info.get("kind") or "opaque"
@@ -511,7 +576,8 @@ import json
 import os
 import re
 
-SOURCE = {json.dumps(os.path.abspath(src))}
+SOURCE = {json.dumps(info.get("url") or info.get("path")
+                     or os.path.abspath(src))}
 SHEET = {json.dumps(sheet)}
 TABLE = {json.dumps(table)}
 KIND = {json.dumps(kind)}
@@ -550,6 +616,10 @@ def _xlsx_rows():
 
 
 def rows():
+    if KIND == "browser":
+        return _browser_snapshot_rows()
+    if KIND == "api":
+        return _api_rows()
     if KIND in ("journald", "wevtutil", "syslog"):
         return _log_rows()
     if KIND == "sqlite":
@@ -730,9 +800,84 @@ def breakdown(dimension, measure):
         bridge += _xlsx_bridge_extra(info)
     elif info.get("log"):
         bridge += _log_bridge_extra(info)
+    elif info.get("kind") == "api":
+        bridge += _api_bridge_extra(info)
+    if info.get("kind") == "browser":
+        bridge += _browser_bridge_extra(info)
+    if extras:
+        bridge += _multi_source_extra(extras, join_on)
 
     with open(os.path.join(out, "bridge.py"), "w", encoding="utf-8") as f:
         f.write(bridge)
+
+
+def _api_bridge_extra(info):
+    """API bridge: re-fetch at ask time with the CAGED credential — only the
+    secret REFERENCE lives in this file, resolved through scrt/op/env."""
+    return (
+        "\n\nAPI_CAP = " + json.dumps(500) + "\n"
+        "HEADER_NAME = " + json.dumps(info.get("header") or "") + "\n"
+        "SECRET_REF = " + json.dumps(info.get("secret_ref") or "") + "\n"
+        "\n\n"
+        "def _api_rows():\n"
+        "    from neuralosd.apisources import api_rows\n"
+        "    return api_rows(SOURCE, header_name=HEADER_NAME or None,\n"
+        "                    secret_ref=SECRET_REF or None, cap=API_CAP)\n")
+
+
+def _browser_bridge_extra(info):
+    """Browser bridge: re-snapshot at ask time; a caged role filter."""
+    return (
+        "\n\n"
+        "def _browser_snapshot_rows():\n"
+        "    from neuralosd.websources import browser_rows\n"
+        "    return browser_rows(SOURCE, cap=500)\n"
+        "\n\n"
+        "def nodes_by_role(role):\n"
+        "    rows = [r for r in _browser_snapshot_rows()\n"
+        "            if r.get(\"role\") == role]\n"
+        "    return {\"role\": role, \"count\": len(rows), "
+        "\"rows\": rows[:100]}\n")
+
+
+def _multi_source_extra(extras, join_on):
+    """One instance, several row sources, one deterministic join."""
+    table = {e["_name"]: e["_path"] for e in extras}
+    delim = {e["_name"]: e.get("delim", ",") for e in extras}
+    pair = join_on.split("=", 1) if join_on else None
+    return (
+        "\n\nEXTRA_SOURCES = " + json.dumps(table) + "\n"
+        "EXTRA_DELIM = " + json.dumps(delim) + "\n"
+        "JOIN_ON = " + json.dumps(pair) + "\n"
+        "\n\n"
+        "def rows_of(source):\n"
+        "    import csv\n"
+        "    path = EXTRA_SOURCES[source]\n"
+        "    with open(path, newline=\"\", encoding=\"utf-8\",\n"
+        "              errors=\"replace\") as f:\n"
+        "        return list(csv.DictReader(\n"
+        "            f, delimiter=EXTRA_DELIM.get(source, \",\")))\n"
+        "\n\n"
+        "def count_in(source):\n"
+        "    return {\"source\": source, \"count\": len(rows_of(source))}\n"
+        "\n\n"
+        "def joined_rows():\n"
+        "    if not JOIN_ON:\n"
+        "        return {\"error\": \"no join key configured at init "
+        "(--on)\"}\n"
+        "    ca, cb = JOIN_ON\n"
+        "    right_name = next(iter(EXTRA_SOURCES))\n"
+        "    right = rows_of(right_name)\n"
+        "    out = []\n"
+        "    for r in rows():\n"
+        "        for s in right:\n"
+        "            if r.get(ca) is not None and \\\n"
+        "                    str(r.get(ca)) == str(s.get(cb)):\n"
+        "                merged = dict(r)\n"
+        "                merged.update(s)\n"
+        "                out.append(merged)\n"
+        "    return {\"count\": len(out), \"rows\": out}\n")
+
 
 
 def _xlsx_bridge_extra(info):
@@ -838,6 +983,14 @@ def _log_bridge_extra(info):
               "LOG_INTEGRITY = " + repr(
                   {"parse_errors": info.get("parse_errors", 0),
                    "truncated": bool(info.get("truncated"))}) + "\n")
+    recent = (
+        "\n\n"
+        "def recent_events(minutes):\n"
+        "    from neuralosd.logsources import within_window\n"
+        "    rows = [r for r in _log_rows()\n"
+        "            if within_window(r.get(\"ts\"), minutes)]\n"
+        "    return {\"minutes\": minutes, \"count\": len(rows),\n"
+        "            \"rows\": rows[:100]}\n")
     if kind == "journald":
         return (header
                 + "LOG_UNIT = " + repr(info.get("unit") or "") + "\n"
@@ -845,7 +998,8 @@ def _log_bridge_extra(info):
                 + "def _log_rows():\n"
                 + "    from neuralosd.logsources import journal_rows\n"
                 + "    return journal_rows(cap=LOG_CAP,\n"
-                + "                        unit=LOG_UNIT or None)\n")
+                + "                        unit=LOG_UNIT or None)\n"
+                + recent)
     if kind == "wevtutil":
         return (header
                 + "LOG_CHANNEL = " + repr(info.get("channel") or "")
@@ -860,12 +1014,13 @@ def _log_bridge_extra(info):
             + "    from neuralosd.logsources import parse_syslog_file\n"
             + "    parsed = parse_syslog_file("
             + repr(info.get("path") or "") + ", cap=LOG_CAP)\n"
-            + "    return parsed[\"rows\"]\n")
+            + "    return parsed[\"rows\"]\n"
+            + recent)
 
 
 
 
-def _write_probes(out, name, info):
+def _write_probes(out, name, info, extras=None, join_on=None):
     cols = info.get("columns", [])
     lines = [f'"""@{name} instance — generated probes."""',
              "from neuralosd import probe",
@@ -1019,6 +1174,62 @@ def _write_probes(out, name, info):
             "",
         ]
         probe_names.append("formula_scan")
+
+    # v2.4.0 multi-source probes: caged per-source counts + the join
+    if extras:
+        src_names = [e["_name"] for e in extras]
+        lines += [
+            '@probe(description="Count rows in one of the extra sources",',
+            '       triggers=["rows in", "count in", "how many rows in",',
+            '                 "row count in"],',
+            '       args={"source": {"type": "enum", "values": '
+            + repr(src_names) + '}})',
+            "def count_in(source):",
+            "    return bridge.count_in(source)",
+            "",
+        ]
+        probe_names.append("count_in")
+        if join_on:
+            lines += [
+                '@probe(description="Rows joined across the sources on the '
+                'configured key",',
+                '       triggers=["joined count", "joined rows",',
+                '                 "join count", "joined"])',
+                "def joined_count():",
+                "    return bridge.joined_rows()",
+                "",
+            ]
+            probe_names.append("joined_count")
+
+    # v2.4.0 browser: the page's roles become a caged enum
+    if info.get("kind") == "browser":
+        roles = sorted(set(info.get("roles") or []))
+        lines += [
+            '@probe(description="Snapshot nodes with one role",',
+            '       triggers=["nodes with role", "role nodes",',
+            '                 "elements of role", "nodes by role"],',
+            '       args={"role": {"type": "enum", "values": '
+            + repr(roles) + '}})',
+            "def nodes_by_role(role):",
+            "    return bridge.nodes_by_role(role)",
+            "",
+        ]
+        probe_names.append("nodes_by_role")
+
+    # v2.4.0 streaming window: caged recent-events probe for log instances
+    if info.get("kind") in ("journald", "syslog"):
+        lines += [
+            '@probe(description="Events within the last N minutes",',
+            '       triggers=["recent events", "events in the last",',
+            '                 "last hour of events", "events last hour"],',
+            '       args={"minutes": {"type": "integer", "min": 1,',
+            '                         "max": 1440, "default": 60,',
+            '                         "required": False}})',
+            "def recent_events(minutes):",
+            "    return bridge.recent_events(minutes)",
+            "",
+        ]
+        probe_names.append("recent_events")
 
     lines.append("PROBES = [" + ", ".join(probe_names) + "]")
     lines.append("")

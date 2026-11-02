@@ -1,5 +1,53 @@
 # Changelog
 
+## 2.4.0 — sources, proof, trust
+
+**Sources**
+- **agent-browser connector (tier 1 + 2)** — `init --source browser:<url>`
+  profiles pages through the agent-browser CLI (accessibility snapshots →
+  rows, roles → caged enums, refs → action handles); `neuralosd browser
+  --session <name> <op>` drives persistent sessions (open / snapshot /
+  click / fill / type / network / text). Missing CLI = error that names the
+  fix; capture injectable; e2e-tested against the real CLI.
+- **Authenticated API sources** — `init --source api:<url> --header H
+  --secret-ref env:VAR|scrt:<store>:<key>|op:<vault/item/field>`; the
+  instance stores only the reference, resolved at ask time via scrt /
+  1Password CLIs. The secret never touches disk.
+- **Multi-source instances** — `init --extra-source prices.csv --on
+  region=region`: per-source caged counts (`count_in`) and a deterministic
+  nested-loop `joined_count`.
+- **Streaming windows** — log instances gain a caged `recent_events(minutes)`
+  probe; unparsable timestamps are out of the window (an unknown when is not
+  a recent when).
+
+**Verification depth**
+- **Value-level oracles** — golden cases carry `oracle.value + shape`
+  (count / percent / ratio / date / text); `golden_run` verifies the ANSWER
+  with typed invariants and reports `wrong_values` separately. Routing
+  right + value wrong = FAIL.
+- **Snapshot pinning** — `neuralosd snapshot --label q3` (hashed
+  observations) and `ask --as-of q3` answer from the pin; the envelope
+  carries label + hash — reproducible evidence.
+
+**Trust & fleet ops**
+- **RBAC / row-level caging** — `acl.json` roles with probe allow-lists and
+  row filters; `load_instance(role=...)` and `ask --role` enforce both.
+- **Refusal-rate SLO** — `neuralosd slo` computes the rate over a window
+  and exits 1 above SLO.
+- **Fleet dashboard** — `neuralosd fleet <dirs|globs>` reports per-instance
+  health; exit 1 on any breach.
+- **Golden-bank CI badge** — `neuralosd badge` emits shields.io endpoint
+  JSON + a GitHub Actions workflow gating pushes on the bank.
+
+**Reasoning quality**
+- **Cluster-driven synonyms** — `neuralosd synonyms` proposes triggers from
+  gap clusters (ownership evidence: audit score vectors, caged enums, name/
+  description tokens); approved triggers extend derived metrics; probes.py
+  probes get exact edit suggestions — generated code is never silently
+  rewritten.
+
+Tests: 899 passed (43 new), smoke 46.
+
 ## 2.3.0 — the loop grows up: ten closing moves
 
 1. **Probe birth traps** — every reason-installed probe synthesizes its

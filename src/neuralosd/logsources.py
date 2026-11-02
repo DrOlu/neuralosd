@@ -46,6 +46,24 @@ def log_cap_default():
         return _LOG_CAP_DEFAULT
 
 
+def within_window(row_ts, minutes=60, now=None):
+    """True iff an ISO event timestamp falls within the last `minutes`.
+    Unparsable timestamps are OUT of the window — an unknown when is not a
+    recent when."""
+    import datetime
+    if not row_ts:
+        return False
+    try:
+        ts = datetime.datetime.fromisoformat(
+            str(row_ts).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=datetime.timezone.utc)
+    return (now - ts).total_seconds() <= minutes * 60
+
+
 def priority_to_level(p):
     """journald PRIORITY (0-7) -> human level."""
     try:

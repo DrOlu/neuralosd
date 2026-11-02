@@ -819,6 +819,33 @@ Returns `{"hard": [(owner, trigger, wrong)], "soft": [...], "bloat": [...]}`.
 
 ---
 
+## neuralosd.websources
+
+agent-browser connector (v2.4.0) — the browser as a data source.
+
+| | |
+|---|---|
+| `browser_rows(url, cap, runner)` | open + accessibility snapshot → rows `{role, name, ref, depth}`; refs are the action handles |
+| `browser_session_op(session, op, ...)` | tier 2: named-session ops (open / snapshot / click / fill / type / network / text); `--session` pins login state |
+
+## neuralosd.apisources
+
+Authenticated API sources with credential caging (v2.4.0).
+
+| | |
+|---|---|
+| `resolve_secret(ref, runner)` | `env:` / `scrt:` / `op:` references resolved at ask time — never stored |
+| `api_rows(url, header_name, secret_ref, cap, fetcher)` | fetch + normalize JSON to rows (list, single-list envelope, or single object) |
+
+## neuralosd.oracles
+
+Typed answer verification (v2.4.0) — the golden bank checks the ANSWER.
+
+| | |
+|---|---|
+| `check_answer(shape, expected, actual)` | typed rules + invariants: count ≥ 0, percent 0..100, date parses, text casefold/strip |
+| `extract_answer(results, path)` | dotted-path walk or bounded numeric/string leaf scan |
+
 ## neuralosd.banks
 
 Behavioural banks — the golden (positive) and traps (refusal) files, plus
@@ -868,7 +895,16 @@ probes work unchanged.
 ### CLI commands
 
 ```bash
-neuralosd init --source <path|prefix> --name <name> [--out <dir>]
+neuralosd init --source <path|prefix> --name <name> [--out <dir>] \
+    [--extra-source prices.csv --on region=region] \
+    [--since 1h] [--header H --secret-ref env:VAR]
+neuralosd browser --session acme snapshot|click|fill|network ...
+neuralosd snapshot --instance-dir <dir> --label q3
+neuralosd slo --instance-dir <dir> [--window-hours 24 --max-refusal-rate 0.4]
+neuralosd fleet <dirs|globs> [...] [--max-refusal-rate 0.4]
+neuralosd badge --instance-dir <dir> --out badge.json [--actions-out wf.yml]
+neuralosd synonyms --instance-dir <dir> [--audit a.jsonl] [--apply proposals.json]
+neuralosd ask --instance-dir <dir> "q" [--as-of q3] [--role analyst]
 neuralosd deploy --instance-dir <dir> --name <name> [--backend boxlite|msb] [--port N]
 neuralosd ask --instance-dir <dir> "question"
 neuralosd serve --instance-dir <dir> [--port 8877] [--auth-token T]

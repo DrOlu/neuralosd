@@ -27,6 +27,39 @@ it's what makes it safe for regulated environments.
 | Errors are silent | Discards are **visible** |
 | Deployment = "it should work" | Deployment = **verified end to end** |
 
+## What's new in 2.4.0 — sources, proof, trust
+
+- **agent-browser connector** — `init --source browser:<url>` turns a web
+  page into a profiled source through the
+  [agent-browser](https://github.com/vercel/agent-browser) CLI:
+  accessibility-tree snapshots become rows, roles become caged enums, and
+  `neuralosd browser --session` drives persistent sessions (open / snapshot
+  / click / fill / network). Verified answers now reach the web.
+- **Authenticated API sources** — `init --source api:<url>` with credential
+  **caging**: the instance stores only a secret *reference*
+  (`scrt:` / `op:` / `env:`), resolved at ask time — the secret never
+  touches disk.
+- **Multi-source instances with caged joins** — `--extra-source` + `--on`:
+  one instance, several row sources, one deterministic join.
+- **Value-level oracles** — golden cases now verify the ANSWER with typed
+  shapes (count / percent / ratio / date / text) and invariants. Wrong
+  value ≠ pass, even when routing is perfect.
+- **Snapshot pinning** — `snapshot --label q3` freezes hashed observations;
+  `ask --as-of q3` answers from the pin after the source changes.
+  Answers become reproducible evidence.
+- **RBAC / row-level caging** — `acl.json` gives roles probe allow-lists
+  and row filters; `ask --role analyst` serves only what that role may see.
+- **Refusal-rate SLO + fleet dashboard** — `slo` and `fleet` quantify the
+  menu-gap signal; exit 1 on breach.
+- **Golden-bank CI badge** — `badge` emits a shields.io endpoint + a GitHub
+  Actions gate; bank health lives in the README, outside the box.
+- **Cluster-driven synonyms** — `synonyms` proposes triggers from gap
+  clusters (audit score vectors + caged enums as ownership evidence);
+  human-approved, applied to derived metrics, emitted as edit suggestions
+  for probes.py.
+- **Streaming windows** — log instances get a caged `recent_events(minutes)`
+  probe: ask over "the last hour".
+
 ## What's new in 2.3.0 — the loop grows up
 
 Ten closing moves that turn the verify-answer loop into a self-improving

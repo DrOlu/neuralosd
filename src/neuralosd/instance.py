@@ -78,6 +78,7 @@ class Instance:
         run. Returns a summary dict; exit code is the caller's decision.
         """
         correct = refused_ok = answered_trap = wrong = refused_wrong = 0
+        value_checked = wrong_values = 0
         skipped = 0
         total = len(golden.get("items", []))
         for item in golden.get("items", []):
@@ -116,15 +117,40 @@ class Instance:
                     print(f"SKIP  {q!r} (no expect_probe / expect_refusal)")
                     continue
                 ok = (expect == probe) and answered
+                # VALUE-LEVEL ORACLE (v2.4.0): routing right is not enough —
+                # a golden case with a typed oracle asserts the ANSWER too.
+                ok_value = None
+                if ok:
+                    o = item.get("oracle") or {}
+                    if o.get("value") is not None:
+                        from .oracles import check_answer, extract_answer
+                        shape = o.get("shape") or "count"
+                        actual = extract_answer(env.get("results"),
+                                                o.get("path"))
+                        cands = actual if isinstance(actual, list) \
+                            else [actual]
+                        ok_value = any(check_answer(shape, o["value"], c)
+                                       for c in cands)
+                        value_checked += 1
+                        if not ok_value:
+                            ok = False
+                            wrong_values += 1
+                            shown = actual if not isinstance(actual, list) \
+                                or len(actual) <= 3 else actual[:3]
+                            print(f"FAIL  WRONG VALUE  {q!r} -> {probe}: "
+                                  f"oracle {o['value']} ({shape}), got {shown}")
                 if ok:
                     correct += 1
                     print(f"PASS  {q!r} -> {probe}")
                 else:
                     wrong += 1
-                    refused_wrong += (not answered)
+                    if ok_value is None:
+                        refused_wrong += (not answered)
                     print(f"FAIL  {q!r} -> {probe} (expected {expect})")
         summary = {"total": total, "correct": correct, "refused_ok": refused_ok,
                    "answered_traps": answered_trap, "wrong": wrong,
+                   "wrong_values": wrong_values,
+                   "value_checked": value_checked,
                    "refused_when_should_answer": refused_wrong,
                    "skipped": skipped}
         graded = correct + refused_ok + wrong
