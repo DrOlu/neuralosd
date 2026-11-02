@@ -22,6 +22,9 @@ in the `neuralosd` package.
 - [neuralosd.metrics](#neuralosdmetrics)
 - [neuralosd.adapters](#neuralosdadapters)
 - [neuralosd.lint](#neuralosdlint)
+- [neuralosd.banks](#neuralosdbanks)
+- [neuralosd.loop](#neuralosdloop)
+- [neuralosd.logsources](#neuralosdlogsources)
 
 ---
 
@@ -816,25 +819,90 @@ Returns `{"hard": [(owner, trigger, wrong)], "soft": [...], "bloat": [...]}`.
 
 ---
 
+## neuralosd.banks
+
+Behavioural banks — the golden (positive) and traps (refusal) files, plus
+the v2.3.0 feedback/provenance lifecycle.
+
+| | |
+|---|---|
+| `synthesize_trap_for(probe_meta, traps_path)` | append the probe's misuse trap (`"<first trigger> <probe name>"`, `expect_refusal`); idempotent, gated by `NEURALOSD_AUTO_TRAPS` (default on). Skips honestly when the raw name cannot carry a valid trap |
+| `auto_traps_enabled()` | the gate (`NEURALOSD_AUTO_TRAPS`) |
+| `ingest_feedback(instance_dir, question, verdict, correction, by, ts)` | thumbs-down → candidate: `bad` = golden candidate (correction attached, awaiting verified oracle), `invalid` = trap candidate |
+| `apply_feedback(instance_dir)` | promote candidates with PROOF — traps only when the router already refuses; golden with live routing recorded and the oracle flagged UNVERIFIED |
+| `record_golden(instance_dir, q, expect_probe, value, by, source, method, ts)` | append a golden case WITH its oracle receipt (who / when / source / how) |
+| `receipts(instance_dir)` | the printable evidence chain; receipt-less cases say so |
+
+## neuralosd.loop
+
+The loop machinery (v2.3.0) — clustering, federation, shadow, transfer,
+hygiene, drift.
+
+| | |
+|---|---|
+| `cluster_gaps(gaps, threshold=0.5)` | cluster refusals by domain-token Jaccard; clusters carry size, member questions, common terms, and cost framing |
+| `export_fingerprints(clusters)` | anonymized token-PAIR hashes + counts — questions never leave the edge |
+| `ingest_fingerprints(clusters, peer_blob)` | merge a peer's fingerprints → `mesh_count` / `mesh_note` per cluster |
+| `close_probe_birth(metric, instance_dir)` | synthesize the new probe's misuse trap and PROVE the refusal; receipt in `metric.provenance["birth_trap"]` |
+| `shadow_install / shadow_report / shadow_evaluate / shadow_promote` | shadow-mode lifecycle: not routable until it agrees with its oracle (age + runs + threshold) |
+| `propose_transfer(from_dir, to_dir, min_sim, out_path)` | schema-similarity proposal: reconfirmed shared probes with translated golden (re-oracle flagged) + proposed missing probes; never auto-installs |
+| `mothball / mothballed_names / reinstate` | menu hygiene: demote stale probes (never empties the menu), reinstate on demand |
+| `audit_drift(instance_dir, src)` | re-profile a changed source; flag name-caged and enum-caged probes it breaks |
+
+## neuralosd.logsources
+
+Log source connectors — every source normalizes to
+`{ts, host, app, level, message}` event rows so the standard generated
+probes work unchanged.
+
+| | |
+|---|---|
+| `parse_syslog_line / parse_syslog_file(path, cap)` | RFC3164 / RFC5424; unparsable lines are counted (`parse_errors`), never silently dropped |
+| `journal_rows(cap, unit, runner)` | journald via `journalctl -o json`, newest first, bounded |
+| `wevt_rows(channel, cap, runner)` / `parse_wevt_xml(text)` | Windows Event Log via `wevtutil /f:XML`; BOM-aware decode (wevtutil redirects as UTF-16), namespace/declaration tolerant |
+| `decode_tool_output(data)` | BOM-aware + NUL-heuristic decoding of native tool output |
+| `log_cap_default()` | `NEURALOSD_LOG_CAP` (default 10000) |
+
 ## neuralosd.cli
 
 ### CLI commands
 
 ```bash
-neuralosd init --source <path> --name <name> [--out <dir>] [--packages "…"]
+neuralosd init --source <path|prefix> --name <name> [--out <dir>]
 neuralosd deploy --instance-dir <dir> --name <name> [--backend boxlite|msb] [--port N]
 neuralosd ask --instance-dir <dir> "question"
-neuralosd serve --instance-dir <dir> [--port 8877]
+neuralosd serve --instance-dir <dir> [--port 8877] [--auth-token T]
 neuralosd lint <needle_menu.json> [--top N]
 neuralosd golden [--dir <instance_dir>]
+neuralosd golden --dir <dir> --record --question "q" --expect-probe P \
+    --value V --by WHO --source SRC --method HOW     # with oracle receipt
+neuralosd golden --dir <dir> --receipts              # the evidence chain
 neuralosd truth [--dir <instance_dir>]
 neuralosd invariants [--dir <instance_dir>]
 neuralosd calibrate [--golden golden.json] [--base URL] [--out calibration.json]
 neuralosd gaps <audit.jsonl> [--menu needle_menu.json] [--out proposals.json]
+neuralosd gaps <audit.jsonl> --export-fingerprints fp.json    # mesh payload
+neuralosd gaps <audit.jsonl> --ingest-fingerprints peer_fp.json
+neuralosd feedback --instance-dir <dir> --question "q" \
+    --verdict bad|invalid [--correction "…"] [--by WHO]
+neuralosd feedback --instance-dir <dir> --apply      # promote proven candidates
+neuralosd mothball --instance-dir <dir> [--age-days 180] [--apply]
+neuralosd mothball --instance-dir <dir> --reinstate <probe>
+neuralosd drift --instance-dir <dir> --source <new_source>   # exit 1 = re-audit
+neuralosd transfer --from <dirA> --to <dirB> [--min-sim 0.6] [--out FILE]
+neuralosd shadow --instance-dir <dir> [--evaluate] [--promote]
+neuralosd reason --instance-dir <dir> "question" [--oracle N] \
+    [--consensus-model M] [--shadow] [--install]
 neuralosd openapi <needle_menu.json> [--agent NAME]
 neuralosd diff <old_profile.json> <new_profile.json> [--menu needle_menu.json]
 neuralosd backends
 ```
+
+`init` sources: `*.csv`, `*.tsv`, `*.xlsx`/`*.xlsm` (deep: formulas, all
+sheets, named ranges), `*.json`/`*.jsonl`, `*.db`/`*.sqlite` (stdlib
+sqlite3), `syslog:<path>`, `journal:[unit]`, `wevtutil:<Channel>`, anything
+else (contract template). See
+[Usage §3.0](usage.md#30-neuralosd-init-sources).
 
 Every subcommand accepts standard flags. See `neuralosd <command> --help`.
 
