@@ -20,6 +20,8 @@ RED state by design — these tests fail until the features land:
 import json
 import os
 import sys
+import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -267,14 +269,23 @@ def test_wevtutil_end_to_end_when_wevtutil_exists(tmp_path):
     out = str(tmp_path / "inst")
     _init("wevtutil:System", out, "wevt")
     inst = load_instance(out)
-    env = inst.ask("how many rows", use_cache=False)
-    assert env["probe"] == "row_count"
+    # the runner's System channel is intermittently slow to expose events
+    # right after boot — retry before declaring a zero-event capture.
+    count = 0
+    for _ in range(3):
+        env = inst.ask("how many rows", use_cache=False)
+        assert env["probe"] == "row_count"
+        count = _res(env)["count"]
+        if count > 0:
+            break
+        time.sleep(2)
     # diagnostics live in the message: if the channel parses to zero events,
     # show what the capture actually looked like.
     import subprocess
+    from neuralosd.logsources import decode_tool_output
     raw = subprocess.run(["wevtutil", "qe", "System", "/c:3", "/rd:true",
                           "/f:XML"], capture_output=True).stdout
-    n_events = decode_tool_output(raw).count("<Event")
-    assert _res(env)["count"] > 0, (
+    assert count > 0, (
         f"wevtutil capture parsed to zero events; raw sample: "
-        f"{raw[:120]!r}; decoded '<Event' occurrences: {n_events}")
+        f"{raw[:120]!r}; decoded '<Event' occurrences: "
+        f"{decode_tool_output(raw).count('<Event')}")
