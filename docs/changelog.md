@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.2.2 — wevtutil parse hardening (Windows binaries release)
+
+- **parse_wevt_xml hardening** — normalizes the remaining redirected-output
+  quirks: BOM-less UTF-16LE (NUL heuristic in the decode layer),
+  single-quoted XML namespaces, mid-document XML declarations. With this,
+  the Windows wevtutil end-to-end test passes on the Windows runner and the
+  full 5-platform binary set builds.
+- e2e test now carries raw-capture diagnostics in its failure message.
+
 ## 2.2.1 — Windows event-log hotfix
 
 - **wevtutil UTF-16 decode** — wevtutil writes UTF-16LE when its output is
