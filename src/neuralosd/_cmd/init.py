@@ -6,6 +6,9 @@ Supported sources (self-contained, no external scripts):
   *.json / *.jsonl — key profiled; count / list / lookup probes
   *.db / *.sqlite  — SQLite database profiled (stdlib sqlite3; tables,
                      columns, row counts; first table drives the probes)
+  syslog:<path>    — syslog text file (RFC3164/RFC5424, stdlib only)
+  journal:[UNIT]   — journald via `journalctl -o json` (bounded, newest first)
+  wevtutil:<CH>    — Windows Event Log channel via `wevtutil ... /f:XML`
   anything else    — a contract template the user fills in
 """
 import json
@@ -26,6 +29,12 @@ def run(a):
         info = _profile_json(src)
     elif src.endswith((".db", ".sqlite", ".sqlite3")):
         info = _profile_sqlite(src)
+    elif src.startswith(("journal:", "journalctl:")):
+        info = _profile_journal(src)
+    elif src.startswith(("wevt:", "wevtutil:")):
+        info = _profile_wevt(src)
+    elif src.startswith("syslog:"):
+        info = _profile_syslog(src)
     else:
         info = {"kind": "opaque", "columns": [], "rows": None}
 
@@ -44,6 +53,21 @@ def run(a):
         print("  tables        — " + ", ".join(
             f"{t} ({v['rows']} rows)"
             for t, v in info["tables"].items()))
+    if info.get("kind") == "xlsx":
+        nr = info.get("named_ranges") or {}
+        if nr:
+            print(f"  named ranges  — {', '.join(sorted(nr))}")
+        fc = sum(v.get("formulas", 0) for v in
+                 (info.get("sheet_info") or {}).values())
+        if fc:
+            print(f"  formulas      — {fc} across "
+                  f"{len(info.get('sheet_info') or {})} sheet(s)")
+    if info.get("log"):
+        print(f"  events        — {info.get('rows')} entries "
+              f"(cap {info.get('cap')}, newest first)")
+        if info.get("parse_errors"):
+            print(f"  note          — {info['parse_errors']} unparsable "
+                  "line(s) skipped (recorded in bridge.py LOG_INTEGRITY)")
     print("  golden.json   — positive bank (fill from verified sessions)")
     print("  traps.json    — refusal bank (what this instance must NOT answer)")
     print("  README.md     — next steps")
@@ -132,6 +156,8 @@ def _profile_xlsx(path):
             "    pip install openpyxl       # or: pip install 'neuralosd[data]'")
 
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    formulas = _profile_formulas(path, wb.sheetnames)
+    named_ranges = _named_ranges(wb)
     sheets = {}
     order = []
     for ws in wb.worksheets:
@@ -153,10 +179,62 @@ def _profile_xlsx(path):
         sheets[ws.title] = {"columns": cols, "rows": n}
     wb.close()
 
+    for t, f in formulas.items():
+        if t in sheets:
+            sheets[t]["formulas"] = f["formulas"]
+            sheets[t]["formula_samples"] = f["samples"]
+
     primary = order[0]
     return {"kind": "xlsx", "path": os.path.abspath(path), "sheet": primary,
             "sheets": order, "columns": _annotate(sheets[primary]["columns"]),
-            "rows": sheets[primary]["rows"], "sheet_info": sheets}
+            "rows": sheets[primary]["rows"], "sheet_info": sheets,
+            "named_ranges": named_ranges,
+            "formula_count": formulas.get(primary, {}).get("formulas", 0)}
+
+
+def _profile_formulas(path, sheetnames):
+    """Count formula cells per sheet (data_only=False load shows the formula
+    strings; the data_only load shows cached values). Sample up to 5."""
+    import openpyxl
+    formulas = {t: {"formulas": 0, "samples": []} for t in sheetnames}
+    wb = openpyxl.load_workbook(path, read_only=True)
+    try:
+        for ws in wb.worksheets:
+            count = 0
+            samples = []
+            for row in ws.iter_rows():
+                for cell in row:
+                    v = cell.value
+                    if isinstance(v, str) and v.startswith("="):
+                        count += 1
+                        if len(samples) < 5:
+                            samples.append(v)
+            if ws.title in formulas:
+                formulas[ws.title] = {"formulas": count, "samples": samples}
+    finally:
+        wb.close()
+    return formulas
+
+
+def _named_ranges(wb):
+    """Workbook defined names -> {name: target}. Tolerates the pre-3.1
+    openpyxl shape (a .definedName collection) defensively."""
+    out = {}
+    try:
+        dns = wb.defined_names
+    except AttributeError:
+        return out
+    try:
+        for k, v in dns.items():
+            out[str(k)] = getattr(v, "value", "") or getattr(v, "attr_text",
+                                                             "") or ""
+    except AttributeError:
+        try:
+            for d in dns.definedName:
+                out[str(d.name)] = d.value or ""
+        except Exception:
+            return out
+    return out
 
 
 _ID_HINTS = ("row id", "postal", "zip", " id", "id ", "_id", "code", "sku",
@@ -304,6 +382,79 @@ def _profile_sqlite(path):
             "total_rows": sum(v["rows"] for v in tables.values())}
 
 
+# Injectable for tests (and exotic deployments): set init._capture to a
+# callable (cmd, cap) -> stdout to run a log source's capture from fixtures.
+_capture = None
+
+
+def _capture_cmd(cmd, cap):
+    if _capture is not None:
+        return _capture(cmd, cap)
+    import subprocess
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except FileNotFoundError:
+        raise SystemExit(
+            f"error: {' '.join(cmd[:2])} is not available on this host.\n"
+            "    (this source must be read on the machine that owns the log)")
+    if r.returncode != 0:
+        raise SystemExit(f"error: {' '.join(cmd)} failed: "
+                         f"{(r.stderr or '').strip()[:200]}")
+    return r.stdout
+
+
+def _log_info(kind, rows, cap, columns, parse_errors=0, truncated=False,
+              **extra):
+    """Common profile shape for log sources. `rows` are the normalized event
+    dicts from neuralosd.logsources; a parse error or a capped read is
+    RECORDED, never silent."""
+    from ..logsources import log_cap_default
+    cols = []
+    for name in columns:
+        vals = [str(r.get(name)) for r in rows[:500]
+                if r.get(name) not in (None, "")]
+        cols.append({"name": name,
+                     "type": "date" if name == "ts" else "str",
+                     "card": len(set(vals))})
+    info = {"kind": kind, "log": True,
+            "columns": _annotate(cols), "rows": len(rows),
+            "cap": cap or log_cap_default(),
+            "parse_errors": parse_errors, "truncated": truncated}
+    info.update(extra)
+    return info
+
+
+def _profile_journal(src):
+    from ..logsources import journal_rows, log_cap_default
+    unit = src.split(":", 1)[1].strip() or None
+    cap = log_cap_default()
+    rows = journal_rows(cap=cap, unit=unit, runner=_capture_cmd)
+    return _log_info("journald", rows, cap,
+                     ("ts", "host", "app", "level", "unit", "message"),
+                     unit=unit or "")
+
+
+def _profile_wevt(src):
+    from ..logsources import wevt_rows, log_cap_default
+    channel = src.split(":", 1)[1].strip()
+    cap = log_cap_default()
+    rows = wevt_rows(channel, cap=cap, runner=_capture_cmd)
+    return _log_info("wevtutil", rows, cap,
+                     ("ts", "host", "app", "level", "event_id", "message"),
+                     channel=channel)
+
+
+def _profile_syslog(src):
+    from ..logsources import parse_syslog_file, log_cap_default
+    path = src.split(":", 1)[1].strip()
+    cap = log_cap_default()
+    parsed = parse_syslog_file(path, cap=cap)
+    return _log_info("syslog", parsed["rows"], cap,
+                     ("ts", "host", "app", "level", "message"),
+                     parse_errors=parsed["parse_errors"],
+                     truncated=parsed["truncated"], path=path)
+
+
 def _profile_json(path):
     rows = []
     if path.endswith(".jsonl"):
@@ -352,6 +503,7 @@ def _write_bridge(out, src, info):
 import csv
 import json
 import os
+import re
 
 SOURCE = {json.dumps(os.path.abspath(src))}
 SHEET = {json.dumps(sheet)}
@@ -381,6 +533,10 @@ def _xlsx_rows():
               for i, h in enumerate(next(it, []))]
     out = []
     for r in it:
+        # row 1 was consumed as the header — data starts at row 2, exactly
+        # like the CSV path (a header row is not a data point).
+        if all(v is None for v in r):
+            continue
         out.append({{header[i]: (r[i] if i < len(r) else None)
                     for i in range(len(header))}})
     wb.close()
@@ -388,6 +544,8 @@ def _xlsx_rows():
 
 
 def rows():
+    if KIND in ("journald", "wevtutil", "syslog"):
+        return _log_rows()
     if KIND == "sqlite":
         return _sqlite_rows()
     if SOURCE.endswith((".xlsx", ".xlsm")):
@@ -562,8 +720,143 @@ def breakdown(dimension, measure):
         out["unaccounted"] = round(g - total, 2)
     return out
 '''
+    if info.get("kind") == "xlsx":
+        bridge += _xlsx_bridge_extra(info)
+    elif info.get("log"):
+        bridge += _log_bridge_extra(info)
+
     with open(os.path.join(out, "bridge.py"), "w", encoding="utf-8") as f:
         f.write(bridge)
+
+
+def _xlsx_bridge_extra(info):
+    """Deep-Excel data layer, appended to the generated bridge.py: per-sheet
+    stats, named-range resolution and a formula scan."""
+    sheet_info = {t: {"rows": v.get("rows"),
+                      "columns": len(v.get("columns") or []),
+                      "formulas": v.get("formulas", 0)}
+                  for t, v in (info.get("sheet_info") or {}).items()}
+    si = json.dumps(sheet_info, ensure_ascii=False)
+    nr = json.dumps(info.get("named_ranges") or {}, ensure_ascii=False)
+    return (
+        "\n\n"
+        "SHEET_INFO = " + si + "\n"
+        "NAMED_RANGES = " + nr + "\n"
+        "\n"
+        "\n"
+        "def sheet_names():\n"
+        "    return {\"sheets\": [dict(sheet=s, **v)\n"
+        "                         for s, v in SHEET_INFO.items()]}\n"
+        "\n"
+        "\n"
+        "def _resolve_ref(ws, ref):\n"
+        "    from openpyxl.utils import column_index_from_string\n"
+        "    m = re.match(r\"^\\$?([A-Z]+)\\$?(\\d+)(?::\\$?([A-Z]+)\\$?(\\d+))?$\", ref)\n"
+        "    if not m:\n"
+        "        raise ValueError(\"unsupported range: \" + ref)\n"
+        "    c1 = column_index_from_string(m.group(1))\n"
+        "    r1 = int(m.group(2))\n"
+        "    c2 = column_index_from_string(m.group(3)) if m.group(3) else c1\n"
+        "    r2 = int(m.group(4)) if m.group(4) else r1\n"
+        "    for row in ws.iter_rows(min_row=r1, max_row=r2, min_col=c1,\n"
+        "                            max_col=c2, values_only=True):\n"
+        "        for v in row:\n"
+        "            yield v\n"
+        "\n"
+        "\n"
+        "def named_ranges():\n"
+        "    \"\"\"Every defined name with its target and a bounded value preview.\n"
+        "\n"
+        "    A range that cannot be resolved reports the error on the entry — a\n"
+        "    named range that resolves to nothing is a finding, not a silence.\n"
+        "    \"\"\"\n"
+        "    import openpyxl\n"
+        "    out = {}\n"
+        "    if not NAMED_RANGES:\n"
+        "        return {\"named_ranges\": out}\n"
+        "    wb = openpyxl.load_workbook(SOURCE, read_only=True)\n"
+        "    try:\n"
+        "        for name, target in NAMED_RANGES.items():\n"
+        "            entry = {\"target\": target}\n"
+        "            try:\n"
+        "                sheet_part, ref = target.rsplit(\"!\", 1)\n"
+        "                ws = wb[sheet_part.strip(\"'\")]\n"
+        "                cells = []\n"
+        "                for v in _resolve_ref(ws, ref.replace(\"$\", \"\")):\n"
+        "                    cells.append(v)\n"
+        "                    if len(cells) >= 100:\n"
+        "                        break\n"
+        "                entry[\"cells\"] = len(cells)\n"
+        "                entry[\"preview\"] = cells[:10]\n"
+        "            except Exception as e:\n"
+        "                entry[\"error\"] = str(e)\n"
+        "            out[name] = entry\n"
+        "    finally:\n"
+        "        wb.close()\n"
+        "    return {\"named_ranges\": out}\n"
+        "\n"
+        "\n"
+        "def formula_scan(sheet=None):\n"
+        "    import openpyxl\n"
+        "    wb = openpyxl.load_workbook(SOURCE, read_only=True)\n"
+        "    try:\n"
+        "        targets = [sheet] if sheet else list(SHEET_INFO)\n"
+        "        by_sheet = {}\n"
+        "        samples = []\n"
+        "        for s in targets:\n"
+        "            count = 0\n"
+        "            for row in wb[s].iter_rows():\n"
+        "                for cell in row:\n"
+        "                    v = cell.value\n"
+        "                    if isinstance(v, str) and v.startswith(\"=\"):\n"
+        "                        count += 1\n"
+        "                        if len(samples) < 5:\n"
+        "                            samples.append(v)\n"
+        "            by_sheet[s] = count\n"
+        "    finally:\n"
+        "        wb.close()\n"
+        "    return {\"sheet\": sheet or \"__all__\",\n"
+        "            \"formulas\": sum(by_sheet.values()),\n"
+        "            \"samples\": samples, \"by_sheet\": by_sheet}\n")
+
+
+def _log_bridge_extra(info):
+    """Log-source data layer, appended to the generated bridge.py: reads the
+    live log (bounded, newest first) at ask time via neuralosd.logsources."""
+    cap = info.get("cap") or 10000
+    kind = info.get("kind")
+    # repr(), not json.dumps(): these constants are PYTHON literals — json
+    # booleans ("false") are a NameError in the generated bridge.
+    header = ("\n\n"
+              "LOG_CAP = " + repr(int(cap)) + "\n"
+              "LOG_INTEGRITY = " + repr(
+                  {"parse_errors": info.get("parse_errors", 0),
+                   "truncated": bool(info.get("truncated"))}) + "\n")
+    if kind == "journald":
+        return (header
+                + "LOG_UNIT = " + repr(info.get("unit") or "") + "\n"
+                + "\n\n"
+                + "def _log_rows():\n"
+                + "    from neuralosd.logsources import journal_rows\n"
+                + "    return journal_rows(cap=LOG_CAP,\n"
+                + "                        unit=LOG_UNIT or None)\n")
+    if kind == "wevtutil":
+        return (header
+                + "LOG_CHANNEL = " + repr(info.get("channel") or "")
+                + "\n\n\n"
+                + "def _log_rows():\n"
+                + "    from neuralosd.logsources import wevt_rows\n"
+                + "    return wevt_rows(LOG_CHANNEL, cap=LOG_CAP)\n")
+    # syslog: static text file — the SOURCE is the log path
+    return (header
+            + "\n\n"
+            + "def _log_rows():\n"
+            + "    from neuralosd.logsources import parse_syslog_file\n"
+            + "    parsed = parse_syslog_file("
+            + repr(info.get("path") or "") + ", cap=LOG_CAP)\n"
+            + "    return parsed[\"rows\"]\n")
+
+
 
 
 def _write_probes(out, name, info):
@@ -679,6 +972,47 @@ def _write_probes(out, name, info):
             "",
         ]
         probe_names.append("breakdown")
+
+    # deep-Excel probes: sheets, named ranges, formula scan (v2.2.0)
+    if info.get("kind") == "xlsx" and info.get("sheets"):
+        sheet_names = list(info["sheets"])
+        lines += [
+            '@probe(description="List the workbook sheets with row, column '
+            'and formula counts",',
+            '       triggers=["list sheets", "sheets", "sheet names",',
+            '                 "what sheets", "tabs", "which sheets"])',
+            "def sheets():",
+            "    return bridge.sheet_names()",
+            "",
+        ]
+        probe_names.append("sheets")
+        if info.get("named_ranges"):
+            nr = ", ".join(sorted(info["named_ranges"]))
+            lines += [
+                '@probe(description="List the workbook named ranges '
+                f'({nr}) with a value preview",',
+                '       triggers=["named ranges", "named range",',
+                '                 "defined names", "range names",',
+                '                 "list named ranges", "named ranges list"])',
+                "def named_ranges():",
+                "    return bridge.named_ranges()",
+                "",
+            ]
+            probe_names.append("named_ranges")
+        ftrig = ["formula scan", "formulas", "scan formulas",
+                 "find formulas", "formula audit", "formulas in"]
+        ftrig += [f"formulas in {s.lower()}" for s in sheet_names]
+        ftrig += [f"{s.lower()} formulas" for s in sheet_names]
+        lines += [
+            '@probe(description="Scan a sheet for formulas (count + samples)",',
+            "       triggers=" + repr(sorted(set(ftrig))) + ",",
+            '       args={"sheet": {"type": "enum", "values": '
+            + repr(sheet_names) + ', "required": False}})',
+            "def formula_scan(sheet):",
+            "    return bridge.formula_scan(sheet)",
+            "",
+        ]
+        probe_names.append("formula_scan")
 
     lines.append("PROBES = [" + ", ".join(probe_names) + "]")
     lines.append("")

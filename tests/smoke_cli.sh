@@ -69,6 +69,63 @@ r="$(run ask --instance-dir ./inst-db 'how many rows')"
 check "ask (sqlite): how many rows -> 3" '"count": 3' "$r"
 check "ask (sqlite): auto-trap banked at birth" 'how many rows row_count' "$(cat ./inst-db/traps.json)"
 
+# 2b. deep Excel — formulas, multi-sheet, named ranges (needs openpyxl)
+PYBIN="$(dirname "$NS")/python3"
+command -v "$PYBIN" >/dev/null 2>&1 || PYBIN=python3
+if "$PYBIN" -c "import openpyxl" 2>/dev/null; then
+  "$PYBIN" - <<'PY'
+import openpyxl
+from openpyxl.workbook.defined_name import DefinedName
+wb = openpyxl.Workbook()
+ws = wb.active; ws.title = "Ledger"
+ws.append(["region", "amount"])
+for r in (("North", 100), ("South", 200), ("East", 50), ("West", 25)):
+    ws.append(list(r))
+ws["B6"] = "=SUM(B2:B5)"
+notes = wb.create_sheet("Notes"); notes.append(["memo"]); notes.append(["ok"])
+wb.defined_names.add(DefinedName("SalesRange", attr_text="Ledger!$B$2:$B$5"))
+wb.save("book.xlsx")
+PY
+  run init --source book.xlsx --name book --out ./inst-xl >/dev/null
+  if [ -f ./inst-xl/probes.py ]; then echo "  ✓ init (xlsx deep) created probes.py"; pass=$((pass+1)); else echo "  ✗ init (xlsx deep) created probes.py"; fail=$((fail+1)); fi
+  check "xlsx deep: named range profiled" 'SalesRange' "$(cat ./inst-xl/probes.py)"
+  check "xlsx deep: sheets probe scaffolded" 'def sheets' "$(cat ./inst-xl/probes.py)"
+  r="$(run ask --instance-dir ./inst-xl 'how many rows')"
+  check "xlsx deep: row_count = 4 data rows (header skipped)" '"count": 4' "$r"
+  r="$(run ask --instance-dir ./inst-xl 'named ranges')"
+  check "xlsx deep: named ranges resolve" 'SalesRange' "$r"
+  r="$(run ask --instance-dir ./inst-xl 'formula scan')"
+  check "xlsx deep: formula scan finds the SUM" 'SUM' "$r"
+else
+  echo "  - skip xlsx deep block (no openpyxl in $PYBIN)"
+fi
+
+# 2c. syslog source — stdlib only, always available
+printf 'Nov  2 03:11:22 web01 sshd[4123]: Accepted publickey for olu\nNov  2 03:12:01 web01 systemd[1]: Started nginx.service.\nNov  2 03:13:44 db01 postgres[900]: checkpoint complete\nnot syslog at all\n' > system.log
+run init --source "syslog:$PWD/system.log" --name syslog --out ./inst-syslog >/dev/null
+if [ -f ./inst-syslog/probes.py ]; then echo "  ✓ init (syslog) created probes.py"; pass=$((pass+1)); else echo "  ✗ init (syslog) created probes.py"; fail=$((fail+1)); fi
+r="$(run ask --instance-dir ./inst-syslog 'how many rows')"
+check "syslog: 3 events parsed, garbage line excluded" '"count": 3' "$r"
+check "syslog: parse error recorded, not silent" 'parse_errors' "$(cat ./inst-syslog/bridge.py)"
+r="$(run ask --instance-dir ./inst-syslog 'distinct app')"
+check "syslog: distinct app routes" '"probe": "distinct_app"' "$r"
+
+# 2d. journald / wevtutil — only where the native tool exists
+if command -v journalctl >/dev/null 2>&1; then
+  run init --source journal: --name journal --out ./inst-journal >/dev/null
+  r="$(run ask --instance-dir ./inst-journal 'how many rows')"
+  check "journald: events counted" '"probe": "row_count"' "$r"
+else
+  echo "  - skip journald block (no journalctl on this host)"
+fi
+if command -v wevtutil >/dev/null 2>&1; then
+  run init --source wevtutil:System --name wevt --out ./inst-wevt >/dev/null
+  r="$(run ask --instance-dir ./inst-wevt 'how many rows')"
+  check "wevtutil: events counted" '"probe": "row_count"' "$r"
+else
+  echo "  - skip wevtutil block (no wevtutil on this host)"
+fi
+
 r="$(run ask --instance-dir ./inst 'distinct region')"
 check "ask: distinct region" '"probe": "distinct_region"' "$r"
 

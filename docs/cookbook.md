@@ -33,6 +33,55 @@ Works for app databases, downloaded `.sqlite` exports, and WAL-mode files
 
 ---
 
+## Recipe: Audit an Excel workbook (formulas, sheets, named ranges)
+
+The deep Excel connector does not stop at reading rows:
+
+```bash
+neuralosd init --source finance_model.xlsx --name model --out ./model-inst
+neuralosd ask --instance-dir ./model-inst "list sheets"
+neuralosd ask --instance-dir ./model-inst "named ranges"
+neuralosd ask --instance-dir ./model-inst "formula scan"
+neuralosd ask --instance-dir ./model-inst "formulas in assumptions"
+```
+
+- **`sheets`** — every sheet with row, column and formula counts.
+- **`named_ranges`** — every defined name with its target and a bounded
+  value preview (a range that resolves to nothing reports the error on the
+  entry — that is a finding about the workbook, not a silence).
+- **`formula_scan`** — count + samples of formula cells, caged to the
+  workbook's own sheet names ("formulas in <sheet>").
+- The header row is data-free by definition: row_count counts DATA rows,
+  exactly like the CSV path.
+
+## Recipe: Point an instance at your logs
+
+Three log sources normalize to the same event shape
+(`{ts, host, app, level, message}`), so the standard probes
+(`row_count`, `distinct_app`, `distinct_level`, …) just work:
+
+```bash
+# syslog text file (stdlib only — works in the frozen binary)
+neuralosd init --source syslog:/var/log/system.log --name syslog
+
+# journald (bounded, newest first; optional unit filter)
+neuralosd init --source journal: --name journal
+neuralosd init --source journal:nginx.service --name nginx
+
+# Windows Event Log (run on the Windows host that owns the channel)
+neuralosd init --source wevtutil:System --name sysmon
+```
+
+Honesty rules the log connector follows:
+
+- **Bounded**: reads are newest-first up to `NEURALOSD_LOG_CAP`
+  (default 10000) — a snapshot, and the cap is recorded in the bridge.
+- **Holes are visible**: a syslog line that does not parse is counted in
+  `LOG_INTEGRITY.parse_errors` (embedded in the generated bridge), never
+  silently dropped.
+- **Right host**: `journalctl`/`wevtutil` must run on the machine that owns
+  the log — point the instance there (or deploy the instance to it).
+
 ## Recipe: Group-by / breakdowns
 
 Any instance built by `neuralosd init` already has a `breakdown` probe:

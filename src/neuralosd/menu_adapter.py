@@ -22,7 +22,14 @@ DERIVED_FILE = "derived.json"
 
 
 def _load_module(path: str, name: str):
-    """Import a sibling module by path, without polluting sys.modules."""
+    """Import a sibling module by path, without polluting sys.modules.
+
+    The registration is only so exec_module can resolve self-references;
+    on SUCCESS the name is popped again. Leaving `bridge` registered here
+    meant the next instance loaded in this process silently reused THIS
+    instance's data layer (the same cross-instance contamination the
+    probes.py path had — fixed there in v2.1.0, here in v2.2.0).
+    """
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         return None, f"no import spec for {path}"
@@ -33,6 +40,7 @@ def _load_module(path: str, name: str):
     except Exception as e:                            # noqa: BLE001
         sys.modules.pop(name, None)
         return None, f"{type(e).__name__}: {e}"
+    sys.modules.pop(name, None)
     return mod, None
 
 
