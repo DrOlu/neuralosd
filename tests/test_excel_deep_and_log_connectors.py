@@ -36,8 +36,9 @@ def _res(env):
 
 
 def _make_workbook(path):
-    """Ledger sheet (3 data rows + a formula), Notes sheet, one named range."""
-    import openpyxl
+    """Ledger sheet (4 data rows + a formula), Notes sheet, one named range."""
+    openpyxl = pytest.importorskip("openpyxl",
+                                   reason="deep Excel tests need openpyxl")
     from openpyxl.workbook.defined_name import DefinedName
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -219,8 +220,8 @@ def test_init_profiles_wevtutil_via_injected_capture(tmp_path, monkeypatch):
     assert "wevt_rows" in bridge_src
 
 
-@pytest.mark.skipif(not os.path.isfile("/bin/journalctl")
-                    and not os.path.exists("/usr/bin/journalctl"),
+@pytest.mark.skipif(not (os.path.isfile("/bin/journalctl")
+                         or os.path.exists("/usr/bin/journalctl")),
                     reason="journald not present on this host")
 def test_journald_end_to_end_when_journalctl_exists(tmp_path):
     out = str(tmp_path / "inst")
@@ -228,7 +229,7 @@ def test_journald_end_to_end_when_journalctl_exists(tmp_path):
     inst = load_instance(out)
     env = inst.ask("how many rows", use_cache=False)
     assert env["probe"] == "row_count"
-    assert env["results"]["count"] > 0
+    assert _res(env)["count"] > 0
 
 
 @pytest.mark.skipif(os.system("where wevtutil >NUL 2>&1") != 0
