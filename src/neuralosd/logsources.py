@@ -238,17 +238,32 @@ def parse_wevt_xml(text):
 
 # ── execution ──────────────────────────────────────────────────────────────
 
+def decode_tool_output(data):
+    """Decode native-tool stdout, BOM-aware.
+
+    wevtutil writes UTF-16LE when its output is redirected (the classic way
+    a Windows Event Log capture comes back as zero parseable events: the
+    XML is there, every other byte is a NUL). Everything else (journalctl,
+    text logs) is UTF-8.
+    """
+    if isinstance(data, str):
+        return data
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return data.decode("utf-16")
+    return data.decode("utf-8", errors="replace")
+
+
 def _execute(cmd, cap, runner):
     if runner is not None:
         return runner(cmd, cap)
     import subprocess
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        r = subprocess.run(cmd, capture_output=True, timeout=120)
     except FileNotFoundError:
         raise SystemExit(
             f"error: {' '.join(cmd[:2])} is not available on this host.\n"
             "    (this source must be read on the machine that owns the log)")
     if r.returncode != 0:
-        raise SystemExit(f"error: {' '.join(cmd)} failed: "
-                         f"{(r.stderr or '').strip()[:200]}")
-    return r.stdout
+        err = decode_tool_output(r.stderr or b"").strip()[:200]
+        raise SystemExit(f"error: {' '.join(cmd)} failed: {err}")
+    return decode_tool_output(r.stdout)
