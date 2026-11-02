@@ -447,7 +447,7 @@ def _profile_wevt(src):
 
 def _profile_syslog(src):
     from ..logsources import parse_syslog_file, log_cap_default
-    path = src.split(":", 1)[1].strip()
+    path = os.path.abspath(src.split(":", 1)[1].strip())
     cap = log_cap_default()
     parsed = parse_syslog_file(path, cap=cap)
     return _log_info("syslog", parsed["rows"], cap,
