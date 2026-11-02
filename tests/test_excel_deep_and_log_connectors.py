@@ -226,12 +226,23 @@ def test_wevtutil_utf16_output_still_parses():
     a NUL). The decode layer must be BOM-aware. This is the Windows CI
     failure from the v2.2.0 tag, pinned here so it cannot come back.
     """
-    from neuralosd.logsources import decode_tool_output, parse_wevt_xml
+    from neuralosd.logsources import (decode_tool_output, parse_wevt_xml,
+                                      wevt_rows)
     raw = WEVT_FIXTURE.encode("utf-16")          # includes the BOM
     rows = parse_wevt_xml(decode_tool_output(raw))
     assert len(rows) == 2
     assert rows[0]["event_id"] == "4624"
     assert rows[1]["level"] == "error"
+    # BOM-less UTF-16LE (some Windows builds) must also survive:
+    rows = parse_wevt_xml(decode_tool_output(WEVT_FIXTURE.encode("utf-16-le")))
+    assert len(rows) == 2
+    # single-quoted namespaces + mid-document XML declaration:
+    sq = ("<?xml version=\"1.0\" encoding=\"utf-16\"?>\n"
+          + WEVT_FIXTURE.replace('xmlns="', "xmlns='")
+          .replace('\"]>', "'>").replace('\"', "'"))
+    sq = sq.replace("'>\n<Event", "'>\n<Event")  # already single-quoted
+    rows = parse_wevt_xml(sq)
+    assert len(rows) == 2, f"single-quoted/decl variant parsed to {len(rows)}"
     # and the decode alone is transparent for utf-8 tool output:
     assert decode_tool_output(JOURNALD_FIXTURE.encode("utf-8")) == \
         JOURNALD_FIXTURE
@@ -258,4 +269,12 @@ def test_wevtutil_end_to_end_when_wevtutil_exists(tmp_path):
     inst = load_instance(out)
     env = inst.ask("how many rows", use_cache=False)
     assert env["probe"] == "row_count"
-    assert _res(env)["count"] > 0
+    # diagnostics live in the message: if the channel parses to zero events,
+    # show what the capture actually looked like.
+    import subprocess
+    raw = subprocess.run(["wevtutil", "qe", "System", "/c:3", "/rd:true",
+                          "/f:XML"], capture_output=True).stdout
+    n_events = decode_tool_output(raw).count("<Event")
+    assert _res(env)["count"] > 0, (
+        f"wevtutil capture parsed to zero events; raw sample: "
+        f"{raw[:120]!r}; decoded '<Event' occurrences: {n_events}")
