@@ -240,4 +240,4 @@ def test_wevtutil_end_to_end_when_wevtutil_exists(tmp_path):
     inst = load_instance(out)
     env = inst.ask("how many rows", use_cache=False)
     assert env["probe"] == "row_count"
-    assert env["results"]["count"] > 0
+    assert _res(env)["count"] > 0
