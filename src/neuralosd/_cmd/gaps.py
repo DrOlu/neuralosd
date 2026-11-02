@@ -1,6 +1,15 @@
-"""`neuralosd gaps` — mine gated/fuzzy questions from an ask audit log."""
+"""`neuralosd gaps` — mine gated/fuzzy questions from an ask audit log.
+
+v2.3.0: refusals are CLUSTERED into patterns ("this gap cost you 412 refused
+queries this month, across 38 phrasings") — you build what users repeatedly
+want, not what one person asked once. And the clusters can be FINGERPRINTED
+for federation: peers on the mesh share anonymized token-pair hashes +
+counts, never the questions themselves.
+"""
 import json
 import os
+
+from ..loop import (cluster_gaps, export_fingerprints, ingest_fingerprints)
 
 
 def run(a):
@@ -65,7 +74,25 @@ def run(a):
             uniq.append(g)
 
     out = {"source": log_path, "count": len(uniq), "gaps": uniq}
+
+    # v2.3.0: the pattern, not the question.
+    clusters = cluster_gaps(uniq)
+    peer_blob = None
+    ingest_path = getattr(a, "ingest_fingerprints", None)
+    if ingest_path and os.path.isfile(ingest_path):
+        with open(ingest_path, encoding="utf-8") as fh:
+            peer_blob = json.load(fh)
+        clusters = ingest_fingerprints(clusters, peer_blob)
+    out["clusters"] = clusters
+
+    export_path = getattr(a, "export_fingerprints", None)
+    if export_path:
+        # the federatable payload — token-pair hashes and counts only
+        with open(export_path, "w", encoding="utf-8") as fh:
+            json.dump(export_fingerprints(clusters), fh, indent=2)
+            fh.write("\n")
+        print(f"fingerprints -> {export_path}")
+
     with open(a.out, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=2, ensure_ascii=False)
     print(json.dumps(out, indent=2, ensure_ascii=False))
-    print(f"\n{len(uniq)} gaps written to {a.out}", file=__import__("sys").stderr)

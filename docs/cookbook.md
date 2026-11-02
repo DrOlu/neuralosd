@@ -6,6 +6,54 @@ step by step without human intervention.
 
 ---
 
+## Recipe: Close the loop — from dissatisfaction to capability
+
+The moat grows from the highest-signal data there is: what users asked for
+and did not get.
+
+```bash
+# 1. see the PATTERNS, not anecdotes:
+neuralosd gaps ask_audit.jsonl --out gaps.json
+#    -> clusters: "this gap cost you 37 refused queries across 12 phrasings"
+
+# 2. compare notes with the mesh (anonymized fingerprints, never questions):
+neuralosd gaps ask_audit.jsonl --export-fingerprints fp.json
+neuralosd gaps ask_audit.jsonl --ingest-fingerprints peer_fp.json
+#    -> "peers saw this pattern 300 more times — 337 asks total"
+
+# 3. a user thumbs-down becomes a candidate, with the correction attached:
+neuralosd feedback --instance-dir . --question "shipping cost per unit" \
+    --verdict bad --correction "average shipping cost per unit" --by ada
+neuralosd feedback --instance-dir . --apply
+
+# 4. build the probe (reason loop, two models, oracle-checked):
+neuralosd reason --instance-dir . "average shipping cost per unit" \
+    --oracle 12.42 --consensus-model qwen3:8b --shadow
+
+# 5. prove it agrees with its oracle, then promote:
+neuralosd shadow --instance-dir . --evaluate
+neuralosd shadow --instance-dir . --promote
+
+# 6. the misuse trap was synthesized and refusal-proven at birth; the
+#    golden case carries its receipt:
+neuralosd golden --dir . --receipts
+
+# 7. keep the menu tight:
+neuralosd mothball --instance-dir . --age-days 180 --apply
+```
+
+And when the source changes under you:
+
+```bash
+neuralosd drift --instance-dir . --source ./fresh_dump.csv   # exit 1 = re-audit
+```
+
+When a sibling estate shares the schema shape, transfer what you proved:
+
+```bash
+neuralosd transfer --from ~/instances/finacle_a --to ~/instances/finacle_b
+```
+
 ## Recipe: SQLite database → instance in 60 seconds
 
 `neuralosd init` reads SQLite files directly with the Python standard

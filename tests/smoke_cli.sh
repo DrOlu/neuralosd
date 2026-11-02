@@ -113,6 +113,25 @@ check "syslog: parse error recorded, not silent" 'parse_errors' "$(cat ./inst-sy
 r="$(run ask --instance-dir ./inst-syslog 'distinct app')"
 check "syslog: distinct app routes" '"probe": "distinct_app"' "$r"
 
+# 2e. loop improvements — clustering, feedback, mothball (v2.3.0; stdlib only)
+# NOTE: its own instance dir — the loop mutates menus, and ./inst belongs to
+# the deterministic-routing checks above.
+printf 'region,units\nNorth,100\nSouth,200\n' > loop.csv
+run init --source loop.csv --name loop --out ./inst-loop >/dev/null
+printf '%s\n' \
+ '{"ts":1,"question":"shipping cost per unit","probe":null,"results":null,"refusal_reason":"no_probe_matches"}' \
+ '{"ts":2,"question":"what is the shipping cost for each unit","probe":null,"results":null,"refusal_reason":"no_probe_matches"}' \
+ '{"ts":3,"question":"how many rows","probe":"row_count","results":[{"count":2}]}' > audit.jsonl
+run gaps audit.jsonl --out gaps.json >/dev/null
+check "gaps: refusals cluster into a pattern" 'shipping' "$(cat gaps.json)"
+check "gaps: cluster carries cost framing" 'refused queries' "$(cat gaps.json)"
+run feedback --instance-dir ./inst-loop --question "delete everything" --verdict invalid --by tester >/dev/null
+run feedback --instance-dir ./inst-loop --apply >/dev/null
+check "feedback: proven refusal promoted to traps" 'delete everything' "$(cat ./inst-loop/traps.json)"
+run mothball --instance-dir ./inst-loop --age-days 0 --apply >/dev/null
+r="$(run ask --instance-dir ./inst-loop 'how many rows')"
+check "mothball: demoted menu still answers" '"probe": "row_count"' "$r"
+
 # 2d. journald / wevtutil — only where the native tool exists
 if command -v journalctl >/dev/null 2>&1; then
   run init --source journal: --name journal --out ./inst-journal >/dev/null

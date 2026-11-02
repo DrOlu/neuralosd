@@ -16,27 +16,32 @@ import os
 import sys
 
 
+def profile_any(src):
+    """Dispatch a source to the right profiler. Shared with the drift
+    re-audit (v2.3.0), which re-profiles the source and checks what broke."""
+    if src.endswith((".xlsx", ".xlsm")):
+        return _profile_xlsx(src)
+    if src.endswith((".csv", ".tsv")):
+        return _profile_delimited(src)
+    if src.endswith((".json", ".jsonl")):
+        return _profile_json(src)
+    if src.endswith((".db", ".sqlite", ".sqlite3")):
+        return _profile_sqlite(src)
+    if src.startswith(("journal:", "journalctl:")):
+        return _profile_journal(src)
+    if src.startswith(("wevt:", "wevtutil:")):
+        return _profile_wevt(src)
+    if src.startswith("syslog:"):
+        return _profile_syslog(src)
+    return {"kind": "opaque", "columns": [], "rows": None}
+
+
 def run(a):
     src = a.source
     out = os.path.abspath(a.out or f"./{a.name}")
     os.makedirs(out, exist_ok=True)
 
-    if src.endswith((".xlsx", ".xlsm")):
-        info = _profile_xlsx(src)
-    elif src.endswith((".csv", ".tsv")):
-        info = _profile_delimited(src)
-    elif src.endswith((".json", ".jsonl")):
-        info = _profile_json(src)
-    elif src.endswith((".db", ".sqlite", ".sqlite3")):
-        info = _profile_sqlite(src)
-    elif src.startswith(("journal:", "journalctl:")):
-        info = _profile_journal(src)
-    elif src.startswith(("wevt:", "wevtutil:")):
-        info = _profile_wevt(src)
-    elif src.startswith("syslog:"):
-        info = _profile_syslog(src)
-    else:
-        info = {"kind": "opaque", "columns": [], "rows": None}
+    info = profile_any(src)
 
     _write_bridge(out, src, info)
     _write_probes(out, a.name, info)

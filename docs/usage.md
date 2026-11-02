@@ -995,6 +995,93 @@ probes", which sends you looking in the wrong place.
 
 ---
 
+## 6b. Close the loop (v2.3.0)
+
+The loop machinery — gaps, feedback, banks, the reason loop — gained eight
+closing moves:
+
+**Refusal clustering** — `gaps` now clusters refusals into PATTERNS:
+
+```bash
+neuralosd gaps ask_audit.jsonl --out gaps.json
+```
+
+Each cluster carries its cost ("this gap cost you 412 refused queries across
+38 phrasings") — you build what users repeatedly want, not what one person
+asked once.
+
+**Federated gap fingerprints** — peers on the mesh share anonymized
+token-pair hashes + counts, never the questions:
+
+```bash
+neuralosd gaps ask_audit.jsonl --export-fingerprints fp.json   # safe to share
+neuralosd gaps ask_audit.jsonl --ingest-fingerprints peer_fp.json
+```
+
+A cluster seen on both edges reports `mesh_count` — capability discovery,
+crowd-sourced, privacy-preserving.
+
+**Negative feedback → banks** — a thumbs-down finally has a path:
+
+```bash
+neuralosd feedback --instance-dir . --question "units by region" \
+    --verdict bad --correction "breakdown of units by region" --by ada
+neuralosd feedback --instance-dir . --question "delete all rows" \
+    --verdict invalid
+neuralosd feedback --instance-dir . --apply      # promote PROVEN candidates
+```
+
+`bad` (wrong ANSWER) becomes a golden candidate awaiting a verified oracle —
+never a trap, the question is legitimate. `invalid` (out-of-scope question)
+becomes a trap candidate, promoted only when the refusal is proven.
+
+**Oracle provenance** — golden cases carry receipts:
+
+```bash
+neuralosd golden --dir . --record --question "total revenue" \
+    --expect-probe total_revenue --value 12642501.91 \
+    --by olu --source "global_superstore_2016, sum column" --method "SQL cross-check"
+neuralosd golden --dir . --receipts     # the evidence chain, for the auditor
+```
+
+**Reason-loop consensus + shadow + birth traps**:
+
+```bash
+neuralosd reason --instance-dir . "share of ..." --oracle 0.19 \
+    --consensus-model qwen3:8b        # two DIFFERENT models must agree
+neuralosd reason --instance-dir . "share of ..." --oracle 0.19 --shadow
+neuralosd shadow --instance-dir . --evaluate         # agreement runs
+neuralosd shadow --instance-dir . --promote          # promote on agreement
+```
+
+Every non-shadow install now also synthesizes its misuse trap and PROVES the
+refusal before reporting success — a probe ships guarded or not at all.
+
+**Menu hygiene** — probes nobody queried get mothballed (kept, reinstatable):
+
+```bash
+neuralosd mothball --instance-dir . --age-days 180 --apply
+neuralosd mothball --instance-dir . --reinstate row_count
+```
+
+**Schema-drift re-audit** — a changed source flags the probes it breaks
+BEFORE they fail at runtime:
+
+```bash
+neuralosd drift --instance-dir . --source ./new_dump.csv   # exit 1 = re-audit
+```
+
+**Probe transfer** — a schema sibling inherits proven capabilities:
+
+```bash
+neuralosd transfer --from ~/instances/finacle_a --to ~/instances/finacle_b
+```
+
+Shared probes are reconfirmed with the golden bank translated (re-oracle
+flagged — the value was proven on ANOTHER estate); missing probes are
+proposed with their definitions. A proposal is a proposal: nothing installs
+itself.
+
 ## 7. Run as a Service
 
 ### 7.1 Start the standard service

@@ -1,5 +1,44 @@
 # Changelog
 
+## 2.3.0 — the loop grows up: ten closing moves
+
+1. **Probe birth traps** — every reason-installed probe synthesizes its
+   misuse trap into traps.json and PROVES the refusal with the live router
+   before the loop reports success. A capability ships guarded, or the
+   install fails loudly.
+2. **Refusal clustering** — `gaps` clusters refusals into patterns with cost
+   framing ("this gap cost you 412 refused queries across 38 phrasings").
+   Prioritize by what users repeatedly want.
+3. **Negative-feedback ingestion** — `neuralosd feedback` turns a
+   thumbs-down into a bank candidate with the user's correction attached;
+   `--apply` promotes only PROVEN candidates (refusal proven for traps,
+   live routing for golden — the oracle stays flagged unverified).
+4. **Schema-similarity probe transfer** — `neuralosd transfer` proposes a
+   schema sibling's probes with the golden bank translated and re-oracle
+   flagged; shared probes are reconfirmed. Proposals never auto-install.
+5. **Oracle provenance** — `golden --record` stores who verified a value,
+   when, from what source, how; `golden --receipts` prints the evidence
+   chain. The golden bank is an evidence chain now, not just a test file.
+6. **Shadow mode** — `reason --shadow` installs probes that cannot serve
+   traffic; `shadow --evaluate/--promote` promotes only on oracle agreement
+   across the shadow window. Kills the "generated probe confidently wrong"
+   class.
+7. **Consensus in the reason loop** — `--consensus-model` requires a SECOND,
+   different model to independently pick the same ids; disagreement refuses
+   the install.
+8. **Auto-deprecation** — `neuralosd mothball` demotes probes nobody queried
+   in N days (kept on disk, reinstatable); the menu filter never empties the
+   instance.
+9. **Schema-drift re-audit** — `neuralosd drift` re-profiles a changed
+   source and flags the probes it breaks (name-caged columns, enum cages)
+   BEFORE they fail at runtime; exits 1 when a re-audit is due.
+10. **Federated gap learning** — `gaps --export-fingerprints` shares
+    anonymized token-pair hashes + counts (never questions);
+    `--ingest-fingerprints` merges peers' counts into `mesh_count`. The mesh
+    crowd-sources capability discovery, privacy-preserving.
+
+Also: smoke suite +4 loop checks (45 total); tests 856 passed.
+
 ## 2.2.4 — syslog path resolution (Windows binaries)
 
 - **syslog source path resolution** — init now embeds `os.path.abspath` of

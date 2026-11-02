@@ -222,6 +222,10 @@ def derived_probes(instance_dir: str,
         observations, snapshot_ts = load_snapshot(instance_dir)
     out = []
     for m in metrics:
+        if m.shadow is not None:
+            # SHADOW MODE: the metric exists and is evaluated, but does not
+            # serve traffic until it promotes (loop.shadow_promote).
+            continue
         p = as_probe(m, observations, snapshot_ts)
         if p is not None:
             out.append(p)
