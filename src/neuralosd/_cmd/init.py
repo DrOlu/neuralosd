@@ -391,16 +391,17 @@ def _capture_cmd(cmd, cap):
     if _capture is not None:
         return _capture(cmd, cap)
     import subprocess
+    from ..logsources import decode_tool_output
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        r = subprocess.run(cmd, capture_output=True, timeout=120)
     except FileNotFoundError:
         raise SystemExit(
             f"error: {' '.join(cmd[:2])} is not available on this host.\n"
             "    (this source must be read on the machine that owns the log)")
     if r.returncode != 0:
-        raise SystemExit(f"error: {' '.join(cmd)} failed: "
-                         f"{(r.stderr or '').strip()[:200]}")
-    return r.stdout
+        err = decode_tool_output(r.stderr or b"").strip()[:200]
+        raise SystemExit(f"error: {' '.join(cmd)} failed: {err}")
+    return decode_tool_output(r.stdout)
 
 
 def _log_info(kind, rows, cap, columns, parse_errors=0, truncated=False,

@@ -220,6 +220,23 @@ def test_init_profiles_wevtutil_via_injected_capture(tmp_path, monkeypatch):
     assert "wevt_rows" in bridge_src
 
 
+def test_wevtutil_utf16_output_still_parses():
+    """wevtutil writes UTF-16LE when redirected — the classic way a Windows
+    Event Log capture comes back as ZERO parseable events (every other byte
+    a NUL). The decode layer must be BOM-aware. This is the Windows CI
+    failure from the v2.2.0 tag, pinned here so it cannot come back.
+    """
+    from neuralosd.logsources import decode_tool_output, parse_wevt_xml
+    raw = WEVT_FIXTURE.encode("utf-16")          # includes the BOM
+    rows = parse_wevt_xml(decode_tool_output(raw))
+    assert len(rows) == 2
+    assert rows[0]["event_id"] == "4624"
+    assert rows[1]["level"] == "error"
+    # and the decode alone is transparent for utf-8 tool output:
+    assert decode_tool_output(JOURNALD_FIXTURE.encode("utf-8")) == \
+        JOURNALD_FIXTURE
+
+
 @pytest.mark.skipif(not (os.path.isfile("/bin/journalctl")
                          or os.path.exists("/usr/bin/journalctl")),
                     reason="journald not present on this host")
