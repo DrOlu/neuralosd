@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.2.4 — syslog path resolution (Windows binaries)
+
+- **syslog source path resolution** — init now embeds `os.path.abspath` of
+  the syslog source (relative sources resolve against init's own cwd); the
+  smoke suite passes a relative source, so it is OS-neutral. Fixes the
+  v2.2.3 Windows smoke failure (an MSYS `$PWD` path the native binary
+  cannot open). Windows unit tests now pass, including the wevtutil
+  end-to-end with retry.
+
+## 2.2.3 — wevtutil e2e retry
+
+- The runner's System channel is intermittently slow to expose events;
+  the wevtutil e2e retries before declaring a zero-event capture.
+
 ## 2.2.2 — wevtutil parse hardening (Windows binaries release)
 
 - **parse_wevt_xml hardening** — normalizes the remaining redirected-output
