@@ -86,6 +86,8 @@ def test_breakdown_accounts_for_every_row(tmp_path):
         assert r["unaccounted"] == 0.0
     finally:
         sys.path.remove(out)
+        for mod in ("probes", "bridge"):
+            sys.modules.pop(mod, None)
 
 
 def test_breakdown_exposes_rows_dropped_for_a_missing_dimension(tmp_path):
@@ -106,6 +108,8 @@ def test_breakdown_exposes_rows_dropped_for_a_missing_dimension(tmp_path):
         assert r["rows_in"] == r["rows_counted"] + sum(r["skipped"].values())
     finally:
         sys.path.remove(out)
+        for mod in ("probes", "bridge"):
+            sys.modules.pop(mod, None)
 
 
 def test_total_reports_non_numeric_skips(tmp_path):
@@ -124,6 +128,8 @@ def test_total_reports_non_numeric_skips(tmp_path):
         assert r["rows_in"] == r["rows_counted"] + sum(r["skipped"].values())
     finally:
         sys.path.remove(out)
+        for mod in ("probes", "bridge"):
+            sys.modules.pop(mod, None)
 
 
 def test_distinct_reports_nulls_and_truncation(tmp_path):
@@ -141,6 +147,8 @@ def test_distinct_reports_nulls_and_truncation(tmp_path):
         assert r["skipped"] == {"null": 1}
     finally:
         sys.path.remove(out)
+        for mod in ("probes", "bridge"):
+            sys.modules.pop(mod, None)
 
 
 # ── router: unconsumed FILTER values ───────────────────────────────────────

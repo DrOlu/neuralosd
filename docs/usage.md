@@ -328,6 +328,10 @@ profiler step) and scaffolds a working instance. Supported sources:
 | `*.xlsx` / `*.xlsm` | every sheet (needs `openpyxl`); first sheet drives the menu |
 | `*.json` / `*.jsonl` | keys profiled; count / list / lookup probes |
 | `*.db` / `*.sqlite` / `*.sqlite3` | **SQLite database** — every table profiled with stdlib `sqlite3` (zero extra deps, works in the frozen binary); all tables named in the generated `probes.py`, the first table drives the column probes |
+| `*.xlsx` / `*.xlsm` (deep, v2.2.0) | every sheet with row/column/**formula** counts; **named ranges** profiled and resolvable; `sheets`, `named_ranges` and caged `formula_scan` probes scaffolded; header row excluded from data (like CSV) |
+| `syslog:<path>` (v2.2.0) | **syslog text file** (RFC3164/RFC5424, stdlib only); normalized to `{ts, host, app, level, message}` events; unparsable lines are counted as `parse_errors` (in the bridge's `LOG_INTEGRITY`), never silently dropped |
+| `journal:[UNIT]` (v2.2.0) | **journald** via `journalctl -o json`, newest-first, bounded by `NEURALOSD_LOG_CAP` (default 10000); systemd units become a filter arg |
+| `wevtutil:<Channel>` (v2.2.0) | **Windows Event Log** channel via `wevtutil qe <Channel> /f:XML` — event_id, provider, level, computer, time (read it on the machine that owns the log) |
 | anything else | a contract template the user fills in |
 
 ```bash

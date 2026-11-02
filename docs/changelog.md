@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.2.0 — deep Excel + log source connectors
+
+- **Deep Excel connector** — `init --source book.xlsx` now profiles formulas
+  (count + samples per sheet), all sheets (row/column/formula counts via the
+  new `sheets` probe), and **named ranges** (profiled, resolvable to a
+  bounded value preview via the `named_ranges` probe). New caged
+  `formula_scan` probe ("formulas in <sheet>"). Header rows are no longer
+  counted as data — xlsx now matches the CSV path.
+- **Log source connectors** — three new `init` sources, all normalized to
+  `{ts, host, app, level, message}` events so the standard probes work
+  unchanged: `syslog:<path>` (RFC3164/RFC5424, stdlib only, parse errors
+  recorded in the bridge's `LOG_INTEGRITY` — never silently dropped),
+  `journal:[UNIT]` (journald via `journalctl -o json`), and
+  `wevtutil:<Channel>` (Windows Event Log via `/f:XML`). All reads bounded
+  by `NEURALOSD_LOG_CAP` (default 10000), newest first; the capture layer is
+  injectable so journald/wevtutil are unit-testable off-host.
+- **Menu-instance module leak fix** — `menu_adapter._load_module` popped the
+  sibling module only on FAILURE; on success `bridge` stayed registered and
+  the next instance loaded in the process silently reused this instance's
+  data layer. Now popped on both paths (completes the v2.1.0 fix that
+  covered the probes.py path); test suites that import a generated
+  `bridge.py` directly now clean up after themselves too.
+- **Docs** — sources table covers the three log prefixes and the deep Excel
+  profile; two new cookbook recipes (workbook audit, log instances);
+  smoke suite grew the xlsx-deep + syslog blocks (41 checks).
+
 ## 2.1.0 — SQLite connector + auto-trap synthesis
 
 - **SQLite source connector** — `neuralosd init --source app.db` profiles a
