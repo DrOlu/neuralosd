@@ -1,5 +1,6 @@
 """Shared helpers for neuralosd CLI commands."""
 import importlib.util
+import json
 import os
 import sys
 from typing import Any, Dict, Optional
@@ -97,6 +98,17 @@ def _load_menu_instance(instance_dir: str, with_model: bool = False):
     return inst
 
 
+def _mothballed_names(instance_dir):
+    path = os.path.join(instance_dir, "mothballed.json")
+    if not os.path.isfile(path):
+        return []
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return list(json.load(fh).get("names", []))
+    except (ValueError, OSError):
+        return []
+
+
 def load_instance(instance_dir: str, with_model: bool = False,
                   router_overrides: Optional[Dict[str, Any]] = None):
     """Load an :class:`~neuralosd.instance.Instance` from a directory.
@@ -170,6 +182,17 @@ def load_instance(instance_dir: str, with_model: bool = False,
     # runs on every single ask.
     from ..menu_adapter import dedup_probes, derived_probes as _derived_probes
     probes = dedup_probes(probes, _derived_probes(instance_dir))
+
+    # MENU HYGIENE (v2.3.0): mothballed probes are kept on disk but demoted
+    # from the menu. The filter never empties the menu — a mute instance is
+    # worse than a stale one.
+    mothballed = set(_mothballed_names(instance_dir))
+    if mothballed:
+        kept = [p for p in probes
+                if getattr(p, "_probe", None) is None
+                or getattr(p, "_probe").name not in mothballed]
+        if kept:
+            probes = kept
 
 
     # A probe's dependency is often imported INSIDE the function, so a missing

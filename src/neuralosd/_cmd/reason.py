@@ -136,13 +136,28 @@ def run(a):
               f"       try:  ollama pull {mapper.model}\n"
               f"       or:   --model <another model>", file=sys.stderr)
         return 3
+    # v2.3.0 consensus: a SECOND, DIFFERENT model must agree. One model
+    # agreeing with itself has one blind spot, twice. Optional — without
+    # --consensus-model the loop behaves exactly as before, labelled honestly.
+    consensus = None
+    cm_name = getattr(a, "consensus_model", None)
+    if cm_name:
+        consensus = OllamaMapper(model=cm_name, url=a.ollama,
+                                 timeout=a.timeout)
+        if not consensus.available():
+            print(f"warning: consensus model {cm_name!r} not reachable — "
+                  f"continuing with single-model stability only",
+                  file=sys.stderr)
+            consensus = None
+
     print(f"\nmapping with {mapper.model} (this takes ~30s x2 for the "
           f"stability check) ...")
 
     try:
         p = propose(question, served, observations, mapper,
                     oracle=a.oracle, scale=a.scale,
-                    check_stability=not a.no_stability_check)
+                    check_stability=not a.no_stability_check,
+                    consensus_mapper=consensus)
     except MapperError as e:
         print(f"error: {e}", file=sys.stderr)
         return 3
@@ -181,6 +196,13 @@ def run(a):
         return 4
 
     metric = p.metric
+    if getattr(a, "shadow", False) or \
+            os.environ.get("NEURALOSD_PROBE_SHADOW", "") == "1":
+        metric.shadow = {"since": time.time(),
+                         "days": getattr(a, "shadow_days", None) or 14,
+                         "agreement": []}
+        print("  mode     : SHADOW — not routable until it agrees with its "
+              "oracle (neuralosd shadow --instance-dir ...)")
     print(f"\n── proposed metric ──")
     print(f"  name     : {metric.name}")
     print(f"  triggers : {metric.triggers}")
@@ -261,6 +283,25 @@ def run(a):
               f"triggers in {path}.")
         return 4
     if got == metric.name:
+        # ── close the birth: the misuse trap is synthesized and the refusal
+        # PROVEN before the loop reports success (v2.3.0). A probe that
+        # ships without its trap is a capability with no guard.
+        if getattr(metric, "shadow", None) is None:
+            from ..loop import close_probe_birth
+            birth = close_probe_birth(metric, instance_dir)
+            if birth["synthesized"]:
+                if birth["refused"]:
+                    print(f"\n✓ birth trap proven: {birth['q']!r} is refused "
+                          f"— the capability is guarded from birth")
+                else:
+                    print(f"\n✗ BIRTH HIJACK: the misuse question "
+                          f"{birth['q']!r} was answered by "
+                          f"{birth['answered_by']!r}. The trap is in the "
+                          f"bank and the bank is red — fix the triggers.")
+                    return 4
+            else:
+                print("\n(i) no auto-trap possible for this name — write its "
+                      "misuse trap by hand")
         print("\n✓ LOOP CLOSED — the question is deterministic now, the model "
               "is not involved, and nothing else moved.")
         return 0

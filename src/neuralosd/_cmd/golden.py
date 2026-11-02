@@ -1,4 +1,10 @@
-"""`neuralosd golden` — run the golden question bank for an instance."""
+"""`neuralosd golden` — run / grow the golden question bank.
+
+v2.3.0: oracle provenance. `--record` appends a case WITH its receipt (who
+verified the value, when, from what source, how) and `--receipts` prints the
+evidence chain — an auditor asks "why is 214 the right answer?" and gets the
+receipt, not just the number.
+"""
 import json
 import os
 import sys
@@ -8,6 +14,32 @@ def run(a):
     from ._common import load_instance
 
     inst_dir = os.path.abspath(a.dir)
+
+    # --record: append a case with its oracle receipt
+    if getattr(a, "record", False):
+        from ..banks import record_golden
+        q = " ".join(getattr(a, "question", None) or [])
+        if not q:
+            raise SystemExit("error: --record needs --question")
+        item = record_golden(
+            inst_dir, q=q,
+            expect_probe=getattr(a, "expect_probe", None),
+            expect_refusal=bool(getattr(a, "expect_refusal", False)),
+            value=getattr(a, "value", None),
+            by=getattr(a, "by", None),
+            source=getattr(a, "source", None),
+            method=getattr(a, "method", None))
+        print(json.dumps(item, indent=2, ensure_ascii=False))
+        print("recorded with receipt — re-run `neuralosd golden --dir ...` "
+              "to prove it routes")
+        return
+
+    # --receipts: the evidence chain, for the auditor
+    if getattr(a, "receipts", False):
+        from ..banks import receipts
+        print(receipts(inst_dir))
+        return
+
     inst = load_instance(inst_dir)
 
     golden_path = os.path.join(inst_dir, "golden.json")

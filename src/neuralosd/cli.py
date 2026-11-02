@@ -98,6 +98,20 @@ def main():
     # golden
     p_golden = sub.add_parser("golden", help="Run golden question bank")
     p_golden.add_argument("--dir", default=".", help="Instance dir")
+    p_golden.add_argument("--record", action="store_true",
+                          help="append a case WITH its oracle receipt")
+    p_golden.add_argument("--receipts", action="store_true",
+                          help="print the evidence chain (who/when/source)")
+    p_golden.add_argument("--question", nargs="+", default=None)
+    p_golden.add_argument("--expect-probe", default=None)
+    p_golden.add_argument("--expect-refusal", action="store_true")
+    p_golden.add_argument("--value", default=None,
+                          help="the oracle value being attested")
+    p_golden.add_argument("--by", default=None, help="who verified it")
+    p_golden.add_argument("--source", default=None,
+                          help="where the value came from (invoice, ledger...)")
+    p_golden.add_argument("--method", default=None,
+                          help="how it was verified (manual count, SQL...)")
 
     # truth
     p_truth = sub.add_parser("truth", help="Run truth oracle")
@@ -121,6 +135,10 @@ def main():
     p_gaps.add_argument("log", help="ask_audit.jsonl or menu_gaps.jsonl")
     p_gaps.add_argument("--menu", default="needle_menu.json")
     p_gaps.add_argument("--out", default="proposals.json")
+    p_gaps.add_argument("--export-fingerprints", default=None,
+                        help="export anonymized gap fingerprints for the mesh")
+    p_gaps.add_argument("--ingest-fingerprints", default=None,
+                        help="merge a peer's fingerprints into the report")
 
     # openapi
     p_oa = sub.add_parser("openapi", help="Generate OpenAPI + MCP manifest")
@@ -139,6 +157,58 @@ def main():
     sub.add_parser("backends", help="List available sandbox backends")
 
     # mesh
+    # feedback — thumbs-down -> bank candidates (v2.3.0)
+    p_fb = sub.add_parser(
+        "feedback",
+        help="Turn a rejected answer into a golden/trap candidate")
+    p_fb.add_argument("--instance-dir", required=True)
+    p_fb.add_argument("--question", nargs="+", default=[])
+    p_fb.add_argument("--verdict", choices=["bad", "invalid"], default=None)
+    p_fb.add_argument("--correction", default=None,
+                      help="the user's corrected question")
+    p_fb.add_argument("--by", default=None, help="who reported it")
+    p_fb.add_argument("--apply", action="store_true",
+                      help="promote proven candidates into the banks")
+
+    # mothball — menu hygiene (v2.3.0)
+    p_mb = sub.add_parser(
+        "mothball",
+        help="Demote probes nobody queries (kept, reinstatable)")
+    p_mb.add_argument("--instance-dir", required=True)
+    p_mb.add_argument("--age-days", type=int, default=180)
+    p_mb.add_argument("--apply", action="store_true")
+    p_mb.add_argument("--reinstate", default=None, metavar="PROBE")
+
+    # drift — schema-drift-triggered re-audit (v2.3.0)
+    p_dr = sub.add_parser(
+        "drift",
+        help="Re-audit the instance against a changed source schema")
+    p_dr.add_argument("--instance-dir", required=True)
+    p_dr.add_argument("--source", required=True,
+                      help="the NEW source (file/db) to re-profile")
+
+    # transfer — schema-similarity probe transfer (v2.3.0)
+    p_tr = sub.add_parser(
+        "transfer",
+        help="Propose a schema-sibling's probes + translated golden bank")
+    p_tr.add_argument("--from", dest="source", required=True)
+    p_tr.add_argument("--to", dest="target", required=True)
+    p_tr.add_argument("--min-sim", type=float, default=0.6)
+    p_tr.add_argument("--out", default=None)
+
+    # shadow — shadow mode for generated probes (v2.3.0)
+    p_sh = sub.add_parser(
+        "shadow",
+        help="Report / evaluate / promote shadowed probes")
+    p_sh.add_argument("--instance-dir", required=True)
+    p_sh.add_argument("--evaluate", action="store_true",
+                      help="run one agreement pass against the oracles")
+    p_sh.add_argument("--promote", action="store_true",
+                      help="promote shadowed probes that qualify")
+    p_sh.add_argument("--min-agreement", type=float, default=0.9)
+    p_sh.add_argument("--min-runs", type=int, default=3)
+    p_sh.add_argument("--max-age-days", type=int, default=14)
+
     p_mesh = sub.add_parser(
         "mesh", help="Synapse mesh integration: serve, discover, delegate")
     mesh_sub = p_mesh.add_subparsers(dest="mesh_cmd")
@@ -177,6 +247,14 @@ def main():
                            "loop never sees where it came from")
     p_rs.add_argument("--scale", choices=["ratio", "percent"],
                       default="percent")
+    p_rs.add_argument("--consensus-model", default=None,
+                      help="a SECOND model that must independently agree "
+                           "before the probe is installed")
+    p_rs.add_argument("--shadow", action="store_true",
+                      help="install the probe in shadow mode: evaluated, "
+                           "not routable, until it agrees with its oracle")
+    p_rs.add_argument("--shadow-days", type=int, default=14,
+                      help="minimum days in shadow before promotion")
     p_rs.add_argument("--dry-run", action="store_true",
                       help="show the whole trail, write nothing")
     p_rs.add_argument("--refresh", action="store_true",
@@ -278,6 +356,21 @@ def main():
     elif a.command == "gaps":
         from ._cmd import gaps
         gaps.run(a)
+    elif a.command == "feedback":
+        from ._cmd import feedback
+        feedback.run(a)
+    elif a.command == "mothball":
+        from ._cmd import mothball
+        mothball.run(a)
+    elif a.command == "drift":
+        from ._cmd import drift
+        drift.run(a)
+    elif a.command == "transfer":
+        from ._cmd import transfer
+        transfer.run(a)
+    elif a.command == "shadow":
+        from ._cmd import shadow
+        shadow.run(a)
     elif a.command == "openapi":
         from ._cmd import openapi
         openapi.run(a)

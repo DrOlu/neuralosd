@@ -361,7 +361,8 @@ class Proposal:
 def propose(question: str, served: str, observations: Dict[str, Dict],
             mapper, oracle: Optional[float] = None,
             tolerance: float = 1e-6, check_stability: bool = True,
-            scale: str = "percent") -> Proposal:
+            scale: str = "percent",
+            consensus_mapper=None) -> Proposal:
     """Full loop, no side effects. Returns a Proposal; installing is separate."""
     p = Proposal(question=question, served=served)
     inventory = inventory_from_observations(observations)
@@ -405,6 +406,38 @@ def propose(question: str, served: str, observations: Dict[str, Dict],
         p.reasons.append(why)
         return p
     p.pick = clean
+
+    # ── consensus (v2.3.0): a SECOND, DIFFERENT model must agree ──────────
+    # One model agreeing with itself has one blind spot, twice. A second
+    # model independently picking the same ids is cheap protection against
+    # that. Optional: without a consensus model, behaviour is unchanged.
+    if consensus_mapper is not None:
+        agree, detail = None, "not checked"
+        try:
+            second_pick = consensus_mapper.map_ids(question, served,
+                                                   inventory)
+            other = validate_pick(second_pick, inventory)[0]
+            agree = (p.stable is not False and p.pick is not None
+                     and other is not None
+                     and (other["numerator"], other["denominator"])
+                     == (p.pick["numerator"], p.pick["denominator"]))
+            detail = ("both models picked the same ids"
+                      if agree else
+                      f"MODELS DISAGREE — {consensus_mapper.model!r} picked "
+                      f"{(other or {}).get('numerator')}/"
+                      f"{(other or {}).get('denominator')}, refusing to "
+                      f"install")
+        except MapperError:
+            agree, detail = None, "consensus model unreachable"
+        p.checks.append({"name": "stable_across_models", "ok": agree is True,
+                         "detail": detail})
+        if agree is False:
+            p.stable = False
+            p.reasons.append("the consensus model disagreed with the primary "
+                             "model; one of them has a blind spot, and a "
+                             "probe must not be born out of a coin flip")
+            return p
+
 
     try:
         value = evaluate(DerivedMetric(

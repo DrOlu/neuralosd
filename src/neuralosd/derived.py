@@ -93,6 +93,10 @@ class DerivedMetric:
     2-token question, low enough to survive paraphrasing.
     """
     provenance: Dict[str, Any] = field(default_factory=dict)
+    shadow: Optional[Dict[str, Any]] = None
+    """Shadow-mode state (v2.3.0): {"since": ts, "days": n, "agreement":
+    [...]}. A shadowed metric is NOT routable — it earns its menu slot by
+    agreeing with its oracle over the shadow window. None = routable."""
 
     def validate(self) -> None:
         if not re.fullmatch(r"[a-z][a-z0-9_]*", self.name or ""):
