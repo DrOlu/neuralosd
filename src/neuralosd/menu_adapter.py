@@ -35,12 +35,23 @@ def _load_module(path: str, name: str):
         return None, f"no import spec for {path}"
     mod = importlib.util.module_from_spec(spec)
     sys.modules[name] = mod
+    before = frozenset(sys.modules)
     try:
         spec.loader.exec_module(mod)
     except Exception as e:                            # noqa: BLE001
         sys.modules.pop(name, None)
         return None, f"{type(e).__name__}: {e}"
+    # pop the direct module AND every sibling it freshly imported
+    # (instance.py does `from models import ...` — a leaked `models` would
+    # silently bind the NEXT instance to THIS instance's models)
     sys.modules.pop(name, None)
+    mod_dir = os.path.dirname(os.path.realpath(path))
+    for mname, m in list(sys.modules.items()):
+        if mname in before:
+            continue
+        f = getattr(m, "__file__", None)
+        if f and os.path.dirname(os.path.realpath(f)) == mod_dir:
+            sys.modules.pop(mname, None)
     return mod, None
 
 

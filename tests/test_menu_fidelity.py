@@ -149,3 +149,34 @@ def test_menu_round_trips_through_json_losing_nothing(tmp_path):
     pat_entry = json.loads(json.dumps(r2.menu()[0]))
     pat_props = pat_entry["parameters"]["properties"]
     assert pat_props["ref"]["pattern"] == r"INC\d+"
+
+
+def test_menu_instances_cannot_leak_sibling_modules_into_each_other(tmp_path):
+    """instance.py does `from models import ...` — a nested import the menu
+    loader must ALSO purge after load, or the next menu instance silently
+    binds THIS instance's models (found converting 18 legacy instances)."""
+    import json as _json
+    for name, tag in (("alpha", "ALPHA_MODELS"), ("beta", "BETA_MODELS")):
+        d = tmp_path / name
+        d.mkdir()
+        (d / "needle_menu.json").write_text(_json.dumps([
+            {"name": "who_am_i", "description": "which models module",
+             "triggers": ["who am i"],
+             "parameters": {"type": "object", "properties": {}}}]))
+        (d / "models.py").write_text(f"TAG = {tag!r}\n")
+        (d / "instance.py").write_text(
+            "from models import TAG\n"
+            "def who_am_i():\n"
+            "    return {'tag': TAG}\n")
+    from neuralosd._cmd._common import load_instance
+    a = load_instance(str(tmp_path / "alpha"))
+    b = load_instance(str(tmp_path / "beta"))
+    env_a = a.ask("who am i", use_cache=False)
+    env_b = b.ask("who am i", use_cache=False)
+    ra = env_a["results"][0] if isinstance(env_a["results"], list) \
+        else env_a["results"]
+    rb = env_b["results"][0] if isinstance(env_b["results"], list) \
+        else env_b["results"]
+    assert ra["tag"] == "ALPHA_MODELS"
+    assert rb["tag"] == "BETA_MODELS", (
+        "beta answered with alpha's models module — sibling leak")
