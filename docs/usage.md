@@ -1084,8 +1084,13 @@ itself.
 
 ## 6c. Web, APIs, and trust (v2.4.0)
 
-**The browser is a source.** With [agent-browser](https://github.com/vercel/agent-browser)
-installed (`npm i -g agent-browser`):
+**The browser is a source.** Install the [agent-browser](https://github.com/vercel/agent-browser)
+CLI with one consent-gated command (checks Node, installs via npm, verifies
+with a live ping):
+
+```bash
+neuralosd browser --setup            # add --yes for non-interactive runs
+```
 
 ```bash
 neuralosd init --source browser:https://portal.corp/dashboard --name portal

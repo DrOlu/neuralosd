@@ -119,3 +119,100 @@ def _execute(args, cap=None, timeout=120):
         err = (r.stderr or b"").decode("utf-8", errors="replace").strip()
         raise SystemExit(f"error: {' '.join(cmd)} failed: {err[:200]}")
     return text
+
+
+# ── setup: consent-gated install + live verification (v2.4.1) ─────────────
+
+def setup_browser_tool(which_fn=None, installer=None, runner=None,
+                       prompt_fn=None, assume_yes=False):
+    """`neuralosd browser --setup` — close the gap between "neuralosd" and
+    "a working browser source":
+
+      1. already installed? -> never re-install, just ping
+      2. Node/npm on PATH?  -> else an error that names the prerequisite
+      3. consent            -> a prompt (input()), skipped by --yes;
+                               EOF on a non-interactive stdin = decline
+      4. npm i -g agent-browser
+      5. verify the binary REALLY landed on PATH (npm "success" with no
+         binary is a classic false green — report it, advise the shell)
+      6. live snapshot ping (open example.com + snapshot + close)
+
+    Everything injectable (which_fn / installer / runner / prompt_fn) so the
+    whole flow is unit-testable without Node, npm, or a browser.
+    """
+    import shutil
+    which_fn = which_fn or shutil.which
+    report = {"installed": False, "already": False, "declined": False,
+              "ping_ok": False, "node": None, "error": None}
+
+    ab = which_fn("agent-browser")
+    node = which_fn("node")
+    report["node"] = node
+
+    if not ab:
+        if not node:
+            raise SystemExit(
+                "error: neuralosd browser --setup needs Node.js (v18+) and "
+                "npm on PATH first — the agent-browser CLI is an npm package."
+                "\n    install Node from https://nodejs.org and re-run")
+        if not assume_yes:
+            try:
+                ask = prompt_fn or (lambda: input(
+                    "Install the agent-browser CLI globally via npm "
+                    "(npm i -g agent-browser)? [y/N] "))
+                answer = ask()
+            except EOFError:
+                answer = ""          # non-interactive stdin declines safely
+            if answer.strip().lower() not in ("y", "yes"):
+                report["declined"] = True
+                return report
+        npm = which_fn("npm")
+        if installer is None and not npm:
+            # the real installer needs npm; an injected one does not (tests,
+            # exotic environments handle their own tooling)
+            raise SystemExit("error: npm not found on PATH (Node is "
+                             "installed but npm is missing?)")
+        installer = installer or _npm_install
+        try:
+            # an injected installer gets the plain package spec (its tooling
+            # resolves npm itself); the real one gets the resolved path
+            installer([(npm or "npm"), "i", "-g", "agent-browser"],
+                      timeout=600)
+        except Exception as e:                             # noqa: BLE001
+            report["error"] = f"npm install failed: {str(e)[:300]}"
+            return report
+        ab = which_fn("agent-browser")
+        if not ab:
+            report["error"] = (
+                "npm reported success but agent-browser is still not on "
+                "PATH — restart your shell, or check npm's global bin dir "
+                "(npm prefix -g) and add it to PATH")
+            return report
+        report["installed"] = True
+    else:
+        report["already"] = True
+        report["installed"] = True
+
+    # the live proof: a real open + snapshot, then clean up
+    _exec = runner or _execute
+    try:
+        _exec(["open", "https://example.com"], None)
+        text = _exec(["snapshot"], None)
+        report["ping_ok"] = bool(text and text.strip())
+        try:
+            _exec(["close"], None)
+        except Exception:                                  # noqa: BLE001
+            pass                                          # cleanup is best-effort
+    except (Exception, SystemExit) as e:
+        report["ping_ok"] = False
+        report["error"] = (f"installed, but the live snapshot ping failed: "
+                           f"{str(e)[:200]} (offline? sandboxed browser?)")
+    return report
+
+
+def _npm_install(cmd, timeout=600):
+    import subprocess
+    r = subprocess.run(cmd, capture_output=True, timeout=timeout)
+    if r.returncode != 0:
+        err = (r.stderr or b"").decode("utf-8", errors="replace").strip()
+        raise RuntimeError(err[:300] or "npm exited non-zero")
