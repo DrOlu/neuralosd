@@ -204,15 +204,22 @@ def test_http_transport_discovers_agents():
                 {"agent_id": "agent-2", "skills": ["skill-2"]}]}).encode()
     def fake_urlopen(req, timeout=None):
         calls.append({"url": req.full_url, "method": req.get_method(),
-                      "body": json.loads(req.data.decode())})
+                      "headers": dict(req.headers),
+                      "body": json.loads(req.data.decode())
+                      if req.data else None})
         return FakeResp()
     import urllib.request as _ur
     _ur.urlopen = fake_urlopen
-    t = SynapseHTTP(gateway="http://127.0.0.1:8090")
+    t = SynapseHTTP(gateway="http://127.0.0.1:3000", token="tok")
     agents = t.discover(skill="test")
     assert len(agents) == 2
-    assert calls[0]["method"] == "POST"
-    assert "/discover" in calls[0]["url"]
+    # v2.5.0: the REAL gateway wire — GET /api/mesh/agents with Bearer auth
+    assert calls[0]["method"] == "GET"
+    assert "/api/mesh/agents" in calls[0]["url"]
+    assert "capabilities=test" in calls[0]["url"]
+    assert any("Bearer tok" in str(v) for v in calls[0]["headers"].values()), \
+        "the real gateway requires Bearer auth on /api/mesh/*"
+    assert "/api/mesh/agents" in calls[0]["url"]
 
 
 def test_http_transport_unreachable_gateway_raises_synapse_error():

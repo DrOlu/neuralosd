@@ -130,6 +130,9 @@ run feedback --instance-dir ./inst-loop --apply >/dev/null
 check "feedback: proven refusal promoted to traps" 'delete everything' "$(cat ./inst-loop/traps.json)"
 run badge --instance-dir ./inst-loop --out badge.json >/dev/null
 check "badge: golden-bank health endpoint" '"label": "golden bank"' "$(cat badge.json)"
+# temporal durable activities run WITHOUT a server (plain functions):
+r="$(run temporal --run-activity golden_run --instance-dir ./inst-loop)"
+check "temporal: golden_run activity executes" '"wrong"' "$r"
 run mothball --instance-dir ./inst-loop --age-days 0 --apply >/dev/null
 # with --age-days 0 everything is stale except the most-recently-used anchor
 # (the probe the badge's bank run used last):
