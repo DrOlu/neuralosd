@@ -260,3 +260,39 @@ def receipts(instance_dir):
     return "\n".join(lines)
 
 
+
+
+def retract_stale_traps(instance_dir, menu_names):
+    """Remove AUTO-synthesized traps whose probe is no longer in the menu.
+
+    A birth trap exists to catch the routing drift of a capability that
+    EXISTS. When the capability leaves the menu, the trap outlives its
+    purpose and goes stale — and a stale trap that some other probe now
+    answers turns the bank red for the wrong reason. Only auto-synthesized
+    traps are retracted (identified by their note); human-written traps are
+    never touched.
+    """
+    path = os.path.join(instance_dir, "traps.json")
+    if not os.path.isfile(path):
+        return {"retracted": []}
+    with open(path, encoding="utf-8") as fh:
+        bank = json.load(fh)
+    menu = set(menu_names)
+    kept, retracted = [], []
+    for item in bank.get("items", []):
+        note = item.get("note", "")
+        q = item.get("q", "")
+        auto = "auto-synthesized misuse trap for" in note
+        probe_name = note.rsplit("for ", 1)[-1].strip() if auto else None
+        if auto and probe_name and probe_name not in menu:
+            retracted.append(q)
+            continue
+        kept.append(item)
+    if retracted:
+        bank["items"] = kept
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(bank, fh, indent=2, ensure_ascii=False)
+            fh.write("\n")
+        os.replace(tmp, path)
+    return {"retracted": retracted}

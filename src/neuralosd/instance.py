@@ -86,7 +86,10 @@ class Instance:
             wants_refusal = bool(item.get("expect_refusal"))
             want_reason = item.get("refusal_reason")
             try:
-                env = self.ask(q)
+                # a bank replay is a VERIFICATION: it must exercise the real
+                # code path, never the ask cache (a cached answer would let a
+                # broken probe pass on the strength of its old, correct self)
+                env = self.ask(q, use_cache=False)
                 probe, refusal_reason = env.get("probe"), env.get("refusal_reason")
                 answered = env.get("results") not in (None, [], {})
             except NoResults as e:
