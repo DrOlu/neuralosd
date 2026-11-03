@@ -297,3 +297,101 @@ def _first(res):
 def _res(env):
     res = env.get("results")
     return res[0] if isinstance(res, list) else res
+
+
+# ── v2.4.1 hotfix follow-ups: delta gating + stale-trap retraction ────────
+
+def test_build_gates_on_the_delta_not_preexisting_red(tmp_path):
+    """A bank that was ALREADY red before pi ran is a pre-existing condition
+    — reported as a warning, never attributed to the builder. The gate
+    measures the delta."""
+    from neuralosd.banks import record_golden
+    from neuralosd.pisources import build_capability
+    out = _build(tmp_path)
+    record_golden(out, q="how many rows", expect_probe="row_count",
+                  value=999, shape="count", by="olu", source="manual",
+                  method="count")                    # pre-existing red
+    def harmless_pi(argv, cwd=None, timeout=None):
+        pass
+    report = build_capability("add something", instance_dir=out,
+                              execute=harmless_pi, model=DEFAULT_MODEL,
+                              provider=DEFAULT_PROVIDER)
+    assert report["ok"] is True                      # delta zero -> deliver
+    assert report["pre_existing"], "the pre-existing red must be reported"
+
+
+def test_build_still_blocks_on_new_failures_it_introduces(tmp_path):
+    from neuralosd.banks import record_golden
+    from neuralosd.pisources import build_capability
+    out = _build(tmp_path)
+    def bank_wrecker(argv, cwd=None, timeout=None):
+        # genuinely break the probe: the golden case errors out
+        p = os.path.join(cwd, "probes.py")
+        src = open(p, encoding="utf-8").read()
+        src = src.replace("    return bridge.count()",
+                          '    raise RuntimeError("wrecked by pi")')
+        open(p, "w", encoding="utf-8").write(src)
+    record_golden(out, q="how many rows", expect_probe="row_count",
+                  value=4, shape="count", by="olu", source="manual",
+                  method="count")
+    report = build_capability("break routing", instance_dir=out,
+                              execute=bank_wrecker, model=DEFAULT_MODEL,
+                              provider=DEFAULT_PROVIDER)
+    assert report["ok"] is False
+    assert "NEW failure" in report["error"]
+
+
+def test_retract_stale_traps_touches_auto_traps_only(tmp_path):
+    from neuralosd.banks import retract_stale_traps
+    out = _build(tmp_path)
+    traps_path = os.path.join(out, "traps.json")
+    bank = json.loads(open(traps_path, encoding="utf-8").read())
+    bank["items"].append({
+        "q": "warehouse values distinct_warehouse",
+        "expect_refusal": True,
+        "note": "auto-synthesized misuse trap for distinct_warehouse"})
+    bank["items"].append({
+        "q": "human wrote this one", "expect_refusal": True,
+        "note": "added by hand after the incident"})
+    with open(traps_path, "w", encoding="utf-8") as fh:
+        json.dump(bank, fh, indent=2)
+
+    # birth traps only exist after a load — same as real usage
+    from neuralosd._cmd._common import load_instance
+    load_instance(out)
+    menu = [m.name for m in load_instance(out).router.metas]
+    result = retract_stale_traps(out, menu)
+    assert any("distinct_warehouse" in q for q in result["retracted"])
+    bank = json.loads(open(traps_path, encoding="utf-8").read())
+    qs = [i["q"] for i in bank["items"]]
+    assert "warehouse values distinct_warehouse" not in qs
+    assert "human wrote this one" in qs              # human traps: untouchable
+    assert "how many rows row_count" in qs           # live probe: kept
+
+
+def test_bank_replays_bypass_the_ask_cache(tmp_path):
+    """A cached answer must never mask a broken probe: the ask cache is for
+    SERVING, bank replays are for VERIFYING. Found during the real
+    global-superstore build — pinned so it stays fixed."""
+    from neuralosd.banks import record_golden
+    out = _build(tmp_path)
+    record_golden(out, q="how many rows", expect_probe="row_count",
+                  value=4, shape="count", by="olu", source="manual",
+                  method="count")
+    from neuralosd._cmd._common import load_instance
+    inst = load_instance(out)
+    inst.ask("how many rows", use_cache=True)    # prime the cache (v=4)
+
+    # NOW break the probe:
+    p = os.path.join(out, "probes.py")
+    src = open(p, encoding="utf-8").read()
+    src = src.replace("    return bridge.count()",
+                      '    raise RuntimeError("broken after caching")')
+    open(p, "w", encoding="utf-8").write(src)
+
+    fresh = load_instance(out)
+    golden = json.loads(open(os.path.join(out, "golden.json"),
+                             encoding="utf-8").read())
+    summary = fresh.golden_run(golden)
+    assert summary["wrong"] >= 1, (
+        "a broken probe must fail the bank even with a cached answer")

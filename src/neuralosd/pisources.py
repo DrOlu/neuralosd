@@ -207,6 +207,25 @@ def build_capability(question, instance_dir, model=DEFAULT_MODEL,
     from .router import NoResults
 
     instance_dir = os.path.abspath(instance_dir)
+
+    # baseline: replay the banks BEFORE pi so the gate measures the DELTA.
+    # This runs FIRST because the baseline load also births the auto-traps —
+    # the backup below must capture the post-birth state, or the builder
+    # would flag its own setup as tampering.
+    _bank_baseline = {}
+    try:
+        _inst0 = load_instance(instance_dir)
+        for bank_name in ("golden.json", "traps.json"):
+            bp = os.path.join(instance_dir, bank_name)
+            if os.path.isfile(bp):
+                try:
+                    _bank_baseline[bank_name] = _inst0.golden_run(
+                        json.loads(open(bp, encoding="utf-8").read()))
+                except ValueError:
+                    pass
+    except SystemExit:
+        _bank_baseline = {}
+
     backup = {}
     for name in os.listdir(instance_dir):
         p = os.path.join(instance_dir, name)
@@ -248,8 +267,11 @@ def build_capability(question, instance_dir, model=DEFAULT_MODEL,
                                       f"{str(e)[:200]} — instance restored",
                 "restored": True, "verified": False}
 
-    # 3. both banks replay green
-    problems = []
+    # 3. both banks replay green — gated on the DELTA. A bank that was
+    # already red before pi ran is a pre-existing condition (reported as a
+    # warning, never attributed to the builder); only failures the new
+    # probe INTRODUCED block the delivery.
+    problems, pre_existing = [], []
     for bank_name in ("golden.json", "traps.json"):
         bp = os.path.join(instance_dir, bank_name)
         if not os.path.isfile(bp):
@@ -259,17 +281,28 @@ def build_capability(question, instance_dir, model=DEFAULT_MODEL,
         except ValueError:
             problems.append(f"{bank_name} is corrupt")
             continue
+        baseline = _bank_baseline.get(bank_name)
         summary = inst.golden_run(bank)
-        if summary["wrong"] or summary["answered_traps"]:
-            problems.append(f"{bank_name}: {summary['wrong']} wrong, "
-                            f"{summary['answered_traps']} trap(s) answered")
+        after_bad = summary["wrong"] + summary["answered_traps"]
+        before_bad = None
+        if baseline:
+            before_bad = baseline["wrong"] + baseline["answered_traps"]
+        if after_bad > (before_bad or 0):
+            problems.append(f"{bank_name}: {after_bad - (before_bad or 0)} "
+                            f"NEW failure(s) "
+                            f"({before_bad or 0} pre-existing)")
+        elif after_bad:
+            pre_existing.append(f"{bank_name}: {after_bad} pre-existing "
+                                f"failure(s) — not caused by this build")
     if problems:
         _restore(instance_dir, backup)
         return {"ok": False, "error": "; ".join(problems),
+                "pre_existing": pre_existing,
                 "restored": True, "verified": False,
                 "pi_output": (pi_out or "")[-400:]}
 
     return {"ok": True, "verified": True, "restored": False,
+            "pre_existing": pre_existing,
             "pi_output": (pi_out or "")[-400:]}
 
 
