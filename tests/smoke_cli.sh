@@ -133,9 +133,11 @@ check "badge: golden-bank health endpoint" '"label": "golden bank"' "$(cat badge
 # temporal durable activities run WITHOUT a server (plain functions):
 r="$(run temporal --run-activity golden_run --instance-dir ./inst-loop)"
 check "temporal: golden_run activity executes" '"wrong"' "$r"
+# pin the anchor explicitly: an ask right before mothball makes list_rows
+# the most-recently-used probe, so the anchor choice is deterministic on
+# every platform (it used to depend on the badge's internal bank order)
+run ask --instance-dir ./inst-loop 'show me some rows' >/dev/null
 run mothball --instance-dir ./inst-loop --age-days 0 --apply >/dev/null
-# with --age-days 0 everything is stale except the most-recently-used anchor
-# (the probe the badge's bank run used last):
 r="$(run ask --instance-dir ./inst-loop 'show me some rows')"
 check "mothball: anchor survives, menu still answers" '"probe": "list_rows"' "$r"
 
