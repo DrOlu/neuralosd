@@ -22,6 +22,8 @@ in the `neuralosd` package.
 - [neuralosd.metrics](#neuralosdmetrics)
 - [neuralosd.adapters](#neuralosdadapters)
 - [neuralosd.lint](#neuralosdlint)
+- [neuralosd.synapse](#neuralosdsynapse)
+- [neuralosd.durable](#neuralosddurable)
 - [neuralosd.banks](#neuralosdbanks)
 - [neuralosd.loop](#neuralosdloop)
 - [neuralosd.logsources](#neuralosdlogsources)
@@ -819,6 +821,30 @@ Returns `{"hard": [(owner, trigger, wrong)], "soft": [...], "bloat": [...]}`.
 
 ---
 
+## neuralosd.synapse
+
+Synapse-gateway REST client (v2.5.0 — the real /api/mesh/* wire).
+
+| | |
+|---|---|
+| `SynapseHTTP(gateway, timeout, token, token_path)` | Bearer token from `REACTORPRO_GATEWAY_TOKEN` or the gateway.env file; never stored in instances |
+| `agents(capabilities, availability)` / `discover(skill)` | the peer directory |
+| `dispatch(target, text, skill, timeout_ms)` | synchronous ask; reply read payload.text → payload.output; error envelopes raise with the mesh code |
+| `create_task / get_task / cancel_task / retry_task` | durable async tasks — caller-minted idempotent taskId |
+| `mailbox(target, skill, input, task_id)` | fire-and-forget, at-least-once |
+| `health / status / trust` | operators' read-only surface |
+
+## neuralosd.durable
+
+Temporal durable execution for the loop (v2.5.0).
+
+| | |
+|---|---|
+| `ACTIVITIES` / `run_activity(name, instance_dir)` | golden_run, gaps_mine, shadow_evaluate, snapshot_pin, drift_audit — plain JSON-able functions, no server needed |
+| `build_worker(instance_dir, task_queue)` | temporalio worker (honest error without the SDK) |
+| `schedule_create_args(...)` | the exact Temporal CLI call for a recurring loop schedule |
+| `setup(which_fn, runner, has_temporalio)` | three honest checks: CLI, server, SDK |
+
 ## neuralosd.websources
 
 agent-browser connector (v2.4.0) — the browser as a data source.
@@ -933,6 +959,10 @@ neuralosd reason --instance-dir <dir> "question" [--oracle N] \
 neuralosd openapi <needle_menu.json> [--agent NAME]
 neuralosd diff <old_profile.json> <new_profile.json> [--menu needle_menu.json]
 neuralosd backends
+neuralosd mesh setup|agents|send|task-create|task-status|task-cancel|task-retry|mailbox|trust
+    [--gateway http://127.0.0.1:3000]
+neuralosd temporal --setup | --run-activity NAME | --worker | --schedule-create
+    [--instance-dir . --task-queue neuralos --cron "0 2 * * *"]
 ```
 
 `init` sources: `*.csv`, `*.tsv`, `*.xlsx`/`*.xlsm` (deep: formulas, all

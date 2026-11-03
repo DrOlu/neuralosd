@@ -27,6 +27,18 @@ it's what makes it safe for regulated environments.
 | Errors are silent | Discards are **visible** |
 | Deployment = "it should work" | Deployment = **verified end to end** |
 
+## What's new in 2.5.0 — agent2agent + durable
+
+- **synapse-gateway, for real** — the mesh client now speaks the documented
+  gateway REST surface (`/api/mesh/*`, Bearer token from
+  `REACTORPRO_GATEWAY_TOKEN` or gateway.env). Ask any peer:
+  `neuralosd mesh send --target grip-001 "summarise the build"`. Durable
+  tasks, mailbox, trust — and `mesh setup` to verify it all.
+- **Temporal durable execution** — the loop's recurring work (golden bank,
+  gap mining, shadow evaluation, snapshots) as durable activities:
+  `neuralosd temporal --setup`, `temporal worker`, `temporal
+  schedule-create --cron "0 2 * * *"`.
+
 ## What's new in 2.4.0 — sources, proof, trust
 
 - **agent-browser connector** — `init --source browser:<url>` turns a web

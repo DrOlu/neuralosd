@@ -279,6 +279,25 @@ def main():
     p_syn.add_argument("--audit", default=None)
     p_syn.add_argument("--apply", metavar="PROPOSALS_JSON", default=None)
 
+    # temporal — durable execution (v2.5.0)
+    p_tm = sub.add_parser(
+        "temporal", help="Durable execution of the loop (Temporal)")
+    p_tm.add_argument("--setup", action="store_true",
+                      help="check CLI + server + temporalio SDK")
+    p_tm.add_argument("--run-activity", default=None, metavar="NAME",
+                      help="run one loop activity directly (no server)")
+    p_tm.add_argument("--worker", action="store_true",
+                      help="run a durable worker for this instance")
+    p_tm.add_argument("--schedule-create", action="store_true",
+                      help="create a recurring loop schedule (Temporal CLI)")
+    p_tm.add_argument("--instance-dir", default=".")
+    p_tm.add_argument("--task-queue", default="neuralos")
+    p_tm.add_argument("--cron", default="0 2 * * *")
+    p_tm.add_argument("--schedule-id", default="neuralos-nightly")
+    p_tm.add_argument("--workflow-type", default="neuralos_loop")
+    p_tm.add_argument("--source", default=None,
+                      help="source for the drift_audit activity")
+
     p_mesh = sub.add_parser(
         "mesh", help="Synapse mesh integration: serve, discover, delegate")
     mesh_sub = p_mesh.add_subparsers(dest="mesh_cmd")
@@ -287,10 +306,66 @@ def main():
     p_ms.add_argument("--gateway", default="http://127.0.0.1:8090")
     p_ms.add_argument("--timeout", type=float, default=30)
     p_md = mesh_sub.add_parser("discover", help="Discover peers on the mesh")
-    p_md.add_argument("--gateway", default="http://127.0.0.1:8090")
+    p_md.add_argument("--gateway", default=None)
     p_md.add_argument("--skill", default="", help="skill to search for")
     p_md.add_argument("--instance-name", default="")
     p_md.add_argument("--timeout", type=float, default=30)
+    p_ms2 = mesh_sub.add_parser("agents", help="The peer directory (phonebook)")
+    p_ms2.add_argument("--gateway", default=None)
+    p_ms2.add_argument("--capabilities", default="")
+    p_ms2.add_argument("--timeout", type=float, default=30)
+    p_msend = mesh_sub.add_parser(
+        "send", help="Ask a peer synchronously (dispatch / invoke)")
+    p_msend.add_argument("--gateway", default=None)
+    p_msend.add_argument("--target", required=True)
+    p_msend.add_argument("question", nargs="+")
+    p_msend.add_argument("--timeout-ms", type=int, default=120000)
+    p_msend.add_argument("--timeout", type=float, default=180)
+    p_mtc = mesh_sub.add_parser(
+        "task-create", help="Durable async task on a peer (idempotent)")
+    p_mtc.add_argument("--gateway", default=None)
+    p_mtc.add_argument("--target", required=True)
+    p_mtc.add_argument("question", nargs="+")
+    p_mtc.add_argument("--task-id", default=None,
+                       help="caller-minted idempotency key")
+    p_mtc.add_argument("--timeout", type=float, default=30)
+    p_mts = mesh_sub.add_parser(
+        "task-status", help="Task state (--refresh asks the owning edge)")
+    p_mts.add_argument("--gateway", default=None)
+    p_mts.add_argument("task_id")
+    p_mts.add_argument("--refresh", action="store_true")
+    p_mts.add_argument("--timeout", type=float, default=30)
+    p_mtx = mesh_sub.add_parser("task-cancel", help="Cancel a task")
+    p_mtx.add_argument("--gateway", default=None)
+    p_mtx.add_argument("task_id")
+    p_mtx.add_argument("--timeout", type=float, default=30)
+    p_mtr = mesh_sub.add_parser(
+        "task-retry", help="Re-run a failed/canceled task under the same id")
+    p_mtr.add_argument("--gateway", default=None)
+    p_mtr.add_argument("task_id")
+    p_mtr.add_argument("--timeout", type=float, default=30)
+    p_mmb = mesh_sub.add_parser(
+        "mailbox", help="Durable mailbox message (fire-and-forget)")
+    p_mmb.add_argument("--gateway", default=None)
+    p_mmb.add_argument("--target", required=True)
+    p_mmb.add_argument("--skill", default="status")
+    p_mmb.add_argument("--timeout", type=float, default=30)
+    p_mtr2 = mesh_sub.add_parser("trust", help="Pinned peer identities")
+    p_mtr2.add_argument("--gateway", default=None)
+    p_mtr2.add_argument("--timeout", type=float, default=30)
+    p_msetup = mesh_sub.add_parser(
+        "setup", help="Check the gateway: token + reachability")
+    p_msetup.add_argument("--gateway", default=None)
+    p_msetup.add_argument("--token", default=None,
+                          help="gateway token (else REACTORPRO_GATEWAY_TOKEN "
+                               "or the gateway.env file)")
+    p_msetup.add_argument("--token-path", default=None)
+    p_msetup.add_argument("--timeout", type=float, default=5)
+    # default all mesh gateways to the real default
+    for sub_p in (p_ms2, p_msend, p_mtc, p_mts, p_mtx, p_mtr,
+                  p_mmb, p_mtr2, p_msetup):
+        if not any(act.dest == "gateway" for act in sub_p._actions):
+            sub_p.add_argument("--gateway", default=None)
     p_mr = mesh_sub.add_parser("register", help="Register this instance on the mesh")
     p_mr.add_argument("--instance-dir", required=True)
     p_mr.add_argument("--gateway", default="http://127.0.0.1:8090")
@@ -459,6 +534,9 @@ def main():
     elif a.command == "synonyms":
         from ._cmd import synonyms
         synonyms.run(a)
+    elif a.command == "temporal":
+        from ._cmd import temporal
+        raise SystemExit(temporal.run(a) or 0)
     elif a.command == "openapi":
         from ._cmd import openapi
         openapi.run(a)

@@ -1,5 +1,41 @@
 # Changelog
 
+## 2.5.0 — synapse-gateway (for real) + Temporal durable execution
+
+**Synapse-gateway — the REAL wire (bug fix + out-of-the-box messaging)**
+- **Bug fix**: the previous client spoke INVENTED endpoints (`/discover`,
+  `/request` on port 8090) that no real gateway answers. The transport now
+  speaks the documented REST surface: `/api/mesh/agents`, `/api/mesh/dispatch`,
+  `/api/mesh/tasks`, `/api/mesh/mailbox`, `/api/mesh/health|status|trust` —
+  Bearer-authenticated, default gateway `http://127.0.0.1:3000`.
+- **Token caging**: the token resolves from `REACTORPRO_GATEWAY_TOKEN` or the
+  gateway.env file (`LIVEAGENT_GATEWAY_TOKEN=...`) at ask time — never stored
+  in instance files.
+- **Agent2agent messaging, out of the box**: `neuralosd mesh send --target
+  <peer> "question"` (synchronous dispatch, reply read payload.text →
+  payload.output, error envelopes carry the mesh code, replies flagged as
+  UNTRUSTED REMOTE OUTPUT); durable tasks (`mesh task-create/--status
+  --refresh/--cancel/--retry` — caller-minted idempotent taskId);
+  `mesh mailbox` (fire-and-forget, at-least-once); `mesh agents`/`trust`.
+- **`mesh setup`** — checks token resolution + gateway reachability, and
+  points at `pip install synapse-gateway` when you want to host one.
+
+**Temporal — durable execution, out of the box**
+- The loop's recurring work is now DURABLE ACTIVITIES: plain JSON-able
+  functions (golden_run, gaps_mine, shadow_evaluate, snapshot_pin,
+  drift_audit) — unit-testable with NO Temporal server.
+- `neuralosd temporal --setup` checks the Temporal CLI, a reachable server,
+  and the temporalio SDK — each failure names its fix (`brew install
+  temporal` / `temporal server start-dev` / `pip install temporalio`).
+- `neuralosd temporal worker --instance-dir . --task-queue neuralos` runs a
+  durable worker; `temporal schedule-create --cron "0 2 * * *"` builds the
+  exact CLI call for a recurring loop schedule.
+- `neuralosd temporal --run-activity golden_run --instance-dir .` runs any
+  activity directly — no server needed.
+
+Tests: 930 passed (22 new), smoke 48 (temporal activity block is
+server-free).
+
 ## 2.4.1 — `neuralosd browser --setup`
 
 - **Consent-gated agent-browser install** — `neuralosd browser --setup`
