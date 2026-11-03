@@ -298,6 +298,32 @@ def main():
     p_tm.add_argument("--source", default=None,
                       help="source for the drift_audit activity")
 
+    # pi — the coding agent as builder/operator (v2.6.0)
+    p_pi = sub.add_parser(
+        "pi", help="Drive the pi coding agent (operator mode + setup)")
+    p_pi.add_argument("--setup", action="store_true",
+                      help="check pi, the model, and a live one-shot ping")
+    p_pi.add_argument("ask", nargs="*", help="operator question")
+    p_pi.add_argument("--instance-dir", default=".")
+    p_pi.add_argument("--model", default=None,
+                      help="default z-ai/glm-5.3-flash (openrouter) — or "
+                           "$NEURALOSD_PI_MODEL")
+    p_pi.add_argument("--provider", default=None,
+                      help="default openrouter — or $NEURALOSD_PI_PROVIDER")
+    p_pi.add_argument("--session", default=None)
+    p_pi.add_argument("--timeout", type=int, default=900)
+
+    p_build = sub.add_parser(
+        "build",
+        help="Natural language in, VERIFIED capability out (pi + banks)")
+    p_build.add_argument("question", nargs="+",
+                         help="the capability to build, in plain language")
+    p_build.add_argument("--instance-dir", required=True)
+    p_build.add_argument("--model", default=None)
+    p_build.add_argument("--provider", default=None)
+    p_build.add_argument("--session", default=None)
+    p_build.add_argument("--timeout", type=int, default=900)
+
     p_mesh = sub.add_parser(
         "mesh", help="Synapse mesh integration: serve, discover, delegate")
     mesh_sub = p_mesh.add_subparsers(dest="mesh_cmd")
@@ -537,6 +563,12 @@ def main():
     elif a.command == "temporal":
         from ._cmd import temporal
         raise SystemExit(temporal.run(a) or 0)
+    elif a.command == "pi":
+        from ._cmd import pi
+        raise SystemExit(pi.run(a) or 0)
+    elif a.command == "build":
+        from ._cmd import build
+        raise SystemExit(build.run(a) or 0)
     elif a.command == "openapi":
         from ._cmd import openapi
         openapi.run(a)

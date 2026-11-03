@@ -27,6 +27,16 @@ it's what makes it safe for regulated environments.
 | Errors are silent | Discards are **visible** |
 | Deployment = "it should work" | Deployment = **verified end to end** |
 
+## What's new in 2.6.0 — natural language builds
+
+- **pi as the builder** — `neuralosd build "average shipping cost per unit
+  by region"`: the pi coding agent writes the probe code, neuralosd
+  verifies it (banks untouched, instance loads, banks replay green —
+  anything else is restored). Default model: z-ai/glm-5.3-flash.
+- **pi as the operator** — `neuralosd pi ask "why did refusals go up?"`:
+  natural-language ops over the closed command list.
+- `neuralosd pi --setup` verifies pi, the model, and a live ping.
+
 ## What's new in 2.5.0 — agent2agent + durable
 
 - **synapse-gateway, for real** — the mesh client now speaks the documented

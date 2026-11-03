@@ -22,6 +22,7 @@ in the `neuralosd` package.
 - [neuralosd.metrics](#neuralosdmetrics)
 - [neuralosd.adapters](#neuralosdadapters)
 - [neuralosd.lint](#neuralosdlint)
+- [neuralosd.pisources](#neuralosdpisources)
 - [neuralosd.synapse](#neuralosdsynapse)
 - [neuralosd.durable](#neuralosddurable)
 - [neuralosd.banks](#neuralosdbanks)
@@ -821,6 +822,18 @@ Returns `{"hard": [(owner, trigger, wrong)], "soft": [...], "bloat": [...]}`.
 
 ---
 
+## neuralosd.pisources
+
+The pi coding agent as builder and operator (v2.6.0).
+
+| | |
+|---|---|
+| `pi_command(text, model, provider, session)` | headless argv: `--print --no-session`, extensions/MCP/skills/context-files off |
+| `pi_run(argv, cwd, execute)` | execute in the instance dir; missing pi = error naming the install |
+| `setup(model, provider, which_fn, runner)` | pi on PATH + model resolves + live one-shot ping |
+| `build_prompt / build_capability(question, instance_dir, execute)` | builder: contract-carrying prompt, then judge (banks byte-identical, instance loads, banks green) with full restore on any failure |
+| `operator_prompt / operate(question, instance_dir, execute)` | operator: the closed command list, audited subprocess runs |
+
 ## neuralosd.synapse
 
 Synapse-gateway REST client (v2.5.0 — the real /api/mesh/* wire).
@@ -963,6 +976,8 @@ neuralosd mesh setup|agents|send|task-create|task-status|task-cancel|task-retry|
     [--gateway http://127.0.0.1:3000]
 neuralosd temporal --setup | --run-activity NAME | --worker | --schedule-create
     [--instance-dir . --task-queue neuralos --cron "0 2 * * *"]
+neuralosd pi --setup | ask "question" [--model z-ai/glm-5.3-flash]
+neuralosd build "<capability description>" --instance-dir <dir>
 ```
 
 `init` sources: `*.csv`, `*.tsv`, `*.xlsx`/`*.xlsm` (deep: formulas, all

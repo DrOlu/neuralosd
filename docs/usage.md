@@ -1144,6 +1144,32 @@ neuralosd synonyms --instance-dir .                         # trigger proposals
 ask --instance-dir . --role analyst "units by region"       # RBAC row caging
 ```
 
+## 6d. Natural language builds — pi as the builder (v2.6.0)
+
+With the [pi coding agent](https://github.com/badlogic/pi-mono) installed
+(`npm install -g @mariozechner/pi-coding-agent`) and a provider configured:
+
+```bash
+neuralosd pi --setup                # verify pi + model + live ping
+neuralosd build "average shipping cost per unit by region" \
+    --instance-dir ./portal
+```
+
+Pi writes the probe code inside the instance directory. Neuralosd judges:
+banks byte-identical, instance loads, both banks replay green — anything
+else restores the pre-pi state. A successful build leaves the new probe
+with its misuse trap banked; grow the golden bank around it before
+trusting it (oracles or bust).
+
+Operator mode — natural language over the closed command list:
+
+```bash
+neuralosd pi ask --instance-dir . "why did refusals go up this week?"
+```
+
+Default model `z-ai/glm-5.3-flash` via openrouter; override with
+`--model`/`--provider` or `$NEURALOSD_PI_MODEL` / `$NEURALOSD_PI_PROVIDER`.
+
 ## 7. Run as a Service
 
 ### 7.1 Start the standard service
