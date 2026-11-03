@@ -6,6 +6,25 @@ import sys
 from typing import Any, Dict, Optional
 
 
+# Every directory an instance was EVER loaded from (this process). A probe
+# exec's `import bridge` binds whatever "bridge" sits in sys.modules — after
+# several loads that is a PREVIOUS instance's bridge, answering from the
+# wrong data file. Purging all instance-dir modules before every load keeps
+# each instance's data layer its own.
+_INSTANCE_DIRS = set()
+
+
+def _purge_instance_modules():
+    for mname, m in list(sys.modules.items()):
+        if mname.startswith("neuralosd_inst_"):
+            continue
+        f = getattr(m, "__file__", None)
+        if f:
+            d = os.path.dirname(os.path.realpath(f))
+            if d in _INSTANCE_DIRS:
+                sys.modules.pop(mname, None)
+
+
 # Missing-module -> (human label, pip package). Used to turn a bare
 # "No module named 'pymysql'" into an actionable message. A probe's data
 # layer may import any of these lazily at call time.
@@ -343,6 +362,7 @@ def _load_probes_in_process(probes_py, instance_dir, name):
     dependency is missing (the caller may then fall back to the sidecar)."""
     if instance_dir not in sys.path:
         sys.path.insert(0, instance_dir)
+    _purge_instance_modules()
     modname = f"neuralosd_inst_{name}"
     spec = importlib.util.spec_from_file_location(modname, probes_py)
     mod = importlib.util.module_from_spec(spec)
@@ -365,6 +385,7 @@ def _load_probes_in_process(probes_py, instance_dir, name):
                 os.path.realpath(instance_dir):
             del sys.modules[mname]
 
+    _INSTANCE_DIRS.add(os.path.realpath(instance_dir))
     probes = list(getattr(mod, "PROBES", []))
     if not probes:
         probes = [v for v in vars(mod).values()

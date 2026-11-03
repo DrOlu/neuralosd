@@ -26,14 +26,29 @@ def run(a):
         "NEURALOSD_PI_MODEL") or DEFAULT_MODEL
     provider = getattr(a, "provider", None) or os.environ.get(
         "NEURALOSD_PI_PROVIDER") or DEFAULT_PROVIDER
-    print(f"building with pi ({model}) inside "
+    durable = getattr(a, "durable", False) or getattr(a, "resume", False)
+    label = "DURABLE" + (" (resume)" if getattr(a, "resume", False)
+                         else "") if durable else "one-shot"
+    print(f"building with pi ({model}, {label}) inside "
           f"{os.path.abspath(a.instance_dir)} ...")
     print("  this runs a real agent turn — minutes, not seconds\n")
-    report = build_capability(question, instance_dir=a.instance_dir,
-                              model=model, provider=provider,
-                              timeout=getattr(a, "timeout", 900) or 900,
-                              session=getattr(a, "session", None))
+    if durable:
+        from ..pisources import build_durable
+        report = build_durable(question, instance_dir=a.instance_dir,
+                               model=model, provider=provider,
+                               timeout=getattr(a, "timeout", 900) or 900,
+                               resume=getattr(a, "resume", False))
+    else:
+        report = build_capability(question, instance_dir=a.instance_dir,
+                                  model=model, provider=provider,
+                                  timeout=getattr(a, "timeout", 900) or 900,
+                                  session=getattr(a, "session", None))
     print(json.dumps(report, indent=2, ensure_ascii=False))
+    if report.get("storage"):
+        print(f"\ndurable storage: {report['storage']}")
+        print("crashed or interrupted? re-attach and continue:")
+        print(f'  neuralosd build "{question}" --instance-dir '
+              f'{a.instance_dir} --durable --resume')
     if report["ok"]:
         print("\n✓ verified: banks untouched, instance loads, both banks "
               "replay green.\n  the new probe has its misuse trap banked — "

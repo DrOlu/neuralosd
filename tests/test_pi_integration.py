@@ -324,6 +324,7 @@ def test_build_still_blocks_on_new_failures_it_introduces(tmp_path):
     from neuralosd.banks import record_golden
     from neuralosd.pisources import build_capability
     out = _build(tmp_path)
+    import shutil as _shutil
     def bank_wrecker(argv, cwd=None, timeout=None):
         # genuinely break the probe: the golden case errors out
         p = os.path.join(cwd, "probes.py")
@@ -331,12 +332,33 @@ def test_build_still_blocks_on_new_failures_it_introduces(tmp_path):
         src = src.replace("    return bridge.count()",
                           '    raise RuntimeError("wrecked by pi")')
         open(p, "w", encoding="utf-8").write(src)
+        _shutil.rmtree(os.path.join(cwd, "__pycache__"),
+                       ignore_errors=True)
     record_golden(out, q="how many rows", expect_probe="row_count",
                   value=4, shape="count", by="olu", source="manual",
                   method="count")
     report = build_capability("break routing", instance_dir=out,
                               execute=bank_wrecker, model=DEFAULT_MODEL,
                               provider=DEFAULT_PROVIDER)
+    print("WRECK2:", json.dumps({k: report[k] for k in ("ok", "error")
+                                 if k in report}))
+    row_count_src = [l for l in open(os.path.join(out, "probes.py"),
+                                     encoding="utf-8").read().splitlines()
+                     if "return bridge.count" in l or "raise RuntimeError" in l]
+    print("WRECK-FILE:", row_count_src)
+    from neuralosd._cmd._common import load_instance as _li
+    _inst = _li(out)
+    _fn = _inst.router.by_name.get("row_count")
+    try:
+        print("WRECK-CALL:", _fn())
+    except Exception as _e:
+        print("WRECK-CALL raised:", str(_e)[:60])
+    env = _inst.ask("how many rows", use_cache=False)
+    print("WRECK-ASK:", json.dumps(env.get("results"))[:150])
+    import sys as _s
+    print("LEAKED:", sorted(m for m in _s.modules
+                            if m in ("bridge", "models", "instance",
+                                     "needle")))
     assert report["ok"] is False
     assert "NEW failure" in report["error"]
 

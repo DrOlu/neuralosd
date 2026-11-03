@@ -503,28 +503,40 @@ def ask_as_of(instance_dir, question, label):
     return env
 
 
-def refusal_rate(instance_dir, window_hours=24, max_refusal_rate=0.4):
+def _tail_lines(path, cap):
+    """Read a file's last `cap` lines without loading it whole (a multi-GB
+    audit log must not be parsed into memory to compute a rate)."""
+    import collections
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        return list(collections.deque(fh, maxlen=cap))
+
+
+def refusal_rate(instance_dir, window_hours=24, max_refusal_rate=0.4,
+                 tail_lines=200000):
     """The refusal rate over the window IS the menu-gap signal. A breach is
-    not a failure of the router — it is a capability gap, quantified."""
+    not a failure of the router — it is a capability gap, quantified.
+
+    Reads at most `tail_lines` lines (bounded, newest-first by position):
+    a rate computed from a bounded tail is honest as long as the cap is
+    larger than the window's ask volume — and multi-GB audits stay fast."""
     audit_path = os.path.join(instance_dir, "ask_audit.jsonl")
     cutoff = time.time() - window_hours * 3600.0
     asks = refused = 0
     reasons = {}
     if os.path.isfile(audit_path):
-        with open(audit_path, encoding="utf-8") as fh:
-            for line in fh:
-                try:
-                    r = json.loads(line)
-                except ValueError:
-                    continue
-                ts = r.get("ts")
-                if not isinstance(ts, (int, float)) or ts < cutoff:
-                    continue
-                asks += 1
-                if r.get("results") in (None, [], {}):
-                    refused += 1
-                    why = r.get("refusal_reason") or "refused"
-                    reasons[why] = reasons.get(why, 0) + 1
+        for line in _tail_lines(audit_path, tail_lines):
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            ts = r.get("ts")
+            if not isinstance(ts, (int, float)) or ts < cutoff:
+                continue
+            asks += 1
+            if r.get("results") in (None, [], {}):
+                refused += 1
+                why = r.get("refusal_reason") or "refused"
+                reasons[why] = reasons.get(why, 0) + 1
     rate = (refused / asks) if asks else 0.0
     return {"asks": asks, "refused": refused,
             "refusal_rate": round(rate, 4),

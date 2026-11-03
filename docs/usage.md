@@ -1167,6 +1167,22 @@ Operator mode — natural language over the closed command list:
 neuralosd pi ask --instance-dir . "why did refusals go up this week?"
 ```
 
+Durable builds — the conversation survives crashes and is resumable:
+
+```bash
+neuralosd build "average shipping cost per unit by region" \
+    --instance-dir ./portal --durable
+# crashed mid-build? continue the SAME conversation:
+neuralosd build "average shipping cost per unit by region" \
+    --instance-dir ./portal --durable --resume
+neuralosd pi --instance-dir ./portal durable --status
+```
+
+And one command to check every integration:
+
+```bash
+neuralosd doctor --instance-dir .      # exit 1 = something needs attention
+
 Default model `z-ai/glm-5.3-flash` via openrouter; override with
 `--model`/`--provider` or `$NEURALOSD_PI_MODEL` / `$NEURALOSD_PI_PROVIDER`.
 

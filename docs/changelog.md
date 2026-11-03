@@ -1,5 +1,33 @@
 # Changelog
 
+## 2.7.0 — Pi Durable + doctor + loop optimizations
+
+- **Pi Durable integration** — `neuralosd build "<capability>" --durable`
+  runs the build conversation in a **Pi Durable** harness
+  (@earendil-works/pi-durable): storage-backed (SQLite in the instance
+  dir), crash-resumable, submissions exactly-once by a stable requestId
+  (hash of instance+question). A crashed or interrupted build re-attaches
+  with `--resume` — the in-flight reasoning survives. The same
+  verification pipeline applies (banks untouched, instance loads, banks
+  green, closure) — and on failure the files are restored while the
+  conversation storage is KEPT for --resume. Ships
+  `pi_durable_bridge.mjs` (line-JSON bridge over the Pi Durable API) and
+  `neuralosd pi durable --status|--steer|--stop` operator ops.
+- **`neuralosd doctor`** — one command that health-checks every
+  integration (pi, Pi Durable, agent-browser, Temporal CLI+SDK, synapse
+  token, openpyxl, the instance's own banks) with JSON output and an exit
+  code. Exit 1 = something needs attention.
+- **Builder prompt enrichment** — build prompts now carry the bridge's
+  function inventory, existing probe names, and a data sample row up
+  front: fewer exploration steps, higher first-shot success.
+- **Bounded audit reads** — `slo`/`gaps`/`fleet` read audit logs with a
+  line cap instead of loading multi-GB files whole.
+- **Durability bug found by testing**: bank replays went through the ask
+  cache — a "verification" could pass on a cached answer. Bank replays
+  now always exercise the real code path.
+- Tests: 969 passed (22 new incl. durable exactly-once, crash-resume,
+  restore-on-failure, doctor), smoke 49.
+
 ## 2.6.1 — three bugs found testing pi on the real global-superstore instance
 
 - **Bank replays went through the ask cache** — a "verification" could pass

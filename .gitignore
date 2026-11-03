@@ -21,3 +21,4 @@ src/neuralosd/templates/itsm/ask_audit.jsonl
 src/neuralosd/templates/__init__.py
 src/neuralosd/templates/itsm/__init__.py
 traps.json
+node_modules/

@@ -30,11 +30,14 @@ def _load_module(path: str, name: str):
     instance's data layer (the same cross-instance contamination the
     probes.py path had — fixed there in v2.1.0, here in v2.2.0).
     """
+    from ._cmd._common import _purge_instance_modules, _INSTANCE_DIRS
+    _purge_instance_modules()
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         return None, f"no import spec for {path}"
     mod = importlib.util.module_from_spec(spec)
     sys.modules[name] = mod
+    _INSTANCE_DIRS.add(os.path.dirname(os.path.realpath(path)))
     before = frozenset(sys.modules)
     try:
         spec.loader.exec_module(mod)
