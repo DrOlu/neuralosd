@@ -232,11 +232,17 @@ def main():
         "browser",
         help="Drive a named agent-browser session (open/snapshot/click/fill)")
     p_br.add_argument("--session", default=None)
-    p_br.add_argument("op", choices=["open", "snapshot", "click", "fill",
-                                     "type", "network", "text"])
+    p_br.add_argument("op", nargs="?",
+                      choices=["open", "snapshot", "click", "fill",
+                               "type", "network", "text", "setup"])
     p_br.add_argument("--url", default=None)
     p_br.add_argument("--target", default=None, help="ref or selector")
     p_br.add_argument("--text", default=None)
+    p_br.add_argument("--setup", action="store_true",
+                      help="check Node, install the agent-browser CLI via "
+                           "npm (WITH consent), and verify with a live ping")
+    p_br.add_argument("--yes", action="store_true",
+                      help="skip the consent prompt (non-interactive)")
 
     # snapshot — pin hashed observations (v2.4.0)
     p_snap = sub.add_parser(

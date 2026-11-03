@@ -137,6 +137,12 @@ r="$(run ask --instance-dir ./inst-loop 'show me some rows')"
 check "mothball: anchor survives, menu still answers" '"probe": "list_rows"' "$r"
 
 # 2d. journald / wevtutil — only where the native tool exists
+if command -v agent-browser >/dev/null 2>&1; then
+  r="$(run browser --setup --yes)"
+  check "browser setup: already installed, live ping" '"ping_ok": true' "$r"
+else
+  echo "  - skip browser-setup block (no agent-browser on this host)"
+fi
 if command -v journalctl >/dev/null 2>&1; then
   run init --source journal: --name journal --out ./inst-journal >/dev/null
   r="$(run ask --instance-dir ./inst-journal 'how many rows')"

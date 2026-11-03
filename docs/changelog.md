@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.4.1 — `neuralosd browser --setup`
+
+- **Consent-gated agent-browser install** — `neuralosd browser --setup`
+  checks for Node/npm, installs the agent-browser CLI via
+  `npm i -g agent-browser` (prompting first; `--yes` for non-interactive
+  runs), and verifies with a **live snapshot ping** (open example.com +
+  snapshot + close). Already installed → never re-installs, just pings.
+- **Honest failure modes, each pinned by a test**: no Node = error naming
+  the prerequisite (npm never invoked); prompt EOF on a non-interactive
+  stdin = a safe decline; npm "succeeds" but the binary is still off-PATH =
+  reported with restart-your-shell advice, never a false green; installed
+  but the ping fails (offline/sandboxed) = reported, exit 1.
+- Everything injectable (which/installer/runner/prompt) — the full setup
+  flow is unit-testable without Node, npm, or a browser. 8 new tests;
+  smoke grew a live-ping block that runs wherever agent-browser exists.
+
 ## 2.4.0 — sources, proof, trust
 
 **Sources**

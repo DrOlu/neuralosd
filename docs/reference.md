@@ -827,6 +827,7 @@ agent-browser connector (v2.4.0) — the browser as a data source.
 |---|---|
 | `browser_rows(url, cap, runner)` | open + accessibility snapshot → rows `{role, name, ref, depth}`; refs are the action handles |
 | `browser_session_op(session, op, ...)` | tier 2: named-session ops (open / snapshot / click / fill / type / network / text); `--session` pins login state |
+| `setup_browser_tool(which_fn, installer, runner, prompt_fn, assume_yes)` | consent-gated install + live snapshot ping (`neuralosd browser --setup`); honest failures for no-Node, declined, off-PATH-after-install, ping-fail |
 
 ## neuralosd.apisources
 
