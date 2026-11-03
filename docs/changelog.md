@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.6.1 — three bugs found testing pi on the real global-superstore instance
+
+- **Bank replays went through the ask cache** — a "verification" could pass
+  on a cached answer and never exercise the real code path. `golden_run`
+  now bypasses the cache (the cache is for serving; replays verify).
+- **Build gated on absolute bank health** — one stale auto-trap blocked
+  every build forever. The gate now measures the DELTA: pre-existing
+  failures are warnings, never attributed to the builder; only NEW
+  failures block. The baseline replay runs before the backup snapshot
+  (the baseline load births the auto-traps).
+- **Stale-trap retraction** — `retract_stale_traps` removes
+  auto-synthesized traps whose probe left the menu; human-written traps
+  are never touched.
+
+Found live: global-superstore's trap bank had 3 pre-existing failures
+(breakdown hijacking "X values" phrasings for probes removed earlier).
+With the fixes, the pi build delivered `unique_customers=1590` —
+independently verified against the raw CSV — and a second build on the
+rebuilt US superstore delivered `top_subcategory=Copiers` (55,617.82),
+also independently verified.
+
 ## 2.6.0 — pi as builder and operator (out of the box)
 
 - **`neuralosd build "<capability>" --instance-dir .`** — natural language
