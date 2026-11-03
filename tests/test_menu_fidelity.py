@@ -162,12 +162,14 @@ def test_menu_instances_cannot_leak_sibling_modules_into_each_other(tmp_path):
         (d / "needle_menu.json").write_text(_json.dumps([
             {"name": "who_am_i", "description": "which models module",
              "triggers": ["who am i"],
-             "parameters": {"type": "object", "properties": {}}}]))
-        (d / "models.py").write_text(f"TAG = {tag!r}\n")
+             "parameters": {"type": "object", "properties": {}}}]),
+            encoding="utf-8")
+        (d / "models.py").write_text(f"TAG = {tag!r}\n",
+                                encoding="utf-8")
         (d / "instance.py").write_text(
             "from models import TAG\n"
             "def who_am_i():\n"
-            "    return {'tag': TAG}\n")
+            "    return {'tag': TAG}\n", encoding="utf-8")
     from neuralosd._cmd._common import load_instance
     a = load_instance(str(tmp_path / "alpha"))
     b = load_instance(str(tmp_path / "beta"))
