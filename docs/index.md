@@ -27,6 +27,16 @@ it's what makes it safe for regulated environments.
 | Errors are silent | Discards are **visible** |
 | Deployment = "it should work" | Deployment = **verified end to end** |
 
+## What's new in 2.7.0 — durable builds + doctor
+
+- **Pi Durable** — `neuralosd build "<capability>" --durable`: the build
+  conversation runs in a crash-resumable Pi Durable harness with
+  exactly-once submissions; `--resume` continues after a crash.
+  `neuralosd pi durable --status|--steer|--stop` for operator sessions.
+- **`neuralosd doctor`** — health-checks every integration in one command.
+- **Faster ops on big audits** (bounded reads) and **smarter build
+  prompts** (bridge inventory + probe names + data sample up front).
+
 ## What's new in 2.6.0 — natural language builds
 
 - **pi as the builder** — `neuralosd build "average shipping cost per unit

@@ -822,6 +822,17 @@ Returns `{"hard": [(owner, trigger, wrong)], "soft": [...], "bloat": [...]}`.
 
 ---
 
+## neuralosd.pidurable
+
+Pi Durable driver (v2.7.0) — durable, resumable build conversations.
+
+| | |
+|---|---|
+| `DurableBuilder(storage, model, provider, spawn, cwd)` | line-JSON driver over the shipped Node bridge; `submit` (exactly-once requestId), `wait`, `status`, `close` |
+| `stable_request_id(instance_dir, question)` | the idempotency key for a build |
+| `build_durable(...)` (pisources) | durable build with the full verification/restore pipeline; storage survives failures for --resume |
+| `pi_durable_available()` / `bridge_script_path()` | node + package checks; the shipped bridge |
+
 ## neuralosd.pisources
 
 The pi coding agent as builder and operator (v2.6.0).

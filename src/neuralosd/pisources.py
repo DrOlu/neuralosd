@@ -26,6 +26,7 @@ unit-testable with no pi, no model, no network.
 """
 import json
 import os
+import re
 
 DEFAULT_MODEL = os.environ.get("NEURALOSD_PI_MODEL", "z-ai/glm-5.3-flash")
 DEFAULT_PROVIDER = os.environ.get("NEURALOSD_PI_PROVIDER", "openrouter")
@@ -170,15 +171,76 @@ def setup(model=DEFAULT_MODEL, provider=DEFAULT_PROVIDER, which_fn=None,
 
 # ── the builder ────────────────────────────────────────────────────────────
 
-def build_prompt(question, instance_dir):
-    """The full builder task: the contract, the ask, and the ground rules."""
+def build_prompt(question, instance_dir, enrich=True):
+    """The full builder task: the contract, the ask, and the ground rules.
+
+    With enrich=True (default) the prompt carries the bridge's function
+    inventory, the existing probe names, and a sample data row UP FRONT —
+    pi needs fewer exploration steps, so the first shot lands more often."""
     cols = _describe_columns(instance_dir)
+    extra = ""
+    if enrich:
+        inv = _inventory(instance_dir)
+        if inv:
+            extra = ("\nBRIDGE FUNCTIONS (call these via bridge.<name>):\n"
+                     f"{inv}\n"
+                     "EXISTING PROBES (do not duplicate):\n"
+                     f"{_probe_names(instance_dir)}\n"
+                     "DATA SAMPLE (first row, for reference only):\n"
+                     f"{_data_sample(instance_dir)}\n")
     return (f"{_BUILDER_CONTRACT}\n"
             f"THE INSTANCE: {instance_dir}\n"
-            f"Data columns: {cols}\n\n"
+            f"Data columns: {cols}\n{extra}\n"
             f"TASK: {question}\n\n"
             f"Read probes.py first to match its existing style, then make "
             f"your edits. Reply with a one-paragraph summary.")
+
+
+def _probe_names(instance_dir):
+    import re
+    path = os.path.join(instance_dir, "probes.py")
+    try:
+        src = open(path, encoding="utf-8").read()
+        names = re.findall(r"^def (\w+)", src, flags=re.M)
+        return ", ".join(names[:40])
+    except OSError:
+        return "(none)"
+
+
+def _inventory(instance_dir):
+    import re
+    path = os.path.join(instance_dir, "bridge.py")
+    try:
+        src = open(path, encoding="utf-8").read()
+        fns = re.findall(r"^def (\w+\([^:\n]*\)):", src, flags=re.M)
+        # domain functions (no leading underscore) first — they are what
+        # the new probe will actually call; internals follow if room remains
+        fns = [f for f in fns if not f.startswith("_")] + \
+              [f for f in fns if f.startswith("_")]
+        return "\n".join(f"  def {f}" for f in fns[:60])
+    except OSError:
+        return "(bridge.py unreadable)"
+
+
+def _data_sample(instance_dir, cap=1):
+    """First row(s) of the source, as a literal — bounded, no probe calls."""
+    try:
+        src = open(os.path.join(instance_dir, "bridge.py"),
+                   encoding="utf-8").read()
+        m = re.search(r'SOURCE = "([^"]+)"', src)
+        if not m:
+            return "(dynamic source)"
+        s = m.group(1)
+        if s.endswith((".csv", ".tsv")):
+            delim = "\t" if s.endswith(".tsv") else ","
+            import csv as _csv
+            with open(s, newline="", encoding="utf-8",
+                      errors="replace") as fh:
+                rows = list(_csv.DictReader(fh, delimiter=delim))[:cap]
+            return json.dumps(rows, ensure_ascii=False)[:600]
+        return "(non-csv source — read bridge.py)"
+    except Exception:                                          # noqa: BLE001
+        return "(sample unavailable)"
 
 
 def _describe_columns(instance_dir):
@@ -356,3 +418,163 @@ def operate(question, instance_dir, model=DEFAULT_MODEL,
     argv = pi_command(operator_prompt(question, instance_dir), model=model,
                       provider=provider, session=session)
     return execute(argv, cwd=instance_dir, timeout=timeout)
+
+
+def resolve_pi_api_key(provider, runner=None):
+    """The provider API key from the pi CLI's own credential store — the
+    same source the one-shot pi run uses. None when unavailable."""
+    import subprocess
+    if runner is not None:
+        try:
+            out = runner(["pi", "auth", "print-api-key",
+                          "--provider", provider])
+            return (out or "").strip() or None
+        except Exception:                                      # noqa: BLE001
+            return None
+    try:
+        r = subprocess.run(["pi", "auth", "print-api-key",
+                            "--provider", provider],
+                           capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode != 0:
+        return None
+    return _decode(r.stdout).strip() or None
+
+
+def pi_durable_command(storage, model=DEFAULT_MODEL,
+                       provider=DEFAULT_PROVIDER):
+    """The node argv for the durable bridge (delegates to pidurable)."""
+    from .pidurable import pi_durable_command as _cmd
+    return _cmd(storage, model=model, provider=provider)
+
+
+def build_durable(question, instance_dir, model=DEFAULT_MODEL,
+                  provider=DEFAULT_PROVIDER, timeout=900, execute=None,
+                  spawn=None, session=None, resume=False,
+                  expect_routing=None):
+    """Durable build: SAME verification pipeline as build_capability, but
+    the conversation lives in <instance>/pi_durable.sqlite.
+
+    request_id is STABLE (hash of instance+question): a retried or resumed
+    build reuses the original submission — exactly-once across crashes. On
+    verification failure the files are restored, but the conversation
+    storage is KEPT: the reasoning survives for --resume."""
+    from .pidurable import DurableBuilder, stable_request_id
+    from ._cmd._common import load_instance
+    from .router import NoResults
+
+    instance_dir = os.path.abspath(instance_dir)
+    rid = stable_request_id(instance_dir, question)
+
+    # baseline BEFORE backup: the baseline load births the auto-traps, and
+    # the backup must capture the post-birth state
+    _bank_baseline = {}
+    try:
+        _inst0 = load_instance(instance_dir)
+        for bank_name in ("golden.json", "traps.json"):
+            bp = os.path.join(instance_dir, bank_name)
+            if os.path.isfile(bp):
+                try:
+                    _bank_baseline[bank_name] = _inst0.golden_run(
+                        json.loads(open(bp, encoding="utf-8").read()))
+                except ValueError:
+                    pass
+    except SystemExit:
+        _bank_baseline = {}
+
+    backup = {}
+    for name in os.listdir(instance_dir):
+        p = os.path.join(instance_dir, name)
+        if os.path.isfile(p):
+            with open(p, "rb") as fh:
+                backup[name] = fh.read()
+
+    api_key = resolve_pi_api_key(provider)
+    storage_path = os.path.join(instance_dir, "pi_durable.sqlite")
+    pi_out = ""
+    b = None
+    try:
+        b = DurableBuilder(storage_path, model=model, provider=provider,
+                           spawn=spawn, cwd=instance_dir)
+        if spawn is None:
+            b.open(model=model, provider=provider, api_key=api_key)
+        b.submit(build_prompt(question, instance_dir), request_id=rid)
+        settled = b.wait(rid, timeout=timeout)
+        pi_out = settled.get("text", "")
+    except SystemExit as e:
+        return {"ok": False, "error": str(e)[:300], "restored": False,
+                "storage": storage_path}
+    finally:
+        if spawn is None and b is not None:
+            try:
+                b.close()
+            except Exception:                                  # noqa: BLE001
+                pass
+
+    # verification — identical to the one-shot builder
+    tampered = []
+    for name in _FORBIDDEN:
+        p = os.path.join(instance_dir, name)
+        before = backup.get(name)
+        now = open(p, "rb").read() if os.path.isfile(p) else None
+        if before != now:
+            tampered.append(name)
+    if tampered:
+        _restore(instance_dir, backup)
+        return {"ok": False,
+                "error": f"pi tampered with the banks: "
+                         f"{', '.join(tampered)} — instance restored",
+                "restored": True, "verified": False,
+                "storage": storage_path}
+    try:
+        inst = load_instance(instance_dir)
+    except SystemExit as e:
+        _restore(instance_dir, backup)
+        return {"ok": False, "error": f"instance no longer loads: "
+                                      f"{str(e)[:200]} — restored",
+                "restored": True, "verified": False,
+                "storage": storage_path}
+    problems, pre_existing = [], []
+    for bank_name in ("golden.json", "traps.json"):
+        bp = os.path.join(instance_dir, bank_name)
+        if not os.path.isfile(bp):
+            continue
+        try:
+            bank = json.loads(open(bp, encoding="utf-8").read())
+        except ValueError:
+            problems.append(f"{bank_name} is corrupt")
+            continue
+        baseline = _bank_baseline.get(bank_name)
+        summary = inst.golden_run(bank)
+        after_bad = summary["wrong"] + summary["answered_traps"]
+        before_bad = (baseline["wrong"] + baseline["answered_traps"]) \
+            if baseline else 0
+        if after_bad > before_bad:
+            problems.append(f"{bank_name}: {after_bad - before_bad} NEW "
+                            f"failure(s)")
+        elif after_bad:
+            pre_existing.append(f"{bank_name}: {after_bad} pre-existing "
+                                f"failure(s) — not caused by this build")
+
+    closure_failures = []
+    for q in (expect_routing or []):
+        try:
+            env = inst.ask(q, use_cache=False)
+            routed = bool(env.get("results") not in (None, [], {}))
+        except NoResults:
+            routed = False
+        if not routed:
+            closure_failures.append(
+                f"CLOSURE: the built capability does not answer {q!r} — "
+                f"the question still refuses")
+    if problems or closure_failures:
+        _restore(instance_dir, backup)
+        return {"ok": False,
+                "error": "; ".join(problems + closure_failures),
+                "pre_existing": pre_existing, "restored": True,
+                "verified": False, "storage": storage_path,
+                "pi_output": (pi_out or "")[-400:]}
+    return {"ok": True, "verified": True, "restored": False,
+            "pre_existing": pre_existing, "storage": storage_path,
+            "request_id": rid, "pi_output": (pi_out or "")[-400:]}

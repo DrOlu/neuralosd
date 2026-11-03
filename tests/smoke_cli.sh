@@ -145,6 +145,8 @@ check "mothball: anchor survives, menu still answers" '"probe": "list_rows"' "$r
 if command -v pi >/dev/null 2>&1; then
   r="$(run pi --setup)"
   check "pi setup: live model ping" '"ping_ok": true' "$r"
+  r="$(run doctor --instance-dir ./inst-loop --json || true)"
+  check "doctor: reports every integration" '"pi"' "$r"
 else
   echo "  - skip pi-setup block (no pi on this host)"
 fi

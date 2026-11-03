@@ -279,6 +279,13 @@ def main():
     p_syn.add_argument("--audit", default=None)
     p_syn.add_argument("--apply", metavar="PROPOSALS_JSON", default=None)
 
+    # doctor — environment health check (v2.7.0)
+    p_doc = sub.add_parser(
+        "doctor", help="Health-check every integration (pi, durable, "
+                       "browser, temporal, synapse, banks)")
+    p_doc.add_argument("--instance-dir", default=".")
+    p_doc.add_argument("--json", dest="as_json", action="store_true")
+
     # temporal — durable execution (v2.5.0)
     p_tm = sub.add_parser(
         "temporal", help="Durable execution of the loop (Temporal)")
@@ -312,6 +319,14 @@ def main():
                       help="default openrouter — or $NEURALOSD_PI_PROVIDER")
     p_pi.add_argument("--session", default=None)
     p_pi.add_argument("--timeout", type=int, default=900)
+    p_pi.add_argument("--durable", action="store_true",
+                      help="operator conversation in Pi Durable storage")
+    p_pi.add_argument("--status", action="store_true",
+                      help="durable: conversation status")
+    p_pi.add_argument("--steer", default=None, metavar="MESSAGE",
+                      help="durable: send a steering message")
+    p_pi.add_argument("--stop", action="store_true",
+                      help="durable: close the bridge cleanly")
 
     p_build = sub.add_parser(
         "build",
@@ -323,6 +338,13 @@ def main():
     p_build.add_argument("--provider", default=None)
     p_build.add_argument("--session", default=None)
     p_build.add_argument("--timeout", type=int, default=900)
+    p_build.add_argument("--durable", action="store_true",
+                         help="run the build in a Pi Durable conversation "
+                              "(storage-backed, crash-resumable, exactly-"
+                              "once submissions)")
+    p_build.add_argument("--resume", action="store_true",
+                         help="re-attach to the durable conversation and "
+                              "continue (the reasoning survives crashes)")
 
     p_mesh = sub.add_parser(
         "mesh", help="Synapse mesh integration: serve, discover, delegate")
@@ -566,6 +588,9 @@ def main():
     elif a.command == "pi":
         from ._cmd import pi
         raise SystemExit(pi.run(a) or 0)
+    elif a.command == "doctor":
+        from ._cmd import doctor
+        raise SystemExit(doctor.run(a) or 0)
     elif a.command == "build":
         from ._cmd import build
         raise SystemExit(build.run(a) or 0)
