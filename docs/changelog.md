@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.6.0 — pi as builder and operator (out of the box)
+
+- **`neuralosd build "<capability>" --instance-dir .`** — natural language
+  in, VERIFIED capability out. The pi coding agent (headless:
+  `--print --no-session`, scoped: extensions/MCP/skills/context-files off)
+  works inside the instance directory and writes the probe code. Neuralosd
+  then judges: the banks must be byte-identical, the instance must load,
+  and both banks must replay green. Any failure — including pi tampering
+  with traps.json or producing code that doesn't load — RESTORES the
+  instance to its pre-pi state and reports honestly. Default model:
+  `z-ai/glm-5.3-flash` (openrouter); override with `--model`/`--provider`
+  or `$NEURALOSD_PI_MODEL`.
+- **`neuralosd pi ask "<question>"`** — operator mode: pi investigates
+  using the CLOSED LIST of neuralosd commands (gaps, slo, receipts,
+  synonyms, drift); its runs are audited subprocesses in the instance dir;
+  answers flagged as untrusted assistant output.
+- **`neuralosd pi --setup`** — checks pi, resolves the model for the
+  provider, and verifies with a live one-shot ping; unknown models point
+  at `pi --list-models`.
+- The v2.1.0 birth-trap contract holds for pi-built probes: the trap is
+  banked at first load, proven by the conforming router.
+- e2e-tested against the REAL pi + glm-5.3-flash: "build a max-units
+  probe" → probe written, trap born, banks green, instance answers 200.
+- Tests: 948 passed (19 new incl. the live e2e), smoke 49.
+
 ## 2.5.0 — synapse-gateway (for real) + Temporal durable execution
 
 **Synapse-gateway — the REAL wire (bug fix + out-of-the-box messaging)**

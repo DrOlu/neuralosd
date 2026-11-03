@@ -229,7 +229,7 @@ def load_instance(instance_dir: str, with_model: bool = False,
     except SystemExit:
         raise
     except Exception as e:  # noqa: BLE001
-        raise SystemExit(f"error: failed to load {probes_py}: {e}")
+        raise SystemExit(f"error: failed to load {probes_py}: {e}") from e
 
     # Probes explicitly declared tier="sidecar" run in the host Python even
     # when the instance loaded fine here (e.g. to use a library the frozen

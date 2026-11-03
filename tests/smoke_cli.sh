@@ -140,6 +140,12 @@ r="$(run ask --instance-dir ./inst-loop 'show me some rows')"
 check "mothball: anchor survives, menu still answers" '"probe": "list_rows"' "$r"
 
 # 2d. journald / wevtutil — only where the native tool exists
+if command -v pi >/dev/null 2>&1; then
+  r="$(run pi --setup)"
+  check "pi setup: live model ping" '"ping_ok": true' "$r"
+else
+  echo "  - skip pi-setup block (no pi on this host)"
+fi
 if command -v agent-browser >/dev/null 2>&1; then
   r="$(run browser --setup --yes)"
   check "browser setup: already installed, live ping" '"ping_ok": true' "$r"
