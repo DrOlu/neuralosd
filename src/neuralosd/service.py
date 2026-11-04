@@ -9,6 +9,7 @@ and every endpoint except the liveness probes (/healthz, /ready) requires
 """
 import hmac
 import json
+import os
 import socketserver
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -36,9 +37,40 @@ def _token_ok(provided: str, expected: str) -> bool:
                                (expected or "").encode())
 
 
+def resolve_role_instance(role, inst, instance_dir, cache=None):
+    """RBAC (v2.8.0): resolve the instance a request's role should run on.
+
+    No acl.json or no role -> the default instance (None error). A role in
+    acl.json -> a role-scoped instance, built once and cached. An unknown
+    role -> (None, error) so the caller returns 403.
+    """
+    acl_roles = {}
+    if instance_dir:
+        acl_path = os.path.join(instance_dir, "acl.json")
+        if os.path.isfile(acl_path):
+            try:
+                with open(acl_path, encoding="utf-8") as fh:
+                    acl_roles = json.load(fh).get("roles", {})
+            except (ValueError, OSError):
+                acl_roles = {}
+    if not role:
+        return inst, None
+    if role not in acl_roles:
+        return None, "unknown role"
+    cache = cache if cache is not None else {}
+    if role not in cache:
+        from ._cmd._common import load_instance
+        cache[role] = load_instance(instance_dir, role=role)
+    return cache[role], None
+
+
 def serve(instance, port: int = 8877, host: str = "0.0.0.0",
-          auth_token: str = None):
+          auth_token: str = None, instance_dir: str = None):
     inst = instance
+    _role_cache = {}
+
+    def _instance_for_role(role):
+        return resolve_role_instance(role, inst, instance_dir, _role_cache)
 
     class Handler(BaseHTTPRequestHandler):
         def _authorized(self) -> bool:
@@ -100,8 +132,17 @@ def serve(instance, port: int = 8877, host: str = "0.0.0.0",
             if not q:
                 self._send(400, {"error": "empty question"})
                 return
+            role = self.headers.get("X-NeuralOS-Role") or None
+            if role and not _acl_roles:
+                self._send(403, {"error": "no acl.json — roles are not "
+                                          "configured on this instance"})
+                return
+            role_inst, err = _instance_for_role(role)
+            if err:
+                self._send(403, {"error": f"unknown role: {role}"})
+                return
             try:
-                self._send(200, inst.ask(q))
+                self._send(200, role_inst.ask(q))
             except NoResults:
                 self._send(422, {"error": "no results produced"})
             except Exception as exc:

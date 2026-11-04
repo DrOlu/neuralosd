@@ -171,7 +171,15 @@ def _filter_rows(res, row_filter):
         out = dict(res)
         for key in ("rows",):
             if isinstance(out.get(key), list):
-                out[key] = [r for r in out[key] if keep(r)]
+                filtered = [r for r in out[key] if keep(r)]
+                out[key] = filtered
+                # a caged view must be SELF-CONSISTENT: if the probe
+                # reported a count next to its rows, the count describes
+                # the role's rows now — leaving the old number would tell
+                # the role "1 row" and "count: 2" at the same time
+                if "count" in out and isinstance(out.get("count"),
+                                                 (int, float)):
+                    out["count"] = len(filtered)
         return out
     return res
 

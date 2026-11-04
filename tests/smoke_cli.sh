@@ -141,6 +141,31 @@ check "mothball: demoted probe refuses" '"refusal_reason"' "$r"
 r="$(run ask --instance-dir ./inst-loop 'how many rows')"
 check "mothball: surviving anchor still answers" '"mode": "deterministic"' "$r"
 
+# 2c-bis. multi-source joins with a sqlite extra (v2.8.0)
+python3 - <<'PYEOF'
+import sqlite3
+con = sqlite3.connect("prices.db")
+con.execute("CREATE TABLE prices (region TEXT, price REAL)")
+con.executemany("INSERT INTO prices VALUES (?, ?)",
+                [("North", 10.0), ("South", 20.0)])
+con.commit(); con.close()
+PYEOF
+run init --source sales.csv --extra-source prices.db --on region=region \
+    --name priced --out ./inst-priced >/dev/null
+if [ -f ./inst-priced/probes.py ]; then echo "  ✓ init (sqlite extra) created probes.py"; pass=$((pass+1)); else echo "  ✗ init (sqlite extra) failed"; fail=$((fail+1)); fi
+r="$(run ask --instance-dir ./inst-priced 'joined count')"
+check "joins: sqlite extra joins with main" '"count": 2' "$r"
+r="$(run ask --instance-dir ./inst-priced 'how many rows in prices')"
+check "joins: caged count_in on the extra" '"count": 2' "$r"
+
+# 2c-ter. roles — RBAC management (v2.8.0)
+run roles --instance-dir ./inst-priced --op set --role analyst \
+    --allow row_count,joined_count --row-filter "region=in:North" >/dev/null
+r="$(run ask --instance-dir ./inst-priced --role analyst 'joined count')"
+check "roles: row filter serves only the allowed region" '"count": 1' "$r"
+r="$(run roles --instance-dir ./inst-priced --op list)"
+check "roles: analyst listed" 'analyst' "$r"
+
 # 2d. journald / wevtutil — only where the native tool exists
 if command -v pi >/dev/null 2>&1; then
   r="$(run pi --setup)"
