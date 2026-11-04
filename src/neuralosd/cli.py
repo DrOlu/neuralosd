@@ -279,6 +279,19 @@ def main():
     p_syn.add_argument("--audit", default=None)
     p_syn.add_argument("--apply", metavar="PROPOSALS_JSON", default=None)
 
+    # watch — streaming ingestion (v2.8.1)
+    p_w = sub.add_parser(
+        "watch", help="Stream sources into a bounded buffer; alert on rules")
+    p_w.add_argument("--instance-dir", required=True)
+    p_w.add_argument("--source", action="append", default=None,
+                     help="syslog:/path | journal (repeatable)")
+    p_w.add_argument("--rules", default=None, help="rules JSON file")
+    p_w.add_argument("--once", action="store_true",
+                     help="one poll cycle, then exit")
+    p_w.add_argument("--interval", type=int, default=30)
+    p_w.add_argument("--cap", type=int, default=10000)
+    p_w.add_argument("--webhook", default=None)
+
     # roles — RBAC management (v2.8.0)
     p_rl = sub.add_parser(
         "roles", help="Manage acl.json roles (allow-lists + row filters)")
@@ -423,6 +436,18 @@ def main():
                                "or the gateway.env file)")
     p_msetup.add_argument("--token-path", default=None)
     p_msetup.add_argument("--timeout", type=float, default=5)
+    p_gp = mesh_sub.add_parser(
+        "gossip-push", help="Publish local gap fingerprints to peers")
+    p_gp.add_argument("--gateway", default=None)
+    p_gp.add_argument("--peers", required=True, help="comma-separated ids")
+    p_gp.add_argument("--fingerprints", default=None)
+    p_gp.add_argument("--audit", default=None)
+    p_gp.add_argument("--origin", default="neuralosd")
+    p_gp.add_argument("--timeout", type=float, default=30)
+    p_gpl = mesh_sub.add_parser(
+        "gossip-pull", help="Collect peer fingerprint blobs from the inbox")
+    p_gpl.add_argument("--inbox", required=True)
+    p_gpl.add_argument("--timeout", type=float, default=30)
     # default all mesh gateways to the real default
     for sub_p in (p_ms2, p_msend, p_mtc, p_mts, p_mtx, p_mtr,
                   p_mmb, p_mtr2, p_msetup):
@@ -608,6 +633,9 @@ def main():
     elif a.command == "roles":
         from ._cmd import roles
         raise SystemExit(roles.run(a) or 0)
+    elif a.command == "watch":
+        from ._cmd import watch
+        raise SystemExit(watch.run(a) or 0)
     elif a.command == "build":
         from ._cmd import build
         raise SystemExit(build.run(a) or 0)
@@ -624,6 +652,20 @@ def main():
         from ._cmd import audit
         audit.run(a)
     elif a.command == "mesh":
+        if getattr(a, "mesh_cmd", None) == "gossip-push":
+            from ..loop import cluster_gaps, export_fingerprints, gossip_push
+            blob = _gossip_blob(a)
+            transport = SynapseHTTP_factory(a)
+            peers = [p.strip() for p in (a.peers or "").split(",")
+                     if p.strip()]
+            report = gossip_push(transport, blob, peers, origin=a.origin)
+            print(json.dumps(report, indent=2))
+            raise SystemExit(0)
+        if getattr(a, "mesh_cmd", None) == "gossip-pull":
+            from ..loop import gossip_collect
+            state = gossip_collect(a.inbox)
+            print(json.dumps(state, indent=2, ensure_ascii=False))
+            raise SystemExit(0)
         from ._cmd import mesh
         raise SystemExit(mesh.run(a))
     elif a.command == "door":
