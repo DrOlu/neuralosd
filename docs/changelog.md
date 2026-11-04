@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.7.1 — smoke determinism
+
+- The mothball smoke check asserted an anchor guess that flipped under
+  Windows coarse clocks (same-second asks tie). It now asserts the
+  platform-invariant behavior instead: the demoted probe refuses, the
+  surviving anchor still answers. Windows binary run green.
+
 ## 2.7.0 — Pi Durable + doctor + loop optimizations
 
 - **Pi Durable integration** — `neuralosd build "<capability>" --durable`

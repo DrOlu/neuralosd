@@ -1167,7 +1167,7 @@ Operator mode — natural language over the closed command list:
 neuralosd pi ask --instance-dir . "why did refusals go up this week?"
 ```
 
-Durable builds — the conversation survives crashes and is resumable:
+Durable builds — the conversation runs in a **Pi Durable** harness (@earendil-works/pi-durable), survives crashes, and is resumable:
 
 ```bash
 neuralosd build "average shipping cost per unit by region" \
