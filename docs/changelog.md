@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.8.4 — release-pipeline hardening (gossip + watch, released)
+
+- v2.8.3 never made it to PyPI: the release tag was created before
+  pyproject.toml was bumped, so `python -m build` packaged 2.8.1 again
+  while the sidecar test correctly refused to install a nonexistent
+  neuralosd==2.8.3. pyproject and __init__ are now pinned equal by test,
+  and the version-drift class is closed.
+- Contents (built + verified on host + all 5 platforms via the v2.8.3
+  CI unit runs): federation gossip protocol (push/collect/validate/merge)
+  and streaming ingestion (`neuralosd watch`: bounded buffer, offset
+  tails with rotation, threshold rules, webhooks).
+
+## 2.8.3 — skipped (version drift, never published)
+
 ## 2.8.2 — gossip CLI import fix
 
 - `neuralosd mesh gossip-push/pull` crashed on first real use:
