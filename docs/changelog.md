@@ -1,6 +1,20 @@
 # Changelog
 
-## 2.8.0 — joins for every source + roles management
+## 2.8.1 — federation gossip + streaming ingestion
+
+- **Federation gossip (the protocol)** — `mesh gossip-push` publishes the
+  local fingerprint blob to trusted peers via the gateway mailbox;
+  `gossip-pull` collects and validates peer blobs (malformed fingerprints
+  dropped, counts capped, deduped per peer); `gaps --federation-dir`
+  reads the gossip state for mesh counts. Validation BEFORE send and on
+  arrival: a misbehaving edge cannot poison or flood the mesh.
+- **Streaming ingestion** — `neuralosd watch` tails syslog files /
+  journald into a bounded buffer, evaluates threshold rules over sliding
+  windows (per-cycle new events — no endless re-firing), and delivers
+  alerts to webhooks. Offset-based tails with rotation detection.
+- Docs: index + changelog for 2.8.1; smoke +1 watch cycle.
+
+## 2.8.0 — joins for every source + roles management — joins for every source + roles management
 
 - **All-source joins** — `--extra-source` accepts any init source (sqlite,
   xlsx, json, api with caged credentials, csv); the generated bridge

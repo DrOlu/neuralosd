@@ -27,6 +27,14 @@ it's what makes it safe for regulated environments.
 | Errors are silent | Discards are **visible** |
 | Deployment = "it should work" | Deployment = **verified end to end** |
 
+## What's new in 2.8.1 — gossip + streaming
+
+- **Federation gossip** — `mesh gossip-push/pull`: the fingerprint
+  exchange becomes a protocol — validated blobs, capped counts, per-peer
+  dedup. Your next probe is one another org already needed.
+- **Streaming ingestion** — `neuralosd watch` tails logs into a bounded
+  buffer and alerts on thresholds with webhooks.
+
 ## What's new in 2.8.0 — joins everywhere + roles
 
 - **Joins for every source kind** — `--extra-source` now takes sqlite,
