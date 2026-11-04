@@ -23,6 +23,37 @@ import os
 import sys
 
 
+def _gossip_blob(a):
+    """The fingerprint blob to publish: a pre-exported file, or mined fresh
+    from the audit log."""
+    import os as _os
+    if getattr(a, "fingerprints", None) and _os.path.isfile(a.fingerprints):
+        with open(a.fingerprints, encoding="utf-8") as fh:
+            return json.load(fh)
+    if getattr(a, "audit", None) and _os.path.isfile(a.audit):
+        from neuralosd.loop import cluster_gaps, export_fingerprints
+        gaps = []
+        with open(a.audit, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if r.get("results") in (None, [], {}):
+                    gaps.append({"question": r.get("question")})
+        return export_fingerprints(cluster_gaps(gaps))
+    print("error: gossip-push needs --fingerprints or --audit",
+          file=sys.stderr)
+    sys.exit(2)
+
+
+def _gossip_transport(a):
+    from neuralosd.synapse import SynapseHTTP
+    return SynapseHTTP(gateway=getattr(a, "gateway", None)
+                       or "http://127.0.0.1:3000",
+                       timeout=getattr(a, "timeout", 30))
+
+
 def main():
     ap = argparse.ArgumentParser(
         prog="neuralosd",
@@ -653,16 +684,16 @@ def main():
         audit.run(a)
     elif a.command == "mesh":
         if getattr(a, "mesh_cmd", None) == "gossip-push":
-            from ..loop import cluster_gaps, export_fingerprints, gossip_push
+            from .loop import cluster_gaps, export_fingerprints, gossip_push
             blob = _gossip_blob(a)
-            transport = SynapseHTTP_factory(a)
+            transport = _gossip_transport(a)
             peers = [p.strip() for p in (a.peers or "").split(",")
                      if p.strip()]
             report = gossip_push(transport, blob, peers, origin=a.origin)
             print(json.dumps(report, indent=2))
             raise SystemExit(0)
         if getattr(a, "mesh_cmd", None) == "gossip-pull":
-            from ..loop import gossip_collect
+            from .loop import gossip_collect
             state = gossip_collect(a.inbox)
             print(json.dumps(state, indent=2, ensure_ascii=False))
             raise SystemExit(0)
