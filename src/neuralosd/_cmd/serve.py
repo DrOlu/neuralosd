@@ -16,6 +16,7 @@ def run(a):
 
     auth_token = (getattr(a, "auth_token", None)
                   or os.environ.get("NEURALOSD_API_TOKEN") or None)
+    instance_dir = os.path.abspath(a.instance_dir)
 
     host = getattr(a, "host", "127.0.0.1") or "127.0.0.1"
     print(f"serving instance '{inst.name}' with {len(inst.probes)} probes "
@@ -34,7 +35,8 @@ def run(a):
                   "table this instance points at. Use --auth-token (or "
                   "$NEURALOSD_API_TOKEN), put an authenticating proxy in "
                   "front, or bind 127.0.0.1 and tunnel.", file=sys.stderr)
-    serve(inst, port=a.port, host=host, auth_token=auth_token)
+    serve(inst, port=a.port, host=host, auth_token=auth_token,
+          instance_dir=instance_dir)
 
 
 def run_multi(a):

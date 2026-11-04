@@ -279,6 +279,20 @@ def main():
     p_syn.add_argument("--audit", default=None)
     p_syn.add_argument("--apply", metavar="PROPOSALS_JSON", default=None)
 
+    # roles — RBAC management (v2.8.0)
+    p_rl = sub.add_parser(
+        "roles", help="Manage acl.json roles (allow-lists + row filters)")
+    p_rl.add_argument("--instance-dir", required=True)
+    p_rl.add_argument("--op", choices=["list", "set", "show", "remove"],
+                      default="list")
+    p_rl.add_argument("--role", default=None)
+    p_rl.add_argument("--allow", default=None,
+                      help="comma-separated probe names")
+    p_rl.add_argument("--row-filter", default=None,
+                      help="'column=in:value1,value2' — rows served to "
+                           "this role are filtered to these values")
+    p_rl.add_argument("--json", dest="as_json", action="store_true")
+
     # doctor — environment health check (v2.7.0)
     p_doc = sub.add_parser(
         "doctor", help="Health-check every integration (pi, durable, "
@@ -591,6 +605,9 @@ def main():
     elif a.command == "doctor":
         from ._cmd import doctor
         raise SystemExit(doctor.run(a) or 0)
+    elif a.command == "roles":
+        from ._cmd import roles
+        raise SystemExit(roles.run(a) or 0)
     elif a.command == "build":
         from ._cmd import build
         raise SystemExit(build.run(a) or 0)

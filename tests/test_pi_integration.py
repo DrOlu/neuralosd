@@ -321,6 +321,12 @@ def test_build_gates_on_the_delta_not_preexisting_red(tmp_path):
 
 
 def test_build_still_blocks_on_new_failures_it_introduces(tmp_path):
+    # earlier tests in the full-suite order leave the shared
+    # neuralosd_inst_inst module bound to THEIR probes module — this test
+    # needs a clean namespace or the wreck below would be invisible
+    import sys as _sys
+    for _m in ("neuralosd_inst_inst", "bridge", "models"):
+        _sys.modules.pop(_m, None)
     from neuralosd.banks import record_golden
     from neuralosd.pisources import build_capability
     out = _build(tmp_path)

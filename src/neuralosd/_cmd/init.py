@@ -51,17 +51,32 @@ def run(a):
         info = _profile_api(src, header=getattr(a, "header", None),
                             secret_ref=getattr(a, "secret_ref", None))
 
-    # v2.4.0 multi-source: extra delimited sources + an optional join key
+    # v2.4.0 multi-source; v2.8.0: extras of ANY source kind
+    # NOTE: the CLI dest is "extra_source" (singular); tests may pass
+    # "extra_sources" (plural) via SimpleNamespace — accept both
+    extras_arg = (getattr(a, "extra_sources", None)
+                  or getattr(a, "extra_source", None))
     extras = []
-    for extra_path in (getattr(a, "extra_sources", None) or []):
-        if not str(extra_path).endswith((".csv", ".tsv")):
+    for extra_src in (extras_arg or []):
+        extra_src = str(extra_src)
+        if extra_src.startswith("browser:"):
             raise SystemExit(
-                "error: --extra-source supports delimited files (.csv/.tsv) "
-                "in this release")
-        ei = _profile_delimited(str(extra_path))
-        ei["_name"] = _safe(os.path.splitext(
-            os.path.basename(str(extra_path)))[0])
-        ei["_path"] = os.path.abspath(str(extra_path))
+                "error: --extra-source does not support browser: sources "
+                "(live page snapshots do not join reliably) — use api: for "
+                "web data")
+        ei = profile_any(extra_src)
+        if ei.get("kind") in ("opaque", None):
+            raise SystemExit(
+                f"error: could not profile extra source {extra_src!r}")
+        if ":" in extra_src and not os.path.isfile(extra_src):
+            name = _safe(extra_src.split(":", 1)[1].split("/")[0].split(
+                "?")[0] or "source")
+        else:
+            name = _safe(os.path.splitext(
+                os.path.basename(extra_src))[0])
+        ei["_name"] = name
+        ei["_path"] = os.path.abspath(extra_src) if os.path.isfile(
+            extra_src) else extra_src
         extras.append(ei)
     join_on = getattr(a, "join_on", None)
 
@@ -841,22 +856,95 @@ def _browser_bridge_extra(info):
 
 
 def _multi_source_extra(extras, join_on):
-    """One instance, several row sources, one deterministic join."""
-    table = {e["_name"]: e["_path"] for e in extras}
-    delim = {e["_name"]: e.get("delim", ",") for e in extras}
-    pair = join_on.split("=", 1) if join_on else None
+    """One instance, several row sources of ANY kind, deterministic joins."""
+    specs = {}
+    for e in extras:
+        spec = {"kind": e.get("kind"), "path": e.get("_path")
+                or e.get("path"), "delim": e.get("delim", ","),
+                "table": e.get("table"), "sheet": e.get("sheet"),
+                "header": e.get("header"), "secret_ref":
+                    e.get("secret_ref"), "url": e.get("url")}
+        specs[e["_name"]] = spec
+    # join spec: "name:key=key" names the extra; bare "key=key" joins the
+    # first extra
+    join_spec = None
+    if join_on:
+        if ":" in join_on:
+            source_name, keys = join_on.split(":", 1)
+            lk, rk = keys.split("=", 1)
+            join_spec = {"source": source_name.strip(), "left": lk.strip(),
+                         "right": rk.strip()}
+        elif extras:
+            join_spec = {"source": extras[0]["_name"], "left":
+                         join_on.split("=", 1)[0].strip(),
+                         "right": join_on.split("=", 1)[1].strip()}
     return (
-        "\n\nEXTRA_SOURCES = " + json.dumps(table) + "\n"
-        "EXTRA_DELIM = " + json.dumps(delim) + "\n"
-        "JOIN_ON = " + json.dumps(pair) + "\n"
+        "\n\nEXTRA_SOURCES = " + repr(specs) + "\n"
+        "JOIN_ON = " + repr(join_spec) + "\n"
         "\n\n"
         "def rows_of(source):\n"
-        "    import csv\n"
-        "    path = EXTRA_SOURCES[source]\n"
-        "    with open(path, newline=\"\", encoding=\"utf-8\",\n"
-        "              errors=\"replace\") as f:\n"
-        "        return list(csv.DictReader(\n"
-        "            f, delimiter=EXTRA_DELIM.get(source, \",\")))\n"
+        "    spec = EXTRA_SOURCES[source]\n"
+        "    k = spec[\"kind\"]\n"
+        "    if k in (\"delimited\", \"csv\", \"tsv\"):\n"
+        "        import csv\n"
+        "        with open(spec[\"path\"], newline=\"\", "
+        "encoding=\"utf-8\",\n"
+        "                  errors=\"replace\") as f:\n"
+        "            return list(csv.DictReader(\n"
+        "                f, delimiter=spec.get(\"delim\", \",\")))\n"
+        "    if k == \"sqlite\":\n"
+        "        import sqlite3\n"
+        "        conn = sqlite3.connect(\"file:\" + spec[\"path\"] + "
+        "\"?mode=ro\", uri=True)\n"
+        "        conn.row_factory = sqlite3.Row\n"
+        "        try:\n"
+        "            return [dict(r) for r in conn.execute(\n"
+        "                'SELECT * FROM ' + chr(34) + spec[\"table\"] + "
+        "chr(34))]\n"
+        "        finally:\n"
+        "            conn.close()\n"
+        "    if k == \"xlsx\":\n"
+        "        import openpyxl\n"
+        "        wb = openpyxl.load_workbook(spec[\"path\"], "
+        "read_only=True,\n"
+        "                                    data_only=True)\n"
+        "        ws = wb[spec[\"sheet\"]] if spec.get(\"sheet\") else "
+        "wb.worksheets[0]\n"
+        "        it = ws.iter_rows(values_only=True)\n"
+        "        header = [str(h) if h is not None else "
+        "'col%d' % i\n"
+        "                  for i, h in enumerate(next(it, []))]\n"
+        "        out = []\n"
+        "        for r in it:\n"
+        "            if all(v is None for v in r):\n"
+        "                continue\n"
+        "            out.append({header[i]: (r[i] if i < len(r) else "
+        "None)\n"
+        "                        for i in range(len(header))})\n"
+        "        wb.close()\n"
+        "        return out\n"
+        "    if k == \"json\":\n"
+        "        import json as _j\n"
+        "        with open(spec[\"path\"], encoding=\"utf-8\") as f:\n"
+        "            data = _j.load(f)\n"
+        "        if isinstance(data, list):\n"
+        "            return [r for r in data if isinstance(r, dict)]\n"
+        "        if isinstance(data, dict):\n"
+        "            lists = [v for v in data.values() "
+        "if isinstance(v, list)]\n"
+        "            if len(lists) == 1:\n"
+        "                return [r for r in lists[0] "
+        "if isinstance(r, dict)]\n"
+        "            return [data]\n"
+        "        return []\n"
+        "    if k == \"api\":\n"
+        "        from neuralosd.apisources import api_rows\n"
+        "        return api_rows(spec[\"url\"],\n"
+        "                        header_name=spec.get(\"header\") "
+        "or None,\n"
+        "                        secret_ref=spec.get(\"secret_ref\") "
+        "or None, cap=500)\n"
+        "    raise ValueError(\"unknown source kind \" + str(k))\n"
         "\n\n"
         "def count_in(source):\n"
         "    return {\"source\": source, \"count\": len(rows_of(source))}\n"
@@ -865,14 +953,14 @@ def _multi_source_extra(extras, join_on):
         "    if not JOIN_ON:\n"
         "        return {\"error\": \"no join key configured at init "
         "(--on)\"}\n"
-        "    ca, cb = JOIN_ON\n"
-        "    right_name = next(iter(EXTRA_SOURCES))\n"
-        "    right = rows_of(right_name)\n"
+        "    left_key = JOIN_ON[\"left\"]\n"
+        "    right_key = JOIN_ON[\"right\"]\n"
+        "    right = rows_of(JOIN_ON[\"source\"])\n"
         "    out = []\n"
         "    for r in rows():\n"
         "        for s in right:\n"
-        "            if r.get(ca) is not None and \\\n"
-        "                    str(r.get(ca)) == str(s.get(cb)):\n"
+        "            if r.get(left_key) is not None and \\\n"
+        "                    str(r.get(left_key)) == str(s.get(right_key)):\n"
         "                merged = dict(r)\n"
         "                merged.update(s)\n"
         "                out.append(merged)\n"
