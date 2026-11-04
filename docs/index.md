@@ -27,6 +27,17 @@ it's what makes it safe for regulated environments.
 | Errors are silent | Discards are **visible** |
 | Deployment = "it should work" | Deployment = **verified end to end** |
 
+## What's new in 2.8.0 — joins everywhere + roles
+
+- **Joins for every source kind** — `--extra-source` now takes sqlite,
+  Excel, JSON, authenticated APIs (credentials caged), or CSV; named joins
+  (`--on prices:region=region`) are deterministic nested loops.
+- **Roles management** — `neuralosd roles` manages allow-lists and
+  row-level filters with validation and a journal; `serve` enforces them
+  per request via the `X-NeuralOS-Role` header.
+- Fixed: the RBAC row cage left a stale `count` next to filtered rows;
+  `--extra-source` was silently dropped by a CLI dest-name mismatch.
+
 ## What's new in 2.7.0 — durable builds + doctor
 
 - **Pi Durable** — `neuralosd build "<capability>" --durable`: the build
