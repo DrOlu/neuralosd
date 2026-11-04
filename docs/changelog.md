@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.8.2 — gossip CLI import fix
+
+- `neuralosd mesh gossip-push/pull` crashed on first real use:
+  `from ..loop import` inside neuralosd.cli (a top-level module) escapes
+  the package. Absolute imports + extracted helpers. Found by testing
+  gossip-pull against a real converted instance on this host.
+
 ## 2.8.1 — federation gossip + streaming ingestion
 
 - **Federation gossip (the protocol)** — `mesh gossip-push` publishes the
