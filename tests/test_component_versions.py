@@ -5,6 +5,8 @@ drift logic, the snapshot round-trip and the version bump are all exercised
 offline.
 """
 import json
+import os
+import re
 import sys
 
 import pytest
@@ -299,3 +301,23 @@ def test_components_declared_in_pyproject_are_watched():
     # pytest/pytest-asyncio are dev-only tooling, not integrated components
     unwatched -= {"pytest", "pytest-asyncio"}
     assert not unwatched, f"unwatched extras: {sorted(unwatched)}"
+
+
+def test_pyproject_and_init_versions_agree():
+    """The build reads pyproject; the code reads __init__ — when they drift,
+    PyPI publishes the OLD version while the release claims the NEW one
+    (found live: v2.8.2's tag built neuralosd-2.8.1 and the sidecar test
+    correctly refused to install it)."""
+    import configparser
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    pyproject = (open(os.path.join(root, "pyproject.toml"),
+                      encoding="utf-8").read())
+    m = re.search(r'^version\s*=\s*"([^"]+)"', pyproject, flags=re.M)
+    assert m, "pyproject.toml has no version"
+    pkg_init = open(os.path.join(root, "src", "neuralosd", "__init__.py"),
+                    encoding="utf-8").read()
+    m2 = re.search(r'__version__\s*=\s*"([^"]+)"', pkg_init)
+    assert m2, "src/neuralosd/__init__.py has no __version__"
+    assert m.group(1) == m2.group(1), (
+        f"pyproject={m.group(1)} but __init__={m2.group(1)} — the build "
+        f"would publish {m.group(1)} while the code claims {m2.group(1)}")
