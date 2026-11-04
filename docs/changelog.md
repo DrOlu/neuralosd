@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.8.0 — joins for every source + roles management
+
+- **All-source joins** — `--extra-source` accepts any init source (sqlite,
+  xlsx, json, api with caged credentials, csv); the generated bridge
+  dispatches per kind, and `--on name:key=key` joins deterministically.
+  Fixes a silent CLI bug: `--extra-source` was dropped by a
+  dest-name mismatch (singular vs plural) — found by the smoke suite,
+  never caught by tests that called init.run directly.
+- **Roles management** — `neuralosd roles` (set/list/show/remove) with
+  live-menu validation, row-filter format checks, and a journal
+  (acl_journal.jsonl). serve gains per-request roles via
+  `X-NeuralOS-Role` (403 on unknown roles).
+- **Bug**: the RBAC row cage filtered rows but left the probe's own count
+  — the role saw "1 row" and "count: 2" at once. Caged views are now
+  self-consistent.
+- Smoke +6 (sqlite-extra joins, roles round-trip): 56 checks.
+
 ## 2.7.1 — smoke determinism
 
 - The mothball smoke check asserted an anchor guess that flipped under
