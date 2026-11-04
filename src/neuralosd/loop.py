@@ -710,3 +710,101 @@ def apply_synonyms(instance_dir, proposals_path):
         json.dump(blob, fh, indent=2, ensure_ascii=False)
         fh.write("\n")
     return {"applied": applied, "suggested": suggested}
+
+
+# ── v2.8.1: federation gossip — the protocol wiring ────────────────────────
+
+_MAX_FP_COUNT = 1000000
+_MAX_BLOB_FPS = 200
+_GOSSIP_SKILL = "neuralosd.gossip"
+
+
+def _validate_fingerprint_blob(blob):
+    """A gossip blob must be well-formed BEFORE it is trusted or sent:
+    version 1, each fingerprint 16 hex chars, each count a sane integer.
+    A misbehaving peer cannot poison the gaps report."""
+    import re
+    if not isinstance(blob, dict) or blob.get("version") != 1:
+        raise SystemExit("error: gossip blob must be {\"version\": 1, ...}")
+    fps = blob.get("fingerprints")
+    if not isinstance(fps, list) or not fps:
+        raise SystemExit("error: gossip blob has no fingerprints")
+    if len(fps) > _MAX_BLOB_FPS:
+        raise SystemExit(f"error: gossip blob exceeds "
+                         f"{_MAX_BLOB_FPS} fingerprints")
+    for f in fps:
+        fp, count = f.get("fp", ""), f.get("count")
+        if not re.fullmatch(r"[0-9a-f]{16}", str(fp)):
+            raise SystemExit(f"error: malformed fingerprint {fp!r} "
+                             f"(expected 16 hex chars)")
+        if not isinstance(count, int) or not (1 <= count <= _MAX_FP_COUNT):
+            raise SystemExit(f"error: fingerprint {fp!r} count out of "
+                             f"range: {count!r}")
+    return blob
+
+
+def gossip_push(transport, blob, peers, origin=""):
+    """Publish the local fingerprint blob to trusted peers via the gateway
+    mailbox (fire-and-forget, at-least-once). The blob carries hashes and
+    counts ONLY — the questions never leave the edge."""
+    _validate_fingerprint_blob(blob)
+    sent, failed = [], []
+    blob = dict(blob, origin=origin)
+    for peer in peers:
+        try:
+            transport.mailbox(target=peer, skill=_GOSSIP_SKILL,
+                              input_data=blob)
+            sent.append(peer)
+        except Exception as e:                             # noqa: BLE001
+            failed.append({"peer": peer, "error": str(e)[:120]})
+    return {"pushed": sent, "failed": failed}
+
+
+def gossip_collect(inbox_dir):
+    """Read peer blobs from the inbox directory (the gateway drops them
+    there), validate each, and build a per-peer gossip state. Malformed
+    files are skipped; counts are capped at arrival — a poisoned peer is
+    bounded, never trusted."""
+    import uuid
+    state = {"peers": {}, "ts": time.time()}
+    if not os.path.isdir(inbox_dir):
+        return state
+    for name in sorted(os.listdir(inbox_dir)):
+        if not name.endswith(".json"):
+            continue
+        path = os.path.join(inbox_dir, name)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                blob = json.load(fh)
+        except (ValueError, OSError):
+            continue
+        peer = name[:-5]
+        peer_state = state["peers"].setdefault(peer, {"fingerprints": [],
+                                                      "ts": time.time()})
+        seen = {f["fp"]: f["count"] for f in peer_state["fingerprints"]}
+        for f in blob.get("fingerprints", []):
+            fp = str(f.get("fp", ""))
+            count = f.get("count")
+            if not re.fullmatch(r"[0-9a-f]{16}", fp):
+                continue
+            try:
+                count = max(1, min(int(count), _MAX_FP_COUNT))
+            except (TypeError, ValueError):
+                continue
+            seen[fp] = max(seen.get(fp, 0), count)
+        peer_state["fingerprints"] = [{"fp": fp, "count": n}
+                                      for fp, n in sorted(seen.items())]
+    with open(os.path.join(inbox_dir, "gossip_state.json"), "w",
+              encoding="utf-8") as fh:
+        json.dump(state, fh, indent=2, ensure_ascii=False)
+    return state
+
+
+def gossip_peer_counts(inbox_dir):
+    """fp -> best peer count across all collected peers (for mesh_count)."""
+    state = gossip_collect(inbox_dir)
+    best = {}
+    for peer in state["peers"].values():
+        for f in peer["fingerprints"]:
+            best[f["fp"]] = max(best.get(f["fp"], 0), f["count"])
+    return best
