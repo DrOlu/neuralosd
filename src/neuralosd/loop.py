@@ -769,9 +769,11 @@ def gossip_collect(inbox_dir):
     state = {"peers": {}, "ts": time.time()}
     if not os.path.isdir(inbox_dir):
         return state
+    # also purge a stale self-ingested entry from a previous version
+    state["peers"].pop("gossip_state", None)
     for name in sorted(os.listdir(inbox_dir)):
-        if not name.endswith(".json"):
-            continue
+        if not name.endswith(".json") or name == "gossip_state.json":
+            continue                       # never self-ingest our own state
         path = os.path.join(inbox_dir, name)
         try:
             with open(path, encoding="utf-8") as fh:
