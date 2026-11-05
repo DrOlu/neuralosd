@@ -9,6 +9,7 @@ Supported sources (self-contained, no external scripts):
   syslog:<path>    — syslog text file (RFC3164/RFC5424, stdlib only)
   journal:[UNIT]   — journald via `journalctl -o json` (bounded, newest first)
   wevtutil:<CH>    — Windows Event Log channel via `wevtutil ... /f:XML`
+  plasma:<path>    — Plasma EDR events.jsonl (WHIDS/tap/identity events)
   anything else    — a contract template the user fills in
 """
 import json
@@ -21,22 +22,27 @@ def profile_any(src):
     re-audit (v2.3.0), which re-profiles the source and checks what broke."""
     if src.endswith((".xlsx", ".xlsm")):
         return _profile_xlsx(src)
-    if src.endswith((".csv", ".tsv")):
-        return _profile_delimited(src)
-    if src.endswith((".json", ".jsonl")):
-        return _profile_json(src)
-    if src.endswith((".db", ".sqlite", ".sqlite3")):
-        return _profile_sqlite(src)
+    # prefix sources FIRST (a "plasma:/x.jsonl" also ends with .jsonl)
     if src.startswith(("journal:", "journalctl:")):
         return _profile_journal(src)
     if src.startswith(("wevt:", "wevtutil:")):
         return _profile_wevt(src)
     if src.startswith("syslog:"):
         return _profile_syslog(src)
+    if src.startswith("plasma:"):
+        return _profile_plasma(src)
     if src.startswith("browser:"):
         return _profile_browser(src)
     if src.startswith("api:"):
         return _profile_api(src)
+    if src.endswith((".csv", ".tsv")):
+        return _profile_delimited(src)
+    if src.endswith((".json", ".jsonl")):
+        return _profile_json(src)
+    if src.endswith((".db", ".sqlite", ".sqlite3")):
+        return _profile_sqlite(src)
+    if src.endswith((".xlsx", ".xlsm")):
+        return _profile_xlsx(src)
     return {"kind": "opaque", "columns": [], "rows": None}
 
 
@@ -510,6 +516,37 @@ def _profile_api(src, header=None, secret_ref=None):
             "header": header or "", "secret_ref": secret_ref or ""}
 
 
+def _profile_plasma(src):
+    """Profile a Plasma events.jsonl store: the security event shape
+    ({ts, host, event_type, severity, source, process, account, message})
+    is normalized and profiled. Security-specific probes are scaffolded
+    (critical_alerts, failed_logons, new_scheduled_tasks, etc.)."""
+    from ..plasma import parse_plasma_events
+    path = src.split(":", 1)[1].strip()
+    cap = 10000
+    parsed = parse_plasma_events(path, cap=cap)
+    rows = parsed["rows"]
+    # collect the union of keys across events (Plasma events are
+    # type-dependent: WHIDS rows have technique, identity rows don't)
+    all_keys = []
+    seen_keys = set()
+    for r in rows[:500]:
+        for k in r:
+            if k not in seen_keys:
+                seen_keys.add(k)
+                all_keys.append(k)
+    cols = []
+    for k in all_keys:
+        vals = [str(r[k]) for r in rows[:500] if r.get(k) not in (None, "")]
+        cols.append({"name": k,
+                     "type": "date" if k == "ts" else "str",
+                     "card": len(set(vals))})
+    return {"kind": "plasma", "log": True, "path": path,
+            "columns": _annotate(cols), "rows": len(rows),
+            "cap": cap, "parse_errors": parsed["parse_errors"],
+            "truncated": parsed["truncated"]}
+
+
 def _profile_journal(src):
     from ..logsources import journal_rows, log_cap_default
     unit = src.split(":", 1)[1].strip() or None
@@ -631,6 +668,8 @@ def _xlsx_rows():
 
 
 def rows():
+    if KIND == "plasma":
+        return _plasma_rows()
     if KIND == "browser":
         return _browser_snapshot_rows()
     if KIND == "api":
@@ -811,7 +850,9 @@ def breakdown(dimension, measure):
         out["unaccounted"] = round(g - total, 2)
     return out
 '''
-    if info.get("kind") == "xlsx":
+    if info.get("kind") == "plasma":
+        bridge += _plasma_bridge_extra(info)
+    elif info.get("kind") == "xlsx":
         bridge += _xlsx_bridge_extra(info)
     elif info.get("log"):
         bridge += _log_bridge_extra(info)
@@ -824,6 +865,18 @@ def breakdown(dimension, measure):
 
     with open(os.path.join(out, "bridge.py"), "w", encoding="utf-8") as f:
         f.write(bridge)
+
+
+def _plasma_bridge_extra(info):
+    """Plasma bridge: reads events.jsonl at ask time via plasma.py."""
+    path = info.get("path") or ""
+    cap = info.get("cap") or 10000
+    return (
+        "\n\nPLASMA_CAP = " + repr(int(cap)) + "\n"
+        "\n\n"
+        "def _plasma_rows():\n"
+        "    from neuralosd.plasma import plasma_rows\n"
+        "    return plasma_rows(" + repr(path) + ", cap=PLASMA_CAP)\n")
 
 
 def _api_bridge_extra(info):
@@ -1222,7 +1275,7 @@ def _write_probes(out, name, info, extras=None, join_on=None):
         ]
         probe_names.append("breakdown")
 
-    # deep-Excel probes: sheets, named ranges, formula scan (v2.2.0)
+    #     # deep-Excel probes: sheets, named ranges, formula scan (v2.2.0)
     if info.get("kind") == "xlsx" and info.get("sheets"):
         sheet_names = list(info["sheets"])
         lines += [
@@ -1318,6 +1371,71 @@ def _write_probes(out, name, info, extras=None, join_on=None):
             "",
         ]
         probe_names.append("recent_events")
+
+    # v2.9.0 Plasma security probes
+    if info.get("kind") == "plasma":
+        sec = [
+            "@probe(description=\"Critical and high severity events\",\n"
+            "       triggers=[\"critical alerts\", \"high severity\",\n"
+            "                 \"critical events\", \"severity high\",\n"
+            "                 \"critical\", \"high\"])\n"
+            "def critical_alerts():\n"
+            "    rows = [r for r in bridge._plasma_rows()\n"
+            "            if r.get(\"severity\") in (\"critical\", \"high\")]\n"
+            "    return {\"count\": len(rows), \"rows\": rows[:25],\n"
+            "            \"_tool\": \"critical_alerts\"}\n",
+            "@probe(description=\"Failed logon events (4625)\",\n"
+            "       triggers=[\"failed logons\", \"failed logins\",\n"
+            "                 \"logon failures\", \"4625\", \"bad logons\"])\n"
+            "def failed_logons():\n"
+            "    rows = [r for r in bridge._plasma_rows()\n"
+            "            if r.get(\"event_type\") == \"logon_fail\"]\n"
+            "    by_account = {}\n"
+            "    for r in rows:\n"
+            "        acct = r.get(\"account\", \"?\")\n"
+            "        by_account[acct] = by_account.get(acct, 0) + 1\n"
+            "    return {\"count\": len(rows), \"by_account\": by_account,\n"
+            "            \"rows\": rows[:25], \"_tool\": \"failed_logons\"}\n",
+            "@probe(description=\"New or modified scheduled tasks\",\n"
+            "       triggers=[\"new scheduled tasks\", \"scheduled tasks\",\n"
+            "                 \"schtasks\", \"persistence\", \"new tasks\"])\n"
+            "def new_scheduled_tasks():\n"
+            "    rows = [r for r in bridge._plasma_rows()\n"
+            "            if \"schtask\" in str(r.get(\"event_type\", "
+            "\"\")).lower()]\n"
+            "    return {\"count\": len(rows), \"rows\": rows[:25],\n"
+            "            \"_tool\": \"new_scheduled_tasks\"}\n",
+            "@probe(description=\"Event counts grouped by event_type\",\n"
+            "       triggers=[\"events by type\", \"event types\",\n"
+            "                 \"events by event_type\", \"count by type\"])\n"
+            "def events_by_type():\n"
+            "    counts = {}\n"
+            "    for r in bridge._plasma_rows():\n"
+            "        et = r.get(\"event_type\", \"?\")\n"
+            "        counts[et] = counts.get(et, 0) + 1\n"
+            "    rows = [{\"event_type\": k, \"count\": v}\n"
+            "            for k, v in sorted(counts.items(), "
+            "key=lambda x: -x[1])]\n"
+            "    return {\"rows\": rows, \"count\": len(rows),\n"
+            "            \"_tool\": \"events_by_type\"}\n",
+            "@probe(description=\"Event counts grouped by host\",\n"
+            "       triggers=[\"events by host\", \"events per host\",\n"
+            "                 \"count by host\", \"events by machine\"])\n"
+            "def events_by_host():\n"
+            "    counts = {}\n"
+            "    for r in bridge._plasma_rows():\n"
+            "        h = r.get(\"host\", \"?\")\n"
+            "        counts[h] = counts.get(h, 0) + 1\n"
+            "    rows = [{\"host\": k, \"count\": v}\n"
+            "            for k, v in sorted(counts.items(), "
+            "key=lambda x: -x[1])]\n"
+            "    return {\"rows\": rows, \"count\": len(rows),\n"
+            "            \"_tool\": \"events_by_host\"}\n",
+        ]
+        lines += sec
+        probe_names += ["critical_alerts", "failed_logons",
+                        "new_scheduled_tasks", "events_by_type",
+                        "events_by_host"]
 
     lines.append("PROBES = [" + ", ".join(probe_names) + "]")
     lines.append("")
