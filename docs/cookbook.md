@@ -6,6 +6,41 @@ step by step without human intervention.
 
 ---
 
+## Recipe: Production deployment checklist
+
+Take an instance from "works on my machine" to "trusted by a department":
+
+```bash
+# 1. verify the environment
+neuralosd doctor --instance-dir ./mydata
+
+# 2. lock down access
+neuralosd roles --instance-dir ./mydata --op set --role viewer \
+    --allow row_count,breakdown --row-filter "region=in:North"
+neuralosd serve --instance-dir ./mydata --auth-token $TOKEN
+
+# 3. prove the answer quality
+neuralosd golden --dir ./mydata --record --question "total revenue" \
+    --expect-probe total_revenue --value 12642501.91 \
+    --by olu --source "global_superstore sum" --method "SQL cross-check"
+neuralosd badge --instance-dir ./mydata --out badge.json \
+    --actions-out .github/workflows/golden.yml
+
+# 4. know when users are asking for more
+neuralosd slo --instance-dir ./mydata --max-refusal-rate 0.4
+neuralosd gaps ./mydata/ask_audit.jsonl --out gaps.json
+
+# 5. keep the menu tight as usage evolves
+neuralosd mothball --instance-dir ./mydata --age-days 90 --apply
+
+# 6. audit schema changes before they break probes
+neuralosd drift --instance-dir ./mydata --source ./fresh_dump.csv
+
+# 7. stream live logs into the instance
+neuralosd watch --instance-dir ./logs \
+    --source syslog:/var/log/syslog --rules rules.json --interval 30
+```
+
 ## Recipe: Close the loop — from dissatisfaction to capability
 
 The moat grows from the highest-signal data there is: what users asked for

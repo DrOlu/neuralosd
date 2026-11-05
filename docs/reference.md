@@ -833,6 +833,18 @@ Pi Durable driver (v2.7.0) — durable, resumable build conversations.
 | `build_durable(...)` (pisources) | durable build with the full verification/restore pipeline; storage survives failures for --resume |
 | `pi_durable_available()` / `bridge_script_path()` | node + package checks; the shipped bridge |
 
+## neuralosd.watch
+
+Streaming ingestion (v2.8.1) — bounded buffer, threshold rules, webhooks.
+
+| | |
+|---|---|
+| `RingBuffer(path, cap)` | bounded JSONL event file; `append` (accepts single event or list), `read(limit)` |
+| `tail_new_lines(path, state)` | offset-based tail with rotation detection; returns only NEW lines |
+| `evaluate_rules(rules, events, now)` | threshold rules with subset-match filters and sliding windows; unparsable ts excluded |
+| `post_webhook(url, payload, poster)` | honest True/False; never kills the loop |
+| `run_cycle(instance_dir, sources, rules, ...)` | one poll cycle: ingest → buffer → rules → webhook |
+
 ## neuralosd.pisources
 
 The pi coding agent as builder and operator (v2.6.0).
@@ -926,6 +938,9 @@ hygiene, drift.
 | `propose_transfer(from_dir, to_dir, min_sim, out_path)` | schema-similarity proposal: reconfirmed shared probes with translated golden (re-oracle flagged) + proposed missing probes; never auto-installs |
 | `mothball / mothballed_names / reinstate` | menu hygiene: demote stale probes (never empties the menu), reinstate on demand |
 | `audit_drift(instance_dir, src)` | re-profile a changed source; flag name-caged and enum-caged probes it breaks |
+| `gossip_push(transport, blob, peers, origin)` | publish validated fingerprints via gateway mailbox; blob validated BEFORE send |
+| `gossip_collect(inbox_dir)` | collect + validate peer blobs from the inbox; malformed dropped, counts capped, deduped per peer |
+| `gossip_peer_counts(inbox_dir)` | fp → best peer count (for mesh_count enrichment) |
 
 ## neuralosd.logsources
 
@@ -988,7 +1003,15 @@ neuralosd mesh setup|agents|send|task-create|task-status|task-cancel|task-retry|
 neuralosd temporal --setup | --run-activity NAME | --worker | --schedule-create
     [--instance-dir . --task-queue neuralos --cron "0 2 * * *"]
 neuralosd pi --setup | ask "question" [--model z-ai/glm-5.3-flash]
-neuralosd build "<capability description>" --instance-dir <dir>
+neuralosd build "<capability description>" --instance-dir <dir> \
+    [--durable --resume] [--expect "question"]
+neuralosd roles --instance-dir <dir> --op set|list|show|remove \
+    [--role R --allow P1,P2 --row-filter "col=in:v1,v2"]
+neuralosd watch --instance-dir <dir> --source syslog:/path \
+    --rules rules.json [--once | --interval 30] [--webhook URL]
+neuralosd mesh gossip-push --peers "a,b" [--audit audit.jsonl]
+neuralosd mesh gossip-pull --inbox ./gossip_inbox
+neuralosd doctor --instance-dir <dir>
 ```
 
 `init` sources: `*.csv`, `*.tsv`, `*.xlsx`/`*.xlsm` (deep: formulas, all

@@ -1,5 +1,16 @@
 # Changelog
 
+## Documentation — production deployment guide
+
+- Usage §12: honest production-readiness statement (solid / young /
+  known gaps) + a 6-point operational checklist (token auth, golden
+  bank + CI badge, SLO monitoring, drift audit, sidecar, trap bank).
+- Usage §6e: streaming ingestion, federation gossip, roles management —
+  with full command examples and bounded/lifetime guarantees.
+- Reference: `neuralosd.watch` module; gossip and roles CLI in the
+  command table; `resolve_role_instance` in service.
+- Cookbook: production deployment checklist recipe (7 steps).
+
 ## 2.8.5 — gossip self-ingestion fix
 
 - `gossip-pull` no longer self-ingests its own `gossip_state.json` as a

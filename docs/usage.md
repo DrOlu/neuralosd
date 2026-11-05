@@ -1186,6 +1186,61 @@ neuralosd doctor --instance-dir .      # exit 1 = something needs attention
 Default model `z-ai/glm-5.3-flash` via openrouter; override with
 `--model`/`--provider` or `$NEURALOSD_PI_MODEL` / `$NEURALOSD_PI_PROVIDER`.
 
+## 6e. Streaming, gossip, and roles (v2.8.x)
+
+**Streaming ingestion** — `neuralosd watch` tails log sources into a
+bounded buffer, evaluates threshold rules, and fires webhooks:
+
+```bash
+neuralosd watch --instance-dir . \
+    --source syslog:/var/log/system.log \
+    --source journal \
+    --rules rules.json [--once | --interval 30] [--webhook https://...]
+```
+
+rules.json:
+```json
+[{"name": "ssh failures", "match": {"app": "sshd"},
+  "threshold": 5, "window_minutes": 10, "webhook": "https://hooks..."}]
+```
+
+Alerts fire over THIS cycle's new events only — no endless re-firing.
+The buffer is bounded (default 10,000 events, `--cap` to change) and
+offsets are persisted across restarts.
+
+**Federation gossip** — share anonymized capability-gap fingerprints
+with trusted peers via the synapse-gateway:
+
+```bash
+# mine your audit log and push to peers (hashes + counts, never questions):
+neuralosd mesh gossip-push --peers "edge-a,edge-b" \
+    --audit ask_audit.jsonl --origin my-edge
+# collect what peers pushed to you:
+neuralosd mesh gossip-pull --inbox ./gossip_inbox
+# enrich your gaps report with mesh counts:
+neuralosd gaps ask_audit.jsonl --federation-dir ./gossip_inbox
+```
+
+Peers cannot poison you: fingerprints are validated (16-hex, bounded
+counts), malformed blobs are dropped, counts are capped, and everything
+is deduped per peer. Privacy is enforced at both ends — the questions
+never leave the edge.
+
+**Roles management** — control who sees what:
+
+```bash
+neuralosd roles --instance-dir . --op set --role analyst \
+    --allow row_count,breakdown --row-filter "region=in:North,South"
+neuralosd roles --instance-dir . --op list
+neuralosd ask --instance-dir . --role analyst "units by region"
+# serve: X-NeuralOS-Role: analyst header per request (403 on unknown roles)
+neuralosd roles --instance-dir . --op remove --role analyst
+```
+
+Every change is validated against the live menu (unknown probes refused)
+and journaled to `acl_journal.jsonl`. The row cage recomputes counts so
+the role's view is self-consistent.
+
 ## 7. Run as a Service
 
 ### 7.1 Start the standard service
@@ -1427,7 +1482,68 @@ instance = selector.route("how many open incidents")
 
 ---
 
-## Sizing reference
+## 12. Production deployment
+
+### Is neuralosd ready?
+
+**Yes, for the right use cases.** The verified-answer core (closed-list
+routing, typed refusals, accounting, oracle checks) is hardened and
+battle-tested — 999 unit tests, 56 smoke checks, CI on 5 platforms
+including Windows. The self-improving loop is complete and live-verified
+on real instances. What follows is an honest picture of what is solid
+and what is young.
+
+### Solid — production-grade
+
+- Closed-list routing with refusal gates (below_floor, ambiguous,
+  dropped_filter, action_intent, low_coverage) — zero model dependency
+- Source connectors: CSV/TSV, SQLite, deep Excel (formulas/named
+  ranges/multi-sheet), JSON, syslog, journald, Windows Event Log,
+  authenticated APIs, browser (agent-browser)
+- Cross-source joins (any kind), streaming windows, multi-instance
+- Behavioural banks (golden + traps) with auto-synthesis, delta-gated
+  builds, closure proofs, shadow mode
+- The loop: gaps clustering, negative-feedback ingestion, synonym
+  proposals, oracle receipts, gossip federation
+- Fleet ops: badge, SLO, fleet dashboard, drift re-audit, mothball
+- pi (natural language builder + operator), Temporal durable activities
+
+### Young — works, but first-generation
+
+- RBAC: allow-lists + row filters work; no admin UI (edit acl.json or
+  use `neuralosd roles`); no column-level masking beyond pii_mask
+- Streaming: syslog tail + journald are solid; webhook delivery is
+  fire-and-forget (no retry queue); no webhook auth
+- Gossip: fingerprint push/pull works; no automated gossip loop (run
+  cron); trust is manual (who you push to = who you trust)
+- Pi Durable: experimental upstream; the integration works but the
+  upstream API may change
+- Temporal: activities are solid; the workflow surface is minimal
+
+### Known gaps
+
+- Streaming: no webhook retry queue, no webhook auth, no alert
+  deduplication across restarts
+- RBAC: no column-level masking, no role inheritance
+- Joins: nested-loop only (no hash join for large tables)
+- Gossip: no gossip dedup across restarts beyond the state file
+
+### Operational checklist
+
+1. **Token auth on serve** — always set `--auth-token` in production
+2. **Golden bank** — record at least 3 verified cases with oracle
+   receipts (`golden --record`), run `golden` in CI, publish the badge
+3. **Watch + SLO** — run `neuralosd slo` on a schedule; above 40%
+   refusal rate = your users are asking for capabilities you haven't
+   built yet
+4. **Drift audit** — re-run `neuralosd drift` when the source schema
+   changes; stale probes fail at runtime otherwise
+5. **Sidecar** — provision for frozen binaries that need host libraries
+   (`neuralosd sidecar --setup`)
+6. **Trap bank** — never delete it; every probe has its misuse trap
+   from birth; a confidently answered trap is the worst failure signal
+
+### Sizing reference
 
 | Deployment | vCPU | RAM | Disk | Measured |
 |---|---|---|---|---|
