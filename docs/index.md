@@ -35,6 +35,19 @@ it's what makes it safe for regulated environments.
 - **Streaming ingestion** — `neuralosd watch` tails logs into a bounded
   buffer and alerts on thresholds with webhooks.
 
+## What's new in 2.9.1 — robustness sweep
+
+- **Refusals stay honest over HTTP** — the 422 body now carries the full
+  envelope with a bare-token `refusal_reason`, so `RefusalError` works the
+  same in-process and over the wire.
+- **No silent wrong answers** — thousands separators, negative numbers,
+  dates-as-limits, duplicate probe names and enum collisions are all caught
+  or refused instead of guessed.
+- **Results never 500 the service** — `Decimal`/`date`/`bytes` and cyclic
+  structures are coerced or rendered safely.
+- **Continuous guards** — precision/recall sweep, malformed-input sweep and
+  a new robustness CI workflow across three operating systems.
+
 ## What's new in 2.9.0 — Plasma EDR integration
 
 - **`plasma:` source connector** — reads events.jsonl from Plasma's

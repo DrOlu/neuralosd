@@ -7,10 +7,12 @@ Failure contract: raises NoResults when nothing was produced — callers map
 that to exit 2 / HTTP 422. function_calls is never read (needle 3.0.3 leaves
 it empty even on success); results are the only gate.
 """
+import base64
 import hashlib
 import json
 import os
 import re
+import threading
 import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional
@@ -69,12 +71,20 @@ MASKED = "***masked***"
 # ("how many X exist") can match any probe whose trigger starts the same way,
 # which is exactly how a confident wrong answer used to be chosen. Coverage is
 # measured over what remains after these are removed.
-GENERIC_INTENT = frozenset("""
+#
+# Kept as WORDS here and stemmed into GENERIC_INTENT with `tokens()` below:
+# the gate compares STEMS, so a plural written straight into the set was dead
+# text — "status" (-> "statu"), "exists" (-> "exist") and "cheers" (->
+# "cheer") never matched the token they were meant to neutralise, which turned
+# ordinary phrasing into "unknown domain noun" refusals.
+_GENERIC_INTENT_WORDS = """
     how many much show list give tell me find get what which who where when
     top best most least first last sample example preview all any
     are is there exist exists please number status break down
     some few several couple
-""".split())
+    kindly thanks thank pls plz asap quickly quick just simply briefly hey hi
+    hello ok okay cheers
+"""
 
 # Status and time QUALIFIERS. If the question carries one and the winning
 # probe's vocabulary does not, the answer will silently ignore it - "how many
@@ -182,6 +192,11 @@ def tokens(text):
     return _strip_plural(set(re.findall(r"[a-z0-9_]+", str(text).lower())) - STOP)
 
 
+# Every documented filler word, in the STEM form the gate actually compares.
+GENERIC_INTENT = frozenset().union(
+    *(tokens(w) for w in _GENERIC_INTENT_WORDS.split()))
+
+
 def score_probe(meta: ProbeMeta, q_tokens):
     # The BEST single trigger match dominates, so a probe with one exact
     # phrase beats a probe with many partially-overlapping triggers.
@@ -226,39 +241,164 @@ def _mask_storage_value(v):
     return v
 
 
-def _storage_mask(x):
-    """Key hints AND value shapes (credentials + PII), at every depth."""
+def _is_secret_key(k) -> bool:
+    return isinstance(k, str) and any(h in k.lower() for h in PII_HINTS)
+
+
+def _mask_scalar_under_key(v):
+    """A secret key's value is masked whatever its TYPE.
+
+    The old code only masked `isinstance(v, str)`, so `{"password": 12345678}`
+    and `{"pin": 4321}` went to disk and to the response in clear — a numeric
+    PIN is not less of a secret than a textual password.
+    """
+    if v is None or isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        return MASKED
+    if isinstance(v, (int, float, complex)):
+        return MASKED
+    return v                       # containers are masked element-wise
+
+
+def _mask_all_leaves(v):
+    """Mask every scalar inside a CONTAINER that sits under a secret key.
+
+    `{"password": {"hint": "my dog", "value": "hunter2"}}` used to keep the
+    inner value: the key-hint rule only applied to string leaves, and the inner
+    keys ("hint", "value") are not hint words. Once a key is declared secret,
+    everything under it is secret.
+    """
+    if isinstance(v, dict):
+        return {k: _mask_all_leaves(vv) for k, vv in v.items()}
+    if isinstance(v, list):
+        return [_mask_all_leaves(vv) for vv in v]
+    if v is None or isinstance(v, bool):
+        return v
+    return MASKED
+
+
+def refusal_body(exc):
+    """The HTTP body for a refusal: the ENVELOPE, not a status string.
+
+    A 422 that says only "no results produced" throws away the gate's reason at
+    the exact boundary where a client has to act on it — "that subject is not
+    in this instance" (rephrase), "you asked for a filter I would have had to
+    drop" (the data is here, the filter is not), "that is an action, not a
+    question" (wrong product). Three different reactions, one useless string.
+    """
+    env = dict(getattr(exc, "envelope", None) or {})
+    env.setdefault("error", "no results produced")
+    # A refusal always names its reason, and the reason is a BARE TOKEN so it
+    # can be branched on without matching prose.
+    env.setdefault("refusal_reason", "no_probe_matches")
+    return env
+
+
+def jsonable(x, _seen=None):
+    """Coerce a probe result into types `json.dumps` encodes natively.
+
+    A probe is user code over user data: a Postgres NUMERIC arrives as
+    `Decimal`, a DATE as `datetime.date`, a BLOB as `bytes`. None of those
+    encode without a `default=` hook, so the envelope left the router
+    un-serialisable — a 500 from `/ask` and a client-side crash in the SDK,
+    produced by an ordinary money column rather than by anything exotic.
+
+    `Decimal` becomes a STRING on purpose: a price is not a float, and
+    round-tripping 19.99 through binary floating point is how the number in
+    the answer stops matching the number in the database. Cycles return
+    "<cycle>" for the same reason masking does.
+    """
+    if x is None or isinstance(x, (bool, int, float, str)):
+        return x
+    _seen = _seen if _seen is not None else set()
+    oid = id(x)
+    if oid in _seen and isinstance(x, (dict, list, tuple, set, frozenset)):
+        return "<cycle>"
+    if isinstance(x, dict):
+        _seen.add(oid)
+        try:
+            return {str(k): jsonable(v, _seen) for k, v in x.items()}
+        finally:
+            _seen.discard(oid)
+    if isinstance(x, (list, tuple, set, frozenset)):
+        _seen.add(oid)
+        try:
+            items = sorted(x, key=str) if isinstance(x, (set, frozenset)) \
+                else list(x)
+            return [jsonable(v, _seen) for v in items]
+        finally:
+            _seen.discard(oid)
+    if isinstance(x, bytes):
+        try:
+            return x.decode("utf-8")
+        except UnicodeDecodeError:
+            return "base64:" + base64.b64encode(x).decode("ascii")
+    if isinstance(x, (bytearray, memoryview)):
+        return jsonable(bytes(x), _seen)
+    iso = getattr(x, "isoformat", None)      # date / datetime / time / Decimal?
+    if callable(iso):
+        try:
+            return iso()
+        except Exception:
+            pass
+    return str(x)
+
+
+def _storage_mask(x, _seen=None):
+    """Key hints AND value shapes (credentials + PII), at every depth.
+
+    Cycle-safe: probe results are arbitrary user data and may contain a
+    self-referential structure (or a shared child reachable twice). Without
+    this guard a cyclic result raised RecursionError *inside* the audit write
+    and killed an otherwise successful ask.
+    """
+    if isinstance(x, (dict, list)):
+        if _seen is None:
+            _seen = set()
+        if id(x) in _seen:
+            return "<cycle>"
+        _seen = _seen | {id(x)}
     if isinstance(x, dict):
         out = {}
         for k, v in x.items():
-            if isinstance(v, str) and any(h in k.lower() for h in PII_HINTS):
-                out[k] = MASKED
+            if _is_secret_key(k):
+                out[k] = _mask_scalar_under_key(v) if not isinstance(
+                    v, (dict, list)) else _mask_all_leaves(v)
             else:
-                out[k] = _storage_mask(v)
+                out[k] = _storage_mask(v, _seen)
         return out
     if isinstance(x, list):
-        return [_storage_mask(v) for v in x]
+        return [_storage_mask(v, _seen) for v in x]
     if isinstance(x, str):
         return _mask_storage_value(x)
     return x
 
 
-def mask_pii(x, deep=True):
+def mask_pii(x, deep=True, _seen=None):
     """Mask by key name AND (when deep) by value shape.
 
     deep=False restores the old key-name-only behaviour, which cannot see a
-    secret stored under an innocuous key.
+    secret stored under an innocuous key. Cycle-safe for the same reason as
+    `_storage_mask`: a self-referential result must not crash the answer.
     """
+    if isinstance(x, (dict, list)):
+        if _seen is None:
+            _seen = set()
+        if id(x) in _seen:
+            return "<cycle>"
+        _seen = _seen | {id(x)}
     if isinstance(x, dict):
         out = {}
         for k, v in x.items():
-            if isinstance(v, str) and any(h in k.lower() for h in PII_HINTS):
-                out[k] = MASKED
+            if _is_secret_key(k):
+                out[k] = _mask_scalar_under_key(v) if not isinstance(
+                    v, (dict, list)) else _mask_all_leaves(v)
             else:
-                out[k] = mask_pii(v, deep)
+                out[k] = mask_pii(v, deep, _seen)
         return out
     if isinstance(x, list):
-        return [mask_pii(v, deep) for v in x]
+        return [mask_pii(v, deep, _seen) for v in x]
     if deep and isinstance(x, str):
         return _mask_value(x)
     return x
@@ -296,23 +436,59 @@ def _passes_coverage(meta: ProbeMeta, q_tokens) -> bool:
     return coverage(meta, q_tokens) >= float(floor)
 
 
+def match_enum_value(vals, question):
+    """The enum value the question names — LONGEST match wins.
+
+    `next(...)` returned whichever value happened to be listed first, so a
+    menu holding ["Rock", "Rock and Roll"] answered "Rock and Roll" questions
+    with `genre=Rock`. Longest-match is the only rule that keeps a value that
+    is a prefix of another value from shadowing it.
+    """
+    best = None
+    for v in vals or []:
+        if v is None:
+            continue
+        if re.search(r"\b" + re.escape(str(v)) + r"\b", question, re.I):
+            if best is None or len(str(v)) > len(str(best)):
+                best = v
+    return best
+
+# A number the user wrote with thousands separators, or with a sign in front
+# of it. `\b(\d{1,9})\b` read "top 1,000 customers" as `limit=1` (answering a
+# question nobody asked) and read "last -5 days" as 5 (flipping the sign).
+_INT_IN_QUESTION = re.compile(
+    r"(?<![\d,.])(-?)(\d{1,3}(?:,\d{3})+|\d{1,9})(?![\d,.]\d)")
+
+# Dates are numbers the user did not offer as an argument. "top customers on
+# 2026-10-31" must not be read as limit=2026 (or 31). Removed before number
+# extraction; the same question text is still matched against triggers.
+_DATE_LIKE = re.compile(
+    r"\b\d{4}-\d{1,2}-\d{1,2}\b|\b\d{1,2}/\d{1,2}/\d{2,4}\b"
+    r"|\b\d{4}-\d{2}\b|\b\d{1,2}:\d{2}(?::\d{2})?\b")
+
+
+def _int_from_question(question):
+    """(value, spelled_with_separator) or (None, False)."""
+    m = _INT_IN_QUESTION.search(_DATE_LIKE.sub(" ", question))
+    if not m:
+        return None, False
+    raw = m.group(2)
+    return int(m.group(1) + raw.replace(",", "")), ("," in raw)
+
+
 def _extract_one(argname, spec, question):
     t = spec.get("type", "string")
     if t == "enum":
-        vals = spec.get("values") or []
-        hit = next((v for v in vals
-                    if re.search(r"\b" + re.escape(v) + r"\b", question, re.I)), None)
-        return hit
+        return match_enum_value(spec.get("values") or [], question)
     if t == "pattern":
         m = re.search(spec["pattern"], question)
         if not m:
             return None
         return (m.group(1) if m.groups() else m.group(0)).strip()
     if t == "integer":
-        m = re.search(r"\b(\d{1,9})\b", question)
-        if not m:
+        v, _sep = _int_from_question(question)
+        if v is None:
             return spec.get("default")
-        v = int(m.group(1))
         lo, hi = spec.get("min", 1), spec.get("max", 100)
         if v < lo or v > hi:
             # Never clamp — see ArgOutOfRange.
@@ -345,6 +521,22 @@ class Router:
                  refuse_disjunction: Optional[bool] = None):
         self.probes = list(probes)
         self.metas = [getattr(p, "_probe") for p in self.probes]
+        # Duplicate probe names used to be accepted silently: the menu listed
+        # both, `by_name` kept only the LAST one, so chains, meta-selection and
+        # the OpenAPI paths all resolved to one function while the router could
+        # execute the other. A name collision is a build error, not a coin flip.
+        seen, dupes = set(), []
+        for m in self.metas:
+            if m is None:
+                continue
+            if m.name in seen:
+                dupes.append(m.name)
+            seen.add(m.name)
+        if dupes:
+            raise ValueError(
+                "duplicate probe name(s): " + ", ".join(sorted(set(dupes))) +
+                "\nhint: every probe in a menu needs a unique name — two probes "
+                "sharing one shadow each other in by_name/openapi/chains")
         self.by_name = {m.name: p for p, m in zip(self.probes, self.metas)}
         self.model_fallback = model_fallback
         self.cache_file = cache_file
@@ -426,7 +618,16 @@ class Router:
             for tr in meta.triggers:
                 identity |= tokens(tr)
             for low in self._filter_vocab:
-                if low in identity:
+                # Compare both sides in the SAME space. `identity` holds stems
+                # (`tokens()` strips plurals) while `_filter_vocab` keys are
+                # surface forms, so plain membership never matched a
+                # plural-ending value: "status" was compared against "statu"
+                # and the identity rescue was dead. That let `breakdown` (which
+                # happens to declare `status` as an enum) out-score
+                # `distinct_status` on its own trigger "status list", because
+                # distinct_status was charged UNCONSUMED_PENALTY for ignoring
+                # the very word it is named after.
+                if tokens(low) and tokens(low) <= identity:
                     consumed.add(low)
         return [v for v in self._named_filters(question)
                 if v.lower() not in consumed]
@@ -504,9 +705,15 @@ class Router:
                 allowed = {kk: vv for kk, vv in spec.items()
                            if kk in ("type", "enum", "values", "pattern",
                                      "min", "max", "default")}
-                # OpenAPI convention: the constraint list goes under `enum`
+                # OpenAPI convention: the constraint list goes under `enum`.
+                # `values` is kept too (existing contract: neither consumer has
+                # to know the other's spelling), but `type: enum` must not
+                # survive into a JSON Schema — "enum" is a constraint, not a
+                # type, and generated clients reject the document.
                 if "values" in allowed and "enum" not in allowed:
                     allowed["enum"] = allowed["values"]
+                if allowed.get("type") == "enum":
+                    allowed["type"] = "string"
                 props[k] = allowed
             paths[f"/probes/{m.name}"] = {
                 "post": {"operationId": m.name, "summary": m.description,
@@ -675,27 +882,65 @@ class Router:
                              self.menu_version).encode()).hexdigest()
 
     def _cache_load(self, key):
+        """A cache hit must be a well-formed entry, or it is a miss.
+
+        Truncated/partial cache files (a kill during the write, a hand edit, a
+        sync client racing us) used to crash `ask()` with KeyError['payload']
+        or ValueError — the cache is an OPTIMISATION, so a bad entry can only
+        ever cost a re-computation and never the answer.
+        """
         try:
-            c = json.load(open(self.cache_file, encoding="utf-8"))
+            with open(self.cache_file, encoding="utf-8") as fh:
+                c = json.load(fh)
+            if not isinstance(c, dict):
+                return None
             e = c.get(key)
-            if e and e.get("menu_version") == self.menu_version \
-                    and time.time() - e["ts"] < self.ttl:
-                return e
+            if not isinstance(e, dict):
+                return None
+            if e.get("menu_version") != self.menu_version:
+                return None
+            if not isinstance(e.get("payload"), dict):
+                return None
+            if time.time() - float(e.get("ts") or 0) >= self.ttl:
+                return None
+            return e
         except Exception:
-            pass
-        return None
+            return None
 
     def _cache_store(self, key, env):
+        """Write atomically (tmp + os.replace).
+
+        A plain open("w") truncates first, so a crash or a concurrent writer
+        mid-write left invalid JSON behind and every later ask paid the
+        re-computation (or, before the load guard, crashed).
+        """
+        tmp = None
         try:
             env = self._for_storage(env)
             c = {}
             if os.path.exists(self.cache_file):
-                c = json.load(open(self.cache_file, encoding="utf-8"))
+                try:
+                    with open(self.cache_file, encoding="utf-8") as fh:
+                        loaded = json.load(fh)
+                    if isinstance(loaded, dict):
+                        c = loaded
+                except Exception:
+                    c = {}
             c[key] = {"ts": time.time(), "menu_version": self.menu_version,
                       "payload": env}
-            json.dump(c, open(self.cache_file, "w", encoding="utf-8"))
+            tmp = f"{self.cache_file}.{os.getpid()}.{threading.get_ident()}.tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(c, fh)
+            os.replace(tmp, self.cache_file)
+            tmp = None
         except Exception:
             pass
+        finally:
+            if tmp and os.path.exists(tmp):
+                try:
+                    os.unlink(tmp)
+                except Exception:
+                    pass
 
     def _for_storage(self, env):
         """Masking applied at WRITE time, unconditionally.
@@ -728,6 +973,11 @@ class Router:
             use_cache: bool = True) -> Dict[str, Any]:
         t0 = time.time()
         ask_id = uuid.uuid4().hex[:12]
+        # A non-string question raised AttributeError deep inside normalisation
+        # ("'NoneType' object has no attribute 'strip'"). Say what is wrong.
+        if not isinstance(question, str):
+            raise TypeError(
+                f"question must be a str, got {type(question).__name__}")
         normalized, moved = self._normalize(question.strip())
         if moved:
             print("normalized:", normalized, flush=True)
@@ -931,6 +1181,9 @@ class Router:
 
         if self.pii_mask:
             results = mask_pii(results)
+        # Mask first (it needs the original key types), then make the payload
+        # encodable: Decimal/date/bytes in a result must not 500 the service.
+        results = jsonable(results)
         empty = results in (None, [], {}) or (isinstance(results, list)
                                               and len(results) == 0)
         discarded = self._discarded(used_probe, exec_kwargs, normalized, results)
@@ -944,6 +1197,10 @@ class Router:
             env["discarded"] = discarded
         if empty:
             env["error"] = "no results produced for this question"
+            # Every refusal carries a BARE TOKEN, including the one produced by
+            # a probe that ran and returned nothing. Clients branch on it; an
+            # envelope with only a sentence forces them to string-match prose.
+            env["refusal_reason"] = "no_results"
             self._audit(env)
             raise NoResults(env)
 
@@ -1064,9 +1321,7 @@ def extract_args(meta: ProbeMeta, question: str) -> Optional[Dict[str, Any]]:
         val = None
         if "values" in spec or t == "enum":
             vals = spec.get("values") or []
-            val = next((v for v in vals
-                        if re.search(r"\b" + re.escape(v) + r"\b", question, re.I)),
-                       None)
+            val = match_enum_value(vals, question)
             if val is None:
                 if required:
                     return None

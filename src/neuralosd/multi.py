@@ -30,7 +30,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .router import NoResults
+from .router import NoResults, refusal_body
 
 
 class MultiInstanceServer:
@@ -183,8 +183,8 @@ def make_handler(server: MultiInstanceServer):
             if action == "/ask":
                 try:
                     self._send(200, inst.ask(q))
-                except NoResults:
-                    self._send(422, {"error": "no results produced"})
+                except NoResults as exc:
+                    self._send(422, refusal_body(exc))
                 except Exception as exc:          # noqa: BLE001
                     self._send(500, {"error": str(exc)[:300]})
             else:

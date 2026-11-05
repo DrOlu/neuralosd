@@ -1,4 +1,4 @@
-from .router import NoResults
+from .router import NoResults, refusal_body
 
 """Minimal HTTP service for an Instance: /healthz /ready /ask /openapi.
 
@@ -124,11 +124,23 @@ def serve(instance, port: int = 8877, host: str = "0.0.0.0",
                 return
             try:
                 n = int(self.headers.get("Content-Length") or 0)
-                payload = json.loads(self.rfile.read(n) or b"{}")
-                q = str(payload.get("question") or "").strip()
-            except Exception as exc:
-                self._send(400, {"error": f"bad request: {exc}"})
+                raw = self.rfile.read(n) or b"{}"
+                payload = json.loads(raw)
+            except (ValueError, TypeError) as exc:
+                self._send(400, {"error": f"bad request: malformed JSON ({exc})"})
                 return
+            if not isinstance(payload, dict):
+                self._send(400, {"error": "bad request: body must be a JSON "
+                                          "object with a \"question\" key"})
+                return
+            q = payload.get("question")
+            if q is None:
+                q = ""
+            if not isinstance(q, str):
+                self._send(400, {"error": f"bad request: question must be a "
+                                          f"string, got {type(q).__name__}"})
+                return
+            q = q.strip()
             if not q:
                 self._send(400, {"error": "empty question"})
                 return
@@ -143,8 +155,8 @@ def serve(instance, port: int = 8877, host: str = "0.0.0.0",
                 return
             try:
                 self._send(200, role_inst.ask(q))
-            except NoResults:
-                self._send(422, {"error": "no results produced"})
+            except NoResults as exc:
+                self._send(422, refusal_body(exc))
             except Exception as exc:
                 self._send(500, {"error": str(exc)[:300]})
 

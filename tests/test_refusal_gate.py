@@ -235,15 +235,26 @@ def test_generic_intent_words_are_excluded_from_domain_nouns():
 
 # ── end-to-end: the real confident-wrong, on the real chinook instance ─────
 
-REAL_CHINOOK = "/Users/olu/neuralos-instances/chinook"
+REAL_CHINOOK = os.environ.get("NEURALOSD_CHINOOK_DIR") or \
+    os.path.expanduser("~/neuralos-instances/chinook")
 
 
 @pytest.mark.skipif(not os.path.isdir(REAL_CHINOOK),
                     reason="chinook instance not present")
 def test_chinook_refuses_the_worklog_question(inst=None):
     """The regression that motivated this: chinook has NO worklog data, and the
-    router used to answer confidently with table row counts."""
-    inst = load_instance(REAL_CHINOOK)
+    router used to answer confidently with table row counts.
+
+    This test needs the live instance AND its bridge dependencies (pymysql,
+    pydantic). The directory existing is not enough: on a machine that has the
+    instance but not the extras, `load_instance` raised SystemExit and the
+    suite reported a product failure for a missing optional import — a false
+    negative that hid the real result. Skip with the reason instead.
+    """
+    try:
+        inst = load_instance(REAL_CHINOOK)
+    except (SystemExit, ImportError) as exc:
+        pytest.skip(f"chinook instance not loadable here: {exc}")
     with pytest.raises(NoResults) as e:
         inst.ask("how many worklog entries exist", use_cache=False)
     env = e.value.envelope

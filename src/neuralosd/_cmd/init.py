@@ -1247,8 +1247,13 @@ def _write_probes(out, name, info, extras=None, join_on=None):
     if dims and measures:
         date_col = next((c.get("date_column") for c in cols
                          if c.get("date_column")), None)
+        # "by" and "per" are PREPOSITIONS, not questions: a one-word trigger
+        # that any question containing "by" can hit is a false-positive magnet
+        # and it out-scores the probe that actually answers the question.
+        # (Found by scripts/fp_fn_sweep.py: the generated menu routed
+        # "status list" to breakdown because "by"/"per" diluted it.)
         triggers = ["breakdown", "break down", "broken down", "breakdown by",
-                    "split by", "group by", "per", "by", "trend", "over time"]
+                    "split by", "group by", "trend", "over time"]
         for d in dims:
             triggers += [f"by {d}", f"per {d}", f"{d} breakdown",
                          f"breakdown by {d}"]

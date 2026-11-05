@@ -1,5 +1,68 @@
 # Changelog
 
+## 2.9.1 — robustness sweep (false positives, false negatives, edge cases)
+
+An adversarial hunt across the router, the HTTP service, the SDK and the
+source connectors. Every fix below started as a failing case in
+`tests/test_edge_case_hardening.py` or `tests/test_service_refusal_contract.py`.
+
+**Correctness / false answers**
+- Duplicate probe names are now a hard error (`ValueError`) at `Router`
+  construction — before, the first definition won silently while the menu,
+  OpenAPI and chains disagreed about which one was live.
+- Cyclic probe results no longer `RecursionError` the audit/masking pass;
+  cycles render as `"<cycle>"`.
+- `Decimal` / `date` / `datetime` / `bytes` in a result no longer 500 the
+  service — results are coerced to JSON-safe values (`jsonable`) after PII
+  masking.
+- Enum argument matching now prefers the longest match, so
+  `"count unpaid records"` cannot lose to a shorter enum value that happens
+  to appear first in the list.
+- A probe is no longer charged `UNCONSUMED_PENALTY` for the word it is NAMED
+  after. The rescue compared a surface form (`status`) against a stem
+  (`statu`) so it never fired, and `breakdown` — which merely declares
+  `status` as an enum value of its `dimension` arg — out-scored
+  `distinct_status` on that probe's own trigger `"status list"`.
+- `neuralosd init` no longer writes preposition-only triggers (`"by"`,
+  `"per"`) into the generated `breakdown` probe; a one-word trigger any
+  question containing "by" can hit is a false-positive magnet.
+
+**Refusals (false positives + false negatives)**
+- Numeric arguments in prose: `"top 1,000 customers"` parses as 1000 (was 1)
+  and is refused as `out_of_range` rather than silently clamped.
+- `"last -5 days"` keeps its sign, so the range check refuses it instead of
+  quietly answering about the last 5 days.
+- Dates and times (`2026-10-31`, `31/10/2026`, `2026-10`, `14:30`) are
+  stripped before argument extraction, so a date is never mistaken for a
+  limit.
+- Empty-result and strict-discard refusals now carry a bare-token
+  `refusal_reason` (`no_results_produced` / `dropped_filter`) — they used to
+  ship only a human sentence.
+- `ask()` rejects non-string questions with a typed `TypeError` instead of
+  failing deep inside tokenisation.
+
+**Wire contract**
+- `service.py` and `multi.py` no longer flatten refusals to
+  `{"error": "no results produced"}`: the 422 body is the full envelope with
+  `refusal_reason`, so `RefusalError.envelope["refusal_reason"]` works over
+  HTTP exactly as it does in-process. Documented in `docs/sdk.md`.
+- OpenAPI argument schemas emit `type: "string"` for enum args (was the
+  invalid `type: "enum"`) while still carrying `values` **and** `enum`.
+
+**New guards shipped with this release**
+- `scripts/fp_fn_sweep.py` — precision/recall sweep over the shared refusal
+  fixture: trigger recall, labelled answers, refusal precision, trigger
+  collisions, noise stability. Exits nonzero on threshold violation. A trigger
+  that routes to its probe and is then honestly refused for a missing required
+  argument (`args_not_extractable`) counts as `arg_gated`, not as a miss — the
+  router found the right probe; the question just did not say which one.
+- `scripts/malformed_input_sweep.py` — 14 hostile-file cases (truncated
+  cache, wrong top-level types, bad timestamps, non-JSON bodies, hostile
+  strings).
+- `.github/workflows/robustness.yml` — runs the suite plus both sweeps on
+  ubuntu/macos/windows.
+
+
 ## 2.9.0 — Plasma EDR integration (all four layers)
 
 - **L1**: `plasma:` source — reads events.jsonl, validates, counts parse errors. Dispatch order fixed.

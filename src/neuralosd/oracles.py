@@ -16,7 +16,12 @@ def check_answer(shape, expected, actual):
     """True iff `actual` satisfies the typed oracle (expected, shape)."""
     if expected is None:
         return False
-    shape = (shape or "count").lower()
+    # A non-str shape (a schema dict forwarded by mistake) used to raise
+    # AttributeError inside the oracle, taking down the verify loop that
+    # depends on a plain True/False. An unusable oracle is a failed check.
+    if shape is not None and not isinstance(shape, str):
+        return False
+    shape = (shape or "count").strip().lower()
     if shape in ("count", "integer", "int"):
         try:
             e, a = float(expected), float(actual)

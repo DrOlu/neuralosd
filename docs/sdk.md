@@ -42,8 +42,23 @@ catch (e) { if (e instanceof RefusalError) /* honest decline */; }
 | Client exception | HTTP | Meaning |
 |---|---|---|
 | `AuthError` | 401 | token missing/wrong |
-| `RefusalError` | 422 | instance cannot answer confidently (`.envelope.reason`) |
+| `RefusalError` | 422 | instance cannot answer confidently — `.reason` is the bare token, `.envelope` the full refusal |
 | `TransportError` | — | unreachable, or 5xx after retries |
+
+`RefusalError.reason` is a **bare token** — branch on it, never on the
+message:
+
+| `reason` | means | do |
+|---|---|---|
+| `no_probe_matches` | the subject is not in this instance | rephrase, or ask a different instance |
+| `dropped_filter` | the data is here but the filter is not | drop the filter, or ask for the unfiltered answer |
+| `low_coverage` | too little of the question is known | add the missing noun to the menu |
+| `action_intent` | an action, not a question | this is the wrong product |
+| `out_of_range` | an argument was outside the probe's bounds | widen the range |
+| `no_results` | the probe ran and returned nothing | widen the window |
+
+A 422 always carries the full envelope (`probe`, `scores`, `discarded`), so a
+client can explain the refusal instead of printing "error".
 
 Retries: connection errors and 5xx retry with exponential backoff; 4xx never
 retried (retrying a refusal would be asking for a hallucination).

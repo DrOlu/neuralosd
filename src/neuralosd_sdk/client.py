@@ -41,6 +41,16 @@ class RefusalError(RuntimeError):
         super().__init__(message)
         self.envelope = envelope or {}
 
+    @property
+    def reason(self) -> Optional[str]:
+        """The BARE TOKEN the gate refused with (no_probe_matches,
+        dropped_filter, action_intent, low_coverage, out_of_range, no_results).
+
+        Branch on this, not on the message: the message is prose for a human
+        and is allowed to change between versions.
+        """
+        return self.envelope.get("refusal_reason")
+
 
 class TransportError(RuntimeError):
     """The server could not be reached (after retries) or kept failing."""
