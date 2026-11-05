@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.8.5 — gossip self-ingestion fix
+
+- `gossip-pull` no longer self-ingests its own `gossip_state.json` as a
+  fake peer (found live on the chinook instance). Stale self-ingested
+  entries from previous runs are purged on load.
+
 ## 2.8.4 — release-pipeline hardening (gossip + watch, released)
 
 - v2.8.3 never made it to PyPI: the release tag was created before
