@@ -822,6 +822,27 @@ Returns `{"hard": [(owner, trigger, wrong)], "soft": [...], "bloat": [...]}`.
 
 ---
 
+## neuralosd.plasma
+
+Plasma EDR connector (v2.9.0) — read events.jsonl from Plasma's
+WHIDS/krabsetw/identity sensors on Windows nodes.
+
+| | |
+|---|---|
+| `parse_plasma_event(line)` | one PlasmaEvent JSONL row → validated event dict or None |
+| `parse_plasma_events(path, cap)` | read the store; returns {rows, parse_errors, truncated} |
+| `plasma_rows(path, cap)` | convenience: just the rows (for probe functions) |
+
+## neuralosd.actuate
+
+Actuation with proof (v2.9.0) — named, journaled, reversible actions.
+
+| | |
+|---|---|
+| `actuate(action, target, reason, operator, instance_dir, ...)` | one step: dry-run (mints plan_id), apply (requires plan_id from a seen dry-run), or undo |
+| `ACTIONS` | block_ip, isolate_host, disable_user, rotate_credential, quarantine_file |
+| journal | actuation_journal.jsonl — every step with who/when/what/why/rollback |
+
 ## neuralosd.pidurable
 
 Pi Durable driver (v2.7.0) — durable, resumable build conversations.
@@ -1011,10 +1032,12 @@ neuralosd watch --instance-dir <dir> --source syslog:/path \
     --rules rules.json [--once | --interval 30] [--webhook URL]
 neuralosd mesh gossip-push --peers "a,b" [--audit audit.jsonl]
 neuralosd mesh gossip-pull --inbox ./gossip_inbox
+neuralosd actuate --instance-dir <dir> --action block_ip \
+    --target <ip> --reason "..." --operator NAME [--apply --plan ID]
 neuralosd doctor --instance-dir <dir>
 ```
 
-`init` sources: `*.csv`, `*.tsv`, `*.xlsx`/`*.xlsm` (deep: formulas, all
+`init` sources: `plasma:<path>` (Plasma EDR), `*.csv`, `*.tsv`, `*.xlsx`/`*.xlsm` (deep: formulas, all
 sheets, named ranges), `*.json`/`*.jsonl`, `*.db`/`*.sqlite` (stdlib
 sqlite3), `syslog:<path>`, `journal:[unit]`, `wevtutil:<Channel>`, anything
 else (contract template). See

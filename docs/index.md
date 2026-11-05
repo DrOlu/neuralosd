@@ -35,6 +35,20 @@ it's what makes it safe for regulated environments.
 - **Streaming ingestion** — `neuralosd watch` tails logs into a bounded
   buffer and alerts on thresholds with webhooks.
 
+## What's new in 2.9.0 — Plasma EDR integration
+
+- **`plasma:` source connector** — reads events.jsonl from Plasma's
+  WHIDS/krabsetw/identity sensors on Windows nodes; normalizes to the
+  standard event shape; validation counts parse errors.
+- **Security probes** — `critical_alerts`, `failed_logons`,
+  `new_scheduled_tasks`, `events_by_type`, `events_by_host` — with
+  birth traps.
+- **Actuation with proof** — `neuralosd actuate` (dry-run → plan_id →
+  apply → undo), every step journaled with who/when/what/why/rollback.
+  Five actions: block_ip, isolate_host, disable_user, rotate_credential,
+  quarantine_file.
+- Dispatch order fix: prefix sources checked before extension sources.
+
 ## What's new in 2.8.0 — joins everywhere + roles
 
 - **Joins for every source kind** — `--extra-source` now takes sqlite,

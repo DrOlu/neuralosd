@@ -332,6 +332,7 @@ profiler step) and scaffolds a working instance. Supported sources:
 | `syslog:<path>` (v2.2.0) | **syslog text file** (RFC3164/RFC5424, stdlib only); normalized to `{ts, host, app, level, message}` events; unparsable lines are counted as `parse_errors` (in the bridge's `LOG_INTEGRITY`), never silently dropped |
 | `journal:[UNIT]` (v2.2.0) | **journald** via `journalctl -o json`, newest-first, bounded by `NEURALOSD_LOG_CAP` (default 10000); systemd units become a filter arg |
 | `wevtutil:<Channel>` (v2.2.0) | **Windows Event Log** channel via `wevtutil qe <Channel> /f:XML` — event_id, provider, level, computer, time (read it on the machine that owns the log) |
+| `plasma:<path>` (v2.9.0) | **Plasma EDR** events.jsonl (WHIDS/Sysmon, krabsetw ETW tap, Event Log identity); normalized to security events with `event_type`, `severity`, `technique`; security probes scaffolded |
 | anything else | a contract template the user fills in |
 
 ```bash
@@ -1240,6 +1241,40 @@ neuralosd roles --instance-dir . --op remove --role analyst
 Every change is validated against the live menu (unknown probes refused)
 and journaled to `acl_journal.jsonl`. The row cage recomputes counts so
 the role's view is self-consistent.
+
+## 6f. Plasma EDR integration (v2.9.0)
+
+```bash
+neuralosd init --source plasma:C:\ProgramData\Plasma\data\events.jsonl \
+    --name secops --out ./secops
+
+neuralosd ask --instance-dir ./secops "critical alerts"
+neuralosd ask --instance-dir ./secops "failed logons"
+neuralosd ask --instance-dir ./secops "new scheduled tasks"
+neuralosd ask --instance-dir ./secops "events by type"
+neuralosd ask --instance-dir ./secops "events by host"
+```
+
+**Actuation** — named, journaled, reversible:
+
+```bash
+# dry-run: validates, mints a plan_id, does NOT touch the system
+neuralosd actuate --instance-dir ./secops --action block_ip \
+    --target 1.2.3.4 --reason "C2 beacon" --operator analyst
+
+# apply: fires the action (requires the plan_id from the dry-run)
+neuralosd actuate --instance-dir ./secops --action block_ip \
+    --target 1.2.3.4 --reason "C2 beacon" --operator analyst \
+    --apply --plan <plan_id>
+
+# undo: reverses a previously applied action
+neuralosd actuate --instance-dir ./secops --action block_ip \
+    --target 1.2.3.4 --undo --plan <plan_id>
+```
+
+Five actions: `block_ip`, `isolate_host`, `disable_user`,
+`rotate_credential`, `quarantine_file`. Every step journaled to
+`actuation_journal.jsonl` with who/when/what/why/rollback.
 
 ## 7. Run as a Service
 

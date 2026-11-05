@@ -41,6 +41,41 @@ neuralosd watch --instance-dir ./logs \
     --source syslog:/var/log/syslog --rules rules.json --interval 30
 ```
 
+## Recipe: Security operations with Plasma EDR
+
+Plasma watches your Windows machines; neuralosd turns what it sees into
+verified, auditable answers.
+
+```bash
+# 1. init from the Plasma events store
+neuralosd init --source plasma:C:\ProgramData\Plasma\data\events.jsonl \
+    --name secops --out ./secops
+
+# 2. ask security questions (verified, not guessed)
+neuralosd ask --instance-dir ./secops "critical alerts"
+neuralosd ask --instance-dir ./secops "failed logons"
+neuralosd ask --instance-dir ./secops "new scheduled tasks"
+
+# 3. the loop learns what analysts need
+neuralosd gaps ./secops/ask_audit.jsonl --out gaps.json
+neuralosd slo --instance-dir ./secops --max-refusal-rate 0.4
+
+# 4. actuation: dry-run, review, then apply
+neuralosd actuate --instance-dir ./secops --action block_ip \
+    --target 1.2.3.4 --reason "C2 beacon" --operator analyst
+# review the plan_id, then:
+neuralosd actuate --instance-dir ./secops --action block_ip \
+    --target 1.2.3.4 --reason "C2 beacon" --operator analyst \
+    --apply --plan <plan_id>
+# false positive? undo it:
+neuralosd actuate --instance-dir ./secops --action block_ip \
+    --target 1.2.3.4 --undo --plan <plan_id>
+```
+
+Every action is journaled to `actuation_journal.jsonl` with
+who/when/what/why/rollback. The dry-run is mandatory — you cannot apply
+without a plan_id from a seen dry-run.
+
 ## Recipe: Close the loop — from dissatisfaction to capability
 
 The moat grows from the highest-signal data there is: what users asked for
