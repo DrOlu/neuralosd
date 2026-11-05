@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.9.0 — Plasma EDR integration (all four layers)
+
+- **L1**: `plasma:` source — reads events.jsonl, validates, counts parse errors. Dispatch order fixed.
+- **L2**: security probes — critical_alerts, failed_logons, new_scheduled_tasks, events_by_type, events_by_host.
+- **L3**: verified-answer loop on security data.
+- **L4**: actuation with proof — dry-run → apply → undo.
+
+
 ## Documentation — production deployment guide
 
 - Usage §12: honest production-readiness statement (solid / young /
