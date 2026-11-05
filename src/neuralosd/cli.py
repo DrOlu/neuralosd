@@ -310,6 +310,28 @@ def main():
     p_syn.add_argument("--audit", default=None)
     p_syn.add_argument("--apply", metavar="PROPOSALS_JSON", default=None)
 
+    # actuate — named, journaled, reversible actions (v2.9.0)
+    p_act = sub.add_parser(
+        "actuate",
+        help="Named, journaled, reversible action (dry-run -> apply)")
+    p_act.add_argument("--instance-dir", required=True)
+    p_act.add_argument("--action", required=True,
+                       help="block_ip | isolate_host | disable_user | "
+                            "rotate_credential | quarantine_file")
+    p_act.add_argument("--target", required=True)
+    p_act.add_argument("--reason", default=None,
+                       help="WHY — required")
+    p_act.add_argument("--operator", default=None,
+                       help="who is doing this")
+    p_act.add_argument("--dry-run", action="store_true")
+    p_act.add_argument("--apply", action="store_true",
+                       help="fire the action (needs --plan from a dry-run)")
+    p_act.add_argument("--plan", default=None,
+                       help="the plan_id from a previous dry-run")
+    p_act.add_argument("--undo", action="store_true",
+                       help="reverse a previously applied action")
+    p_act.add_argument("--undo-plan", default=None, metavar="PLAN_ID")
+
     # watch — streaming ingestion (v2.8.1)
     p_w = sub.add_parser(
         "watch", help="Stream sources into a bounded buffer; alert on rules")
@@ -667,6 +689,9 @@ def main():
     elif a.command == "watch":
         from ._cmd import watch
         raise SystemExit(watch.run(a) or 0)
+    elif a.command == "actuate":
+        from ._cmd import actuate
+        raise SystemExit(actuate.run(a) or 0)
     elif a.command == "build":
         from ._cmd import build
         raise SystemExit(build.run(a) or 0)
