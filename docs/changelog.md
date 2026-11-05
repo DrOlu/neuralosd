@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.9.2 — Windows console crash on `docs`
+
+- `neuralosd docs usage` (the first command a new user runs) exited 1 with
+  `UnicodeEncodeError: 'charmap' codec can't encode characters` on Windows,
+  where the console defaults to cp1252 — and on any POSIX C locale, where it
+  defaults to ASCII. The CLI now reconfigures stdout/stderr with
+  `errors="replace"`, so an unrepresentable glyph degrades to a placeholder
+  instead of taking the command down. Found by the new
+  `.github/workflows/robustness.yml` windows-latest job, which is why that
+  matrix exists.
+- Regression test simulates a cp1252 stream, so the crash is caught on every
+  platform, not only on Windows.
+
 ## 2.9.1 — robustness sweep (false positives, false negatives, edge cases)
 
 An adversarial hunt across the router, the HTTP service, the SDK and the

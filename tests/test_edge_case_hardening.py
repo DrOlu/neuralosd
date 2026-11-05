@@ -492,3 +492,24 @@ def test_sweep_calls_an_arg_gated_trigger_routed_not_missed(tmp_path):
     assert rep["trigger_recall"] == 1.0
     assert rep["trigger_collisions"] == 0
     assert not [f for f in rep["findings"] if f["type"] == "trigger_collision"]
+
+
+def test_docs_command_survives_a_non_utf8_console(monkeypatch):
+    """`neuralosd docs usage` died with UnicodeEncodeError on Windows.
+
+    Windows consoles default to cp1252 (POSIX C locales to ASCII), so printing
+    the shipped documentation raised before a single line reached the user.
+    The CLI now degrades unrepresentable glyphs instead of the command.
+    """
+    import io
+    from neuralosd import cli
+
+    buf = io.BytesIO()
+    stream = io.TextIOWrapper(buf, encoding="cp1252", errors="strict",
+                              newline="")
+    monkeypatch.setattr(sys, "argv", ["neuralosd", "docs", "usage"])
+    monkeypatch.setattr(sys, "stdout", stream)
+
+    cli.main()                       # must not raise UnicodeEncodeError
+    stream.flush()
+    assert b"neuralOS Usage" in buf.getvalue()

@@ -54,7 +54,31 @@ def _gossip_transport(a):
                        timeout=getattr(a, "timeout", 30))
 
 
+def _harden_streams():
+    """Never let a console encoding turn an answer (or a doc page) into a crash.
+
+    Windows consoles default to cp1252 and POSIX C locales to ASCII, so
+    `print()` of the shipped documentation raised
+
+        UnicodeEncodeError: 'charmap' codec can't encode characters …
+
+    and `neuralosd docs usage` — the command a new user runs first — exited 1
+    with a traceback. Setting errors="replace" keeps every ASCII character
+    readable and degrades only the glyphs the console cannot draw; streams that
+    are already UTF-8 (macOS, Linux, Windows Terminal) are untouched.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            enc = (getattr(stream, "encoding", None) or "").lower()
+            if enc.replace("-", "") in ("utf8", "utf8mb4", "cp65001"):
+                continue
+            stream.reconfigure(errors="replace")
+        except Exception:
+            pass
+
+
 def main():
+    _harden_streams()
     ap = argparse.ArgumentParser(
         prog="neuralosd",
         description="Deterministic-first agentic runtime for neuralOS")
