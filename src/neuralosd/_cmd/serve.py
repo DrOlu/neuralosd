@@ -1,12 +1,11 @@
 """`neuralosd serve` — HTTP service for one instance."""
+import os
 import sys
 
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
 
 
 def run(a):
-    import os
-
     from ._common import load_instance
     from ..service import serve
 

@@ -206,3 +206,122 @@ class TestRegistry:
         (tmp_path / "readme.txt").write_text("not a dir", encoding="utf-8")
         r = Registry(str(tmp_path))
         assert set(r.discover()) == {"real"}
+
+
+# ── the CLI layer (run_multi) — the layer the old tests skipped ────────────
+# Every test above builds MultiInstanceServer / make_handler directly, which
+# is exactly how v2.9.4 shipped a `serve --instances-dir` that crashed with
+# NameError: name 'os' is not defined before binding a single socket.
+# These tests go through the real CLI entry point.
+
+import argparse
+import socket
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+
+
+def _free_port() -> int:
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def _make_cli_instances(tmp_path):
+    """Two minimal instance dirs, both answering the 'health' question."""
+    for name in ("alpha", "beta"):
+        d = tmp_path / name
+        d.mkdir()
+        (d / "probes.py").write_text(
+            'from neuralosd import probe\n'
+            '@probe(description="Health check", triggers=["health"], '
+            'name="health_probe")\n'
+            'def health_probe():\n'
+            '    return {"ok": True}\n'
+            'PROBES = [health_probe]\n',
+            encoding="utf-8")
+    return str(tmp_path)
+
+
+def _serve_ns(instances_dir, port, host="127.0.0.1", token=None):
+    return argparse.Namespace(instances_dir=instances_dir, port=port,
+                              host=host, strict=False, auth_token=token)
+
+
+def _wait_healthz(port, timeout=15.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/healthz", timeout=2) as r:
+                if r.status == 200:
+                    return True
+        except Exception:
+            time.sleep(0.15)
+    return False
+
+
+class TestServeCli:
+    def test_run_multi_binds_and_serves(self, tmp_path):
+        """Regression for v2.9.4: run_multi crashed with
+        NameError: name 'os' is not defined on line 47 — the CLI path was
+        never exercised because tests built the server objects directly."""
+        from neuralosd._cmd.serve import run_multi
+        d = _make_cli_instances(tmp_path)
+        port = _free_port()
+        t = threading.Thread(target=run_multi, args=(_serve_ns(d, port),),
+                             daemon=True)
+        t.start()
+        assert _wait_healthz(port), "multi-instance server never came up"
+
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/instances", timeout=10) as r:
+            body = json.loads(r.read())
+        assert set(body["instances"]) >= {"alpha", "beta"}
+
+        # ask routes by path, lazy-loads the instance on first hit
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/alpha/ask",
+            data=json.dumps({"question": "health"}).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            body = json.loads(r.read())
+        assert body.get("probe") == "health_probe"
+
+        # second instance is independent
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/beta/ask",
+            data=json.dumps({"question": "health"}).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            assert json.loads(r.read()).get("probe") == "health_probe"
+
+    def test_serve_subprocess_multidir(self, tmp_path):
+        """Shell out to `python -m neuralosd serve --instances-dir ...` and
+        wait for /healthz. A subprocess is the only way to catch a crash that
+        happens before the server binds — in-process threads mask it."""
+        d = _make_cli_instances(tmp_path)
+        port = _free_port()
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "neuralosd", "serve",
+             "--instances-dir", d, "--port", str(port)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            assert _wait_healthz(port, timeout=30), (
+                "subprocess never served /healthz")
+            with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/instances", timeout=10) as r:
+                assert set(json.loads(r.read())["instances"]) == {"alpha", "beta"}
+        finally:
+            proc.terminate()
+            try:
+                _, err = proc.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                _, err = proc.communicate()
+        err = (err or b"").decode(errors="replace")
+        assert "NameError" not in err and "Traceback" not in err, err
