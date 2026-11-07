@@ -35,6 +35,37 @@ it's what makes it safe for regulated environments.
 - **Streaming ingestion** — `neuralosd watch` tails logs into a bounded
   buffer and alerts on thresholds with webhooks.
 
+## What's new in 2.9.4 — mesh hardening: preflight, provenance, trust
+
+- **Preflight — "would you even answer this?"** — `Router.dry_run()` and
+  `mesh preflight` run the decision half of the engine with the execution
+  half removed: a neighbour (or your own tooling) learns `answered` /
+  `refused` + `refusal_reason` + the score vector **without touching a
+  row**. Fan-out over an estate collapses to N cheap probes + 1 real ask.
+- **Signed, versioned verdicts** — every mesh answer and refusal carries
+  `menu_version` / `gate_version` / `mesh_protocol_version` and a
+  signature over the *sent* view (hmac-sha256 when a mesh key is set).
+  Redaction happens before signing, so the signature always matches what
+  was sent. Peers on a stale menu are detectable; tampering is detectable.
+- **Trust classes** — `TrustPolicy` over `self` / `trusted` / `known` /
+  `untrusted` decides what crosses the boundary: raw scores vs a coarse
+  confidence band, filter ledger vs a labelled `"withheld"`. Strangers can
+  no longer enumerate your probe menu from refusals, and capabilities
+  advertise trigger *types*, never enum values.
+- **Honest delegation** — a peer's refusal surfaces as a refusal (with its
+  reason), answers are verified against what the peer advertised and
+  stamped `verified: true` / `answered_unverified`, loops are cut by a
+  visited set, chains by `MAX_HOPS=3`, and everything by a deadline.
+- **Discovery with the router's own brain** — peers are shortlisted by the
+  same scorer that routes local questions, filtered by preflight; plus
+  bounded heartbeats with menu-drift detection and two-way gap gossip with
+  honest per-cluster verdicts (`covered` / `extend_trigger` /
+  `new_subject` / `new_probe`).
+- **Release-engine fix** — component auto-updates now bump ALL FOUR version
+  carriers (pyproject, runtime, SDK, npm) together. 2.9.3 was a
+  dependency-only release (boxlite 0.12.0) that shipped between here and
+  the mesh work; PyPI never reuses versions, so the mesh release is 2.9.4.
+
 ## What's new in 2.9.1 — robustness sweep
 
 - **Refusals stay honest over HTTP** — the 422 body now carries the full
