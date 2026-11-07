@@ -522,7 +522,11 @@ class TestDelegation:
 
     def test_deadline_cut_before_the_call(self, tmp_path):
         t = StubTransport()
-        dl = S.Deadline.from_ms(1)
+        # from_ms(0) is definitively spent: remaining <= 0 the instant it
+        # is created. (from_ms(1) was a race — on Windows CI the check can
+        # run inside the same millisecond and the budget is still alive.)
+        dl = S.Deadline.from_ms(0)
+        assert dl.expired()
         d = S.delegate_to_peer(t, {"agent_id": "p"}, "q", deadline=dl)
         assert d["status"] == "deadline_exceeded"
         assert t.calls == []
