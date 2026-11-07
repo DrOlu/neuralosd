@@ -115,11 +115,41 @@ class _PathRouter:
         return None, path
 
 
-def make_handler(server: MultiInstanceServer):
-    """Creates an HTTP request handler that routes by path to instances."""
+def make_handler(server: MultiInstanceServer, auth_token: str = None):
+    """Creates an HTTP request handler that routes by path to instances.
+
+    With auth_token set, every route except the liveness/readiness probes
+    (/healthz, /{name}/healthz, /{name}/ready) requires credentials —
+    `Authorization: Bearer <token>` or `X-API-Token: <token>` — the same
+    contract as single-instance `neuralosd serve` (see service.serve).
+    v2.9.4 and earlier accepted --auth-token on the CLI and silently
+    dropped it here, serving every instance with no auth and no warning.
+    """
+    from .service import _token_ok
     from http.server import BaseHTTPRequestHandler
 
     class Handler(BaseHTTPRequestHandler):
+        def _authorized(self) -> bool:
+            if not auth_token:
+                return True
+            auth = self.headers.get("Authorization") or ""
+            if auth.startswith("Bearer ") and _token_ok(
+                    auth[len("Bearer "):], auth_token):
+                return True
+            return _token_ok(self.headers.get("X-API-Token"), auth_token)
+
+        def _open_path(self) -> bool:
+            # liveness/readiness stay open (orchestrator probes carry no
+            # credentials); everything else — /instances, /ask, /menu,
+            # /openapi.json, /query — is locked when a token is configured.
+            p = self.path.split("?", 1)[0].rstrip("/") or "/"
+            return (p == "/healthz" or p.endswith("/healthz")
+                    or p.endswith("/ready"))
+
+        def _reject(self):
+            self._send(401, {"error": "unauthorized: pass Authorization: "
+                                       "Bearer <token> or X-API-Token"})
+
         def log_message(self, *a):
             pass
 
@@ -132,6 +162,9 @@ def make_handler(server: MultiInstanceServer):
             self.wfile.write(body)
 
         def do_GET(self):
+            if not self._authorized() and not self._open_path():
+                self._reject()
+                return
             if self.path == "/healthz":
                 self._send(200, {"ok": True, "server": "neuralosd-multi"})
                 return
@@ -162,6 +195,9 @@ def make_handler(server: MultiInstanceServer):
                                           f"for instance {name!r}"})
 
         def do_POST(self):
+            if not self._authorized():
+                self._reject()
+                return
             name, action = _PathRouter.parse(self.path)
             if name is None:
                 self._send(404, {"error": "not found"})
@@ -195,10 +231,17 @@ def make_handler(server: MultiInstanceServer):
 
 
 def serve_multi(server: MultiInstanceServer, host: str = "127.0.0.1",
-                port: int = 8877):
-    """Start the multi-instance HTTP server. Blocks."""
-    handler = make_handler(server)
+                port: int = 8877, auth_token: str = None):
+    """Start the multi-instance HTTP server. Blocks.
+
+    auth_token: optional bearer token; when set, all routes except the
+    liveness/readiness probes require Authorization: Bearer <token> (or
+    X-API-Token) — same contract as service.serve for single instances.
+    """
+    handler = make_handler(server, auth_token=auth_token)
     httpd = ThreadingHTTPServer((host, port), handler)
     print(f"neuralosd multi-instance server -> http://{host}:{port} "
-          f"({len(server.names)} instances)", flush=True)
+          f"({len(server.names)} instances)"
+          + ("  [token auth ON]" if auth_token else "  [NO AUTH]"),
+          flush=True)
     httpd.serve_forever()

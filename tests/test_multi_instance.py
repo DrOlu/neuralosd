@@ -325,3 +325,88 @@ class TestServeCli:
                 _, err = proc.communicate()
         err = (err or b"").decode(errors="replace")
         assert "NameError" not in err and "Traceback" not in err, err
+
+    # ── Bug 2 (v2.9.4): --auth-token was silently ignored in multi mode ────
+
+    def test_run_multi_enforces_auth_token(self, tmp_path):
+        """With a token, every route except the liveness/readiness probes
+        returns 401 without credentials — same contract as single-instance
+        serve. On v2.9.4 the token was accepted on the CLI and then dropped:
+        serve_multi() had no auth parameter and no 401 anywhere."""
+        from neuralosd._cmd.serve import run_multi
+        d = _make_cli_instances(tmp_path)
+        port = _free_port()
+        token = "s3cret-token-xyz"
+        t = threading.Thread(
+            target=run_multi, args=(_serve_ns(d, port, token=token),),
+            daemon=True)
+        t.start()
+        assert _wait_healthz(port), "multi-instance server never came up"
+        B = f"http://127.0.0.1:{port}"
+
+        def get(path, headers=None, method="GET", data=None):
+            req = urllib.request.Request(B + path, headers=headers or {},
+                                         data=data, method=method)
+            try:
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    return r.status, json.loads(r.read())
+            except urllib.error.HTTPError as e:
+                return e.code, json.loads(e.read())
+
+        auth = {"Authorization": f"Bearer {token}"}
+        # open: liveness + readiness, with and without credentials
+        assert get("/healthz")[0] == 200
+        assert get("/alpha/healthz")[0] == 200
+        assert get("/healthz", auth)[0] == 200
+        code, _ = get("/alpha/ready")          # readiness stays OPEN ...
+        assert code != 401, "/ready must not require auth"
+        # locked: instance data routes
+        assert get("/instances")[0] == 401
+        assert get("/alpha/openapi.json")[0] == 401
+        assert get("/alpha/menu")[0] == 401
+        assert get("/alpha/ask", method="POST",
+                   data=json.dumps({"question": "health"}).encode())[0] == 401
+        # wrong token is still a 401
+        assert get("/instances",
+                   {"Authorization": "Bearer wrong-token"})[0] == 401
+        # correct credentials unlock everything
+        assert get("/instances", auth)[0] == 200
+        code, body = get("/alpha/ask", auth, method="POST",
+                         data=json.dumps({"question": "health"}).encode())
+        assert code == 200 and body.get("probe") == "health_probe"
+        # X-API-Token is honoured too (single-instance contract)
+        assert get("/instances", {"X-API-Token": token})[0] == 200
+
+    def test_run_multi_token_from_env_and_threading(self, tmp_path,
+                                                    monkeypatch, capsys):
+        """$NEURALOSD_API_TOKEN is honoured in multi mode, and the token is
+        actually threaded into serve_multi (v2.9.4 dropped it on the floor)."""
+        from neuralosd import multi
+        d = _make_cli_instances(tmp_path)
+        seen = {}
+
+        def fake_serve(server, host="127.0.0.1", port=0, auth_token=None):
+            seen["auth"], seen["host"] = auth_token, host
+
+        monkeypatch.setattr(multi, "serve_multi", fake_serve)
+        monkeypatch.setenv("NEURALOSD_API_TOKEN", "env-token-42")
+        from neuralosd._cmd.serve import run_multi
+        run_multi(_serve_ns(d, 8877, host="0.0.0.0"))
+        assert seen["auth"] == "env-token-42"
+        err = capsys.readouterr().err
+        assert "token auth" in err  # loud, not silent
+
+    def test_run_multi_warns_loudly_without_token_on_wide_bind(
+            self, tmp_path, monkeypatch, capsys):
+        """No token + non-loopback bind → the SAME loud warning the
+        single-instance path prints. On v2.9.4 multi mode served every
+        instance's data with no auth AND no warning."""
+        from neuralosd import multi
+        d = _make_cli_instances(tmp_path)
+        monkeypatch.delenv("NEURALOSD_API_TOKEN", raising=False)
+        monkeypatch.setattr(multi, "serve_multi",
+                            lambda *a, **k: None)
+        from neuralosd._cmd.serve import run_multi
+        run_multi(_serve_ns(d, 8877, host="0.0.0.0"))
+        err = capsys.readouterr().err
+        assert "WARNING" in err and "NO" in err and "--auth-token" in err
