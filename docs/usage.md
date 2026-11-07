@@ -586,6 +586,31 @@ curl -X POST http://localhost:8877/ask \
     -d '{"question": "how many records"}'
 ```
 
+#### Multi-instance: one door, many instances (2.9.5)
+
+`serve --instances-dir DIR` turns one process into a path-routed door for a
+whole directory of instances — each subdirectory of `DIR` is a full instance
+(lazy-loaded on first request), addressed as `/{name}/ask`, `/{name}/menu`,
+`/{name}/openapi.json`; `GET /instances` lists what is served.
+
+```bash
+neuralosd serve --instances-dir ~/instances --port 8877
+
+# every instance is a first-class door:
+curl -X POST http://localhost:8877/inv/ask \
+    -d '{"question": "how many records"}'
+curl http://localhost:8877/instances
+```
+
+**Auth (2.9.5).** `--auth-token` / `$NEURALOSD_API_TOKEN` is enforced here
+exactly as in single-instance serve: with a token set, every route except the
+liveness/readiness probes (`/healthz`, `/{name}/healthz`, `/{name}/ready`)
+requires `Authorization: Bearer <token>` or `X-API-Token: <token>` and
+returns 401 otherwise. 2.9.4 and earlier accepted the flag and silently
+ignored it in this mode. Binding a non-loopback address without a token
+prints the same loud warning single-instance serve prints — it does not
+refuse, but it says what you are about to expose.
+
 ### What a response looks like
 
 ```json
@@ -639,7 +664,8 @@ neuralosd deploy --instance-dir ./inst --name myinst \
   R5  the instance is staged to /app/<name>/ — probes.py, bridge.py,
       golden.json, traps.json — AND the data file, with the bridge's
       SOURCE rewritten on the host to the staged path
-  R6  `neuralosd serve` starts via the console script (-m does not exist)
+  R6  `neuralosd serve` starts via the console script or `python -m neuralosd`
+      (2.9.5 added `__main__.py`; before that only the console script worked)
   R7  self-test INSIDE the VM: a real ask through localhost
   R8  self-test from the HOST through the forward
 

@@ -1,5 +1,53 @@
 # Changelog
 
+## 2.9.5 — serve: multi-instance startup crash + auth enforcement
+
+Two defects in `neuralosd serve --instances-dir` (multi-instance mode), both
+shipped in 2.9.4 and every 2.9.x, both first hit in the published Windows
+binary:
+
+**1. Startup crash (all platforms).** `serve --instances-dir DIR` died before
+binding a socket with `NameError: name 'os' is not defined` — `run_multi()`
+uses `os` four times but only `run()` (the single-instance path) had an `os`
+binding, via a function-local import. The CLI layer was the one layer
+tests never exercised: `tests/test_multi_instance.py` built
+`MultiInstanceServer` and `make_handler` directly, skipping the code that
+ships. Fixed by hoisting `os` to a module-level import; an AST sweep of the
+whole package for the same defect class (a name whose only binding is a
+sibling function's local import) found no other instances — the remaining
+candidates are all closures over an enclosing function's import. Also added
+`src/neuralosd/__main__.py` so `python -m neuralosd` works like the console
+script (it previously died with "cannot be directly executed", which is why
+the subprocess smoke test needs it).
+
+**2. Auth bypass.** `--auth-token` / `$NEURALOSD_API_TOKEN` was resolved and
+enforced only by the single-instance path. Multi mode never read the token:
+`serve_multi()` had no auth parameter and `multi.py` had no Authorization
+check and no 401 anywhere — so binding wide with a token served every
+instance's data unauthenticated, with none of the loud warning the
+single-instance path prints. Multi now matches the single-instance contract:
+with a token configured, every route except `/healthz`, `/{name}/healthz`
+and `/{name}/ready` requires `Authorization: Bearer <token>` or
+`X-API-Token: <token>` (constant-time compared, same 401 body); startup
+prints `[token auth ON]` / `[NO AUTH]`; a non-loopback bind without a token
+prints the same loud warning (existing policy is warn-then-bind — the
+silence was the dangerous part). Routing, response shapes and lazy loading
+are unchanged; no new dependencies.
+
+Test discipline: the new CLI-layer tests call `run_multi()` with a real
+argparse namespace and two minimal instances, one test shells out to
+`python -m neuralosd serve --instances-dir ...` (a crash before bind can only
+be caught in a subprocess), and the auth tests pin the full 401 matrix.
+Every new test fails on 2.9.4 and passes after.
+
+**Release verification for the artefacts themselves:** new
+`verify-release.yml` workflow (manual dispatch, takes a tag) downloads the
+published binaries from the GitHub release and — on a real windows-latest
+runner, where 2.9.4 crashed — re-runs the CLI smoke suite plus a
+multi-instance regression: clean missing-dir failure (no NameError), server
+up, `/healthz` open, `/instances` and `/{name}/ask` 401 without credentials,
+Bearer and X-API-Token reach both instances.
+
 ## 2.9.4 — mesh hardening: preflight, provenance, trust, verification
 
 > Numbering note: 2.9.3 was consumed by the component auto-updater between
