@@ -220,6 +220,40 @@ def test_bump_version(tmp_path, part, expect):
     assert expect in init.read_text(encoding="utf-8")
 
 
+def test_bump_covers_sdk_and_npm(tmp_path):
+    """A component release must move ALL FOUR version carriers together.
+    The 2.9.3 auto-bump moved only pyproject + the runtime __init__, so
+    PyPI said 2.9.3 while the SDK and npm stayed on 2.9.2."""
+    py, init = _fake_repo(tmp_path)
+    sdk = tmp_path / "src" / "neuralosd_sdk" / "__init__.py"
+    sdk.parent.mkdir(parents=True)
+    sdk.write_text('__version__ = "1.2.3"\n', encoding="utf-8")
+    npm = tmp_path / "npm" / "neuralosd" / "package.json"
+    npm.parent.mkdir(parents=True)
+    npm.write_text('{\n  "name": "neuralosd",\n  "version": "1.2.3",\n'
+                   '  "bin": {"neuralosd": "cli.js"}\n}\n',
+                   encoding="utf-8")
+    _, new = cv.bump_version("patch", pyproject=py, init_py=init)
+    assert f'__version__ = "{new}"' in sdk.read_text(encoding="utf-8")
+    assert f'"version": "{new}"' in npm.read_text(encoding="utf-8")
+    # the other package.json keys survive untouched
+    body = npm.read_text(encoding="utf-8")
+    assert '"neuralosd": "cli.js"' in body
+
+
+def test_bump_with_missing_sdk_and_npm_is_inert(tmp_path):
+    """A fake repo without the sibling files must not touch the REAL
+    checkout's SDK or npm manifest — the bound-default rule."""
+    real_sdk = cv.REPO_ROOT / "src" / "neuralosd_sdk" / "__init__.py"
+    real_npm = cv.REPO_ROOT / "npm" / "neuralosd" / "package.json"
+    before_sdk = real_sdk.read_text(encoding="utf-8")
+    before_npm = real_npm.read_text(encoding="utf-8")
+    py, init = _fake_repo(tmp_path)
+    cv.bump_version("patch", pyproject=py, init_py=init)
+    assert real_sdk.read_text(encoding="utf-8") == before_sdk
+    assert real_npm.read_text(encoding="utf-8") == before_npm
+
+
 def test_bump_keeps_other_version_strings(tmp_path):
     py, init = _fake_repo(tmp_path)
     py.write_text(py.read_text(encoding="utf-8") + 'requires-python = ">=3.10"\n', encoding="utf-8")

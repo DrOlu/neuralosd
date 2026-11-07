@@ -880,7 +880,7 @@ The pi coding agent as builder and operator (v2.6.0).
 
 ## neuralosd.synapse
 
-Synapse-gateway mesh protocol (v2.9.3 — preflight, provenance, trust,
+Synapse-gateway mesh protocol (v2.9.4 — preflight, provenance, trust,
 verification over the /api/mesh/* wire).
 
 | | |

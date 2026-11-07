@@ -1227,7 +1227,7 @@ counts), malformed blobs are dropped, counts are capped, and everything
 is deduped per peer. Privacy is enforced at both ends — the questions
 never leave the edge.
 
-**Mesh hardening (v2.9.3)** — the instance's mesh face now speaks a
+**Mesh hardening (v2.9.4)** — the instance's mesh face now speaks a
 versioned, signed, trust-classed protocol:
 
 ```bash

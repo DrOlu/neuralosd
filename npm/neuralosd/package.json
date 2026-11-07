@@ -1,6 +1,6 @@
 {
   "name": "neuralosd",
-  "version": "2.9.3",
+  "version": "2.9.4",
   "description": "neuralOSd CLI — installer for the verified agent-runtime binaries (gateway/runtime for neuralOS instances).",
   "license": "Apache-2.0",
   "author": "Hyperspace Technologies <agent@superagent.ng>",

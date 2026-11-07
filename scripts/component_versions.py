@@ -194,10 +194,26 @@ def current_version(pyproject: Path | None = None) -> str:
 
 
 def bump_version(part: str = "patch", pyproject: Path | None = None,
-                 init_py: Path | None = None) -> tuple[str, str]:
-    """Increment the version in pyproject.toml and __init__.py."""
+                 init_py: Path | None = None,
+                 sdk_init_py: Path | None = None,
+                 npm_package_json: Path | None = None) -> tuple[str, str]:
+    """Increment the version across the board.
+
+    Four files carry the release version and they must move TOGETHER —
+    pyproject.toml, the runtime __init__, the SDK __init__ and the npm
+    package.json. The SDK and npm paths default to SIBLINGS of the
+    pyproject given (never the repository's own files), so tests that hand
+    in a fake repo are inert for files the fake repo does not have — the
+    same bound-default rule that keeps ``init_py`` from touching the real
+    checkout.
+    """
     pyproject = Path(pyproject) if pyproject else PYPROJECT
     init_py = Path(init_py) if init_py else INIT_PY
+    root = pyproject.parent
+    if sdk_init_py is None:
+        sdk_init_py = root / "src" / "neuralosd_sdk" / "__init__.py"
+    if npm_package_json is None:
+        npm_package_json = root / "npm" / "neuralosd" / "package.json"
     old = current_version(pyproject)
     nums = re.findall(r"\d+", old)[:3]
     while len(nums) < 3:
@@ -219,6 +235,14 @@ def bump_version(part: str = "patch", pyproject: Path | None = None,
     if init_py.is_file():
         body = init_py.read_text(encoding="utf-8")
         init_py.write_text(body.replace(old, new), encoding="utf-8")
+    if sdk_init_py.is_file() and sdk_init_py != init_py:
+        body = sdk_init_py.read_text(encoding="utf-8")
+        sdk_init_py.write_text(body.replace(old, new), encoding="utf-8")
+    if npm_package_json.is_file():
+        body = npm_package_json.read_text(encoding="utf-8")
+        npm_package_json.write_text(
+            re.sub(r'("version"\s*:\s*")[^"]+(")',
+                   rf"\g<1>{new}\g<2>", body, count=1), encoding="utf-8")
     return old, new
 
 

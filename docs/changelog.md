@@ -1,6 +1,15 @@
 # Changelog
 
-## 2.9.3 — mesh hardening: preflight, provenance, trust, verification
+## 2.9.4 — mesh hardening: preflight, provenance, trust, verification
+
+> Numbering note: 2.9.3 was consumed by the component auto-updater between
+> here and the mesh work below (boxlite 0.11.0 → 0.12.0 — a dependency-only
+> release with no code changes). PyPI never reuses a version, so the mesh
+> release ships as 2.9.4. The auto-updater now bumps ALL FOUR version
+> carriers (pyproject, runtime `__init__`, SDK `__init__`, npm package.json)
+> — 2.9.3 left the SDK and npm behind on 2.9.2, which broke the
+> versions-equal-across-the-board invariant that
+> `tests/test_component_versions.py` pins.
 
 The Synapse-gateway integration grew from "a REST client and an ask loop" into
 a protocol: every verdict carries its versions and a signature, callers are

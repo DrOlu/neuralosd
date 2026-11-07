@@ -1,4 +1,4 @@
-"""v2.9.3 mesh hardening — preflight, provenance, trust, verification.
+"""Mesh protocol hardening — preflight, provenance, trust, verification.
 
 Every test runs against stubs. No NATS, no gateway, no network in CI.
 

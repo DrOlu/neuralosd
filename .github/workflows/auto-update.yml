@@ -193,7 +193,11 @@ jobs:
           python scripts/component_versions.py --check --record
           git config user.name  "Hyperspace Technologies"
           git config user.email "agent@superagent.ng"
-          git add components.json pyproject.toml src/neuralosd/__init__.py
+          # All four version carriers move together — a component release
+          # that leaves the SDK or npm behind breaks the equal-versions
+          # invariant tests/test_component_versions.py pins.
+          git add components.json pyproject.toml src/neuralosd/__init__.py \
+            src/neuralosd_sdk/__init__.py npm/neuralosd/package.json
           git commit -m "release: ${{ steps.bump.outputs.new_version }} (components: ${{ needs.detect.outputs.components }})"
           git push
 
