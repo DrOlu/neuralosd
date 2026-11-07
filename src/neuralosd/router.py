@@ -196,6 +196,23 @@ def tokens(text):
 GENERIC_INTENT = frozenset().union(
     *(tokens(w) for w in _GENERIC_INTENT_WORDS.split()))
 
+# ── the refusal-gate contract, versioned ────────────────────────────────────
+# GATE_VERSION names the SEMANTICS of a refusal, not the wording of any one
+# message. Two instances may only trust each other's refusals (and only reason
+# about each other's answers) when they speak the same gate version: a v2 gate
+# that refuses for a reason a v1 caller has never heard of would be read as an
+# answer-shaped absence. Bump it whenever the reason vocabulary or the
+# answered/refused decision rule changes.
+GATE_VERSION = 1
+
+# The bare tokens a refusal may carry. Kept next to GATE_VERSION so the two
+# cannot drift: a new reason without a version bump is a wire break.
+REFUSAL_REASONS = frozenset({
+    "action_intent", "args_not_extractable", "no_probe_matches",
+    "low_coverage", "dropped_filter", "out_of_range", "no_results",
+    "model_abstained",
+})
+
 
 def score_probe(meta: ProbeMeta, q_tokens):
     # The BEST single trigger match dominates, so a probe with one exact
@@ -967,6 +984,109 @@ class Router:
                 fh.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
         except Exception:
             pass
+
+    # -- public dry run ----------------------------------------------------
+    def dry_run(self, question: str, k: int = 8) -> Dict[str, Any]:
+        """Would this question be answered — WITHOUT running a probe.
+
+        The decision half of ask() with the execution half removed: the same
+        normalisation, the same retrieval, the same argument extraction, the
+        same calibrated gate. No probe runs, nothing is cached, nothing is
+        added to the audit log.
+
+        This exists because a mesh peer needs to know whether a question is
+        routable *before* paying for a round trip, and because advertising a
+        capability we would refuse is worse than advertising none. It is kept
+        honest by ``tests/test_router_dry_run.py``, which asserts agreement
+        with ask() on every conformance case — a second implementation of the
+        decision is only safe while a test proves they are the same decision.
+        """
+        t0 = time.time()
+        if not isinstance(question, str):
+            raise TypeError(
+                f"question must be a str, got {type(question).__name__}")
+        normalized, _moved = self._normalize(question.strip())
+        out = {"question": question, "normalized": normalized,
+               "menu_version": self.menu_version,
+               "gate_version": GATE_VERSION,
+               "would": "refused", "would_answer": False,
+               "probe": None, "refusal_reason": None,
+               "scores": [], "candidates": []}
+
+        def _done(reason=None, probe=None, status="refused"):
+            out["refusal_reason"] = reason
+            out["probe"] = probe
+            out["would"] = status
+            out["would_answer"] = status in ("answered", "defer_to_model")
+            out["ms"] = round((time.time() - t0) * 1000, 3)
+            return out
+
+        # Mirror ask(): a destructive imperative is refused before retrieval so
+        # it reports action_intent rather than degrading into no_probe_matches.
+        if action_intent_reason(normalized, self._menu_vocab):
+            return _done("action_intent")
+
+        retrieved = self._retrieve(normalized, k)
+        out["scores"] = [{"probe": m.name, "score": round(s, 3)}
+                         for m, s in retrieved[:3]]
+
+        best, oor, args_failed, exec_cands = None, None, False, []
+        if retrieved:
+            for _meta, _score in retrieved:
+                try:
+                    kwargs = extract_args(_meta, normalized)
+                except ArgOutOfRange as exc:
+                    oor = exc
+                    continue
+                if kwargs is None:
+                    args_failed = True
+                    continue
+                if not _passes_coverage(_meta, tokens(normalized)):
+                    continue
+                has_caged = any(s.get("required", True) or s.get("pattern")
+                                for s in _meta.args.values())
+                if not has_caged and _score < 0.5 * retrieved[0][1]:
+                    continue
+                ignored = self._unconsumed_for(_meta, kwargs, normalized)
+                effective = (_score
+                             + ARG_MATCH_BONUS * _args_seen(kwargs, normalized)
+                             - UNCONSUMED_PENALTY * len(ignored))
+                exec_cands.append({"probe": _meta.name,
+                                   "score": round(_score, 3)})
+                if best is None or effective > best[0]:
+                    best = (effective, _score, _meta, kwargs)
+
+        if best is None and oor is not None:
+            return _done("out_of_range")
+
+        chosen = best
+        runner_up = None
+        if chosen is not None and len(exec_cands) > 1:
+            # The runner-up must be an EXECUTABLE candidate, exactly as in
+            # ask(): comparing against a higher-scoring probe whose arguments
+            # did not extract produced false ambiguity refusals.
+            names = {c["probe"] for c in exec_cands} - {chosen[2].name}
+            pick = [(_m, _s) for _m, _s in retrieved
+                    if _m.name in names and _m.name != chosen[2].name]
+            if pick:
+                best_c = max(pick, key=lambda x: x[1])
+                runner_up = (best_c[0], best_c[1])
+        gate_reason = self._gate(
+            normalized, runner_up,
+            (chosen[2], chosen[1], chosen[3]) if chosen else None)
+        out["candidates"] = exec_cands[:3]
+        if gate_reason is not None:
+            if self.model_fallback is not None:
+                return _done(None, None, "defer_to_model")
+            return _done(gate_reason)
+        if chosen is not None:
+            return _done(None, chosen[2].name, "answered")
+        if self.model_fallback is not None and retrieved:
+            return _done(None, None, "defer_to_model")
+        if args_failed:
+            return _done("args_not_extractable")
+        return _done(action_intent_reason(normalized, self._menu_vocab)
+                     or "no_probe_matches")
 
     # -- public ask --------------------------------------------------------
     def ask(self, question: str, k: int = 8, full: bool = False,

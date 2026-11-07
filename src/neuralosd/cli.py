@@ -457,10 +457,19 @@ def main():
     p_ms.add_argument("--instance-dir", required=True)
     p_ms.add_argument("--gateway", default="http://127.0.0.1:8090")
     p_ms.add_argument("--timeout", type=float, default=30)
+    p_ms.add_argument("--publish", action="store_true",
+                      help="publish the registration to the gateway and "
+                           "re-assert it on every heartbeat")
+    p_ms.add_argument("--heartbeat", type=float, default=30.0,
+                      help="heartbeat interval in seconds")
     p_md = mesh_sub.add_parser("discover", help="Discover peers on the mesh")
     p_md.add_argument("--gateway", default=None)
     p_md.add_argument("--skill", default="", help="skill to search for")
     p_md.add_argument("--instance-name", default="")
+    p_md.add_argument("--preflight", action="store_true",
+                      help="ask each shortlisted peer would-you-answer and "
+                           "keep only peers whose gate says yes")
+    p_md.add_argument("--json", action="store_true")
     p_md.add_argument("--timeout", type=float, default=30)
     p_ms2 = mesh_sub.add_parser("agents", help="The peer directory (phonebook)")
     p_ms2.add_argument("--gateway", default=None)
@@ -533,9 +542,56 @@ def main():
     p_mr = mesh_sub.add_parser("register", help="Register this instance on the mesh")
     p_mr.add_argument("--instance-dir", required=True)
     p_mr.add_argument("--gateway", default="http://127.0.0.1:8090")
+    p_mr.add_argument("--publish", action="store_true",
+                      help="POST the registration blob to the gateway "
+                           "(default: dry report)")
+    p_mr.add_argument("--json", action="store_true")
+    p_mp = mesh_sub.add_parser(
+        "preflight", help="Would the gate answer this? (no probe runs)")
+    p_mp.add_argument("--instance-dir", required=True)
+    p_mp.add_argument("question", nargs="+")
+    p_mdl = mesh_sub.add_parser(
+        "delegate", help="Forward a question to the best peer (verified)")
+    p_mdl.add_argument("--gateway", default=None)
+    p_mdl.add_argument("question", nargs="+")
+    p_mdl.add_argument("--instance-name", default="")
+    p_mdl.add_argument("--visited", default="",
+                       help="comma-separated agents already handling this "
+                            "question (loop protection)")
+    p_mdl.add_argument("--max-hops", type=int, default=3)
+    p_mdl.add_argument("--deadline-ms", type=int, default=None)
+    p_mdl.add_argument("--trust", default="known",
+                       choices=["self", "trusted", "known", "untrusted"])
+    p_mdl.add_argument("--preflight", action="store_true")
+    p_mdl.add_argument("--timeout", type=float, default=30)
+    p_mgap = mesh_sub.add_parser(
+        "gaps", help="Cluster refused questions into trigger proposals")
+    p_mgap.add_argument("--instance-dir", required=True)
+    p_mgap.add_argument("--audit", default=None,
+                        help="ask_audit.jsonl (default: <instance>/"
+                             "ask_audit.jsonl)")
+    p_mgap.add_argument("--min-count", type=int, default=2)
+    p_mgap.add_argument("--limit", type=int, default=2000)
+    p_mgap.add_argument("--json", action="store_true")
+    p_mver = mesh_sub.add_parser(
+        "verify", help="Verify a signed mesh envelope (stdin or --file)")
+    p_mver.add_argument("--file", default=None)
+    p_mver.add_argument("--key", default=None,
+                        help="HMAC key (default $NEURALOSD_MESH_KEY)")
     p_ma = mesh_sub.add_parser("ask", help="Ask a question (through the local router)")
     p_ma.add_argument("--instance-dir", required=True)
     p_ma.add_argument("--gateway", default="http://127.0.0.1:8090")
+    p_ma.add_argument("--delegate", action="store_true",
+                      help="if the local gate refuses, discover peers and "
+                           "delegate to the best one (the reply arrives "
+                           "marked delegated + verified)")
+    p_ma.add_argument("--preflight", action="store_true",
+                      help="with --delegate: only consider peers whose own "
+                           "gate would answer")
+    p_ma.add_argument("--max-hops", type=int, default=3)
+    p_ma.add_argument("--deadline-ms", type=int, default=None)
+    p_ma.add_argument("--trust", default="known",
+                      choices=["self", "trusted", "known", "untrusted"])
     p_ma.add_argument("question", nargs="+")
     p_mh = mesh_sub.add_parser("health", help="Check the Synapse gateway")
     p_mh.add_argument("--gateway", default="http://127.0.0.1:8090")

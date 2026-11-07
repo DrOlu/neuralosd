@@ -880,16 +880,31 @@ The pi coding agent as builder and operator (v2.6.0).
 
 ## neuralosd.synapse
 
-Synapse-gateway REST client (v2.5.0 — the real /api/mesh/* wire).
+Synapse-gateway mesh protocol (v2.9.3 — preflight, provenance, trust,
+verification over the /api/mesh/* wire).
 
 | | |
 |---|---|
-| `SynapseHTTP(gateway, timeout, token, token_path)` | Bearer token from `REACTORPRO_GATEWAY_TOKEN` or the gateway.env file; never stored in instances |
-| `agents(capabilities, availability)` / `discover(skill)` | the peer directory |
-| `dispatch(target, text, skill, timeout_ms)` | synchronous ask; reply read payload.text → payload.output; error envelopes raise with the mesh code |
-| `create_task / get_task / cancel_task / retry_task` | durable async tasks — caller-minted idempotent taskId |
-| `mailbox(target, skill, input, task_id)` | fire-and-forget, at-least-once |
-| `health / status / trust` | operators' read-only surface |
+| `SynapseHTTP(gateway, timeout, token, token_path, retries)` | Bearer token from `REACTORPRO_GATEWAY_TOKEN` or the gateway.env file; never stored in instances. Retries only provably-idempotent calls (GET, keyed POST), backoff over retryable codes, `Idempotency-Key` header from taskId |
+| `Deadline.from_ms(ms)` | shared deadline; bounds every socket timeout (`max(0.1s, min(timeout, remaining))`) |
+| `agents / discover / dispatch` | the peer directory + synchronous ask (reply read payload.text → payload.output; error envelopes raise with the mesh code) |
+| `create_task / get_task / cancel_task / retry_task / mailbox` | durable async tasks — caller-minted idempotent taskId |
+| `health / status / trust / preflight` | operators' read-only surface + the peer's would-you-answer verb |
+| `MeshAgent(instance_name, router, transport)` | the instance's mesh face: handle, preflight, register, heartbeat, gossip |
+| `MeshAgent.handle(question, trust, mesh_protocol_version)` | verdict with versions + signature; protocol 2 → `incompatible` / `mesh_protocol_mismatch` |
+| `MeshAgent.preflight(question, trust)` | `Router.dry_run` published: would/probe/refusal_reason, no probe run, signed |
+| `MeshAgent.register()` | versioned registration blob — network-free; publishing is explicit |
+| `MeshAgent.heartbeat(prev)` / `heartbeat_loop(max_beats, publish)` | menu-drift detection; bounded loop, annotated publish failures |
+| `MeshAgent.capabilities() / digest()` | what the mesh may see: triggers + arg types, never enum values or vocab |
+| `TrustPolicy.for_level(level)` | self / trusted / known / untrusted → score, candidate, ledger exposure + delegation rights |
+| `answer_hash(body) / sign_envelope(body, key) / verify_signature(body, key)` | deterministic hash over the sent view; hmac-sha256 or sha256 integrity-only; `(ok, bare_reason)` |
+| `verify_peer_answer(body, expected_*)` | is this peer answer what it advertised? bare reasons (`unknown_probe`, `stale_menu`, `gate_version_mismatch`, …) |
+| `discover_peers(transport, question, self_id, limit, preflight)` | the router's own scorer, pointed outward: published triggers > skill names; self excluded; refusers dropped when preflighting |
+| `delegate_to_peer(transport, peer, question, visited, max_hops, deadline, trust)` | honest delegation: refusals stay refusals, answers verified vs advertised, loop/hop/deadline rails, legacy `response`/`peer` keys preserved |
+| `refusals_from_audit(path) / cluster_gaps(gaps) / export_fingerprints(clusters)` | gossip pipeline — questions never leave the edge, only sha256 pairs |
+| `explain_fingerprints(fingerprints, own_gaps)` | OWNER-SIDE inversion: strangers holding the fingerprints recover nothing |
+| `propose_triggers(router, refused, min_count)` | advisory trigger proposals with honest verdicts: covered / extend_trigger / new_subject / new_probe |
+| `diff_menus(own_menu, peer_menu, own_id, peer_id)` | shared / only_local / only_peer / drifted triggers per probe |
 
 ## neuralosd.durable
 
@@ -1021,6 +1036,16 @@ neuralosd diff <old_profile.json> <new_profile.json> [--menu needle_menu.json]
 neuralosd backends
 neuralosd mesh setup|agents|send|task-create|task-status|task-cancel|task-retry|mailbox|trust
     [--gateway http://127.0.0.1:3000]
+neuralosd mesh discover [SKILL] [--preflight --json]    # score the directory
+neuralosd mesh preflight <instance-dir> "question"      # exit 0 answer / 2 refuse
+neuralosd mesh delegate <agent-id> "question" [--visited a,b --max-hops 3
+    --deadline-ms 30000 --trust trusted --preflight]    # exit 0 only if verified
+neuralosd mesh gaps [--audit ask_audit.jsonl --min-count 2 --json]  # advisory
+neuralosd mesh verify [FILE] [--key KEY]                # stdin; exit 0/1
+neuralosd mesh register [--publish --json]              # blob is network-free
+neuralosd mesh serve [--publish --heartbeat]
+neuralosd mesh ask "question" [--delegate --preflight --max-hops 3
+    --deadline-ms 30000 --trust trusted]                # exit 2 on refusal
 neuralosd temporal --setup | --run-activity NAME | --worker | --schedule-create
     [--instance-dir . --task-queue neuralos --cron "0 2 * * *"]
 neuralosd pi --setup | ask "question" [--model z-ai/glm-5.3-flash]

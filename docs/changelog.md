@@ -1,5 +1,128 @@
 # Changelog
 
+## 2.9.3 — mesh hardening: preflight, provenance, trust, verification
+
+The Synapse-gateway integration grew from "a REST client and an ask loop" into
+a protocol: every verdict carries its versions and a signature, callers are
+classified before anything crosses the boundary, and a peer can be asked
+*would you answer this* before anyone pays for a round trip.
+
+**Preflight — `Router.dry_run()` / `MeshAgent.preflight()` / `mesh preflight`**
+- `Router.dry_run(question)` is the decision half of `ask()` with the
+  execution half removed: same normalisation, same action-intent pre-check,
+  same retrieval, same argument extraction, same calibrated gate — but no
+  probe runs, nothing is cached, nothing is audited. Returns `would`
+  (`answered` / `refused` / `defer_to_model`), `would_answer`, `probe`,
+  `refusal_reason`, the score vector and `gate_version`. Kept honest by a
+  conformance test that asserts dry_run agrees with ask() on every fixture
+  case, in both directions, with matching refusal reasons.
+- `MeshAgent.preflight(q)` publishes that decision with the menu/gate/protocol
+  versions and a signature block — the discovery ping a mesh caller makes
+  before delegating.
+- `neuralosd mesh preflight <instance> "question"` exits 0 when the instance
+  would answer, 2 when it would refuse; `mesh ask --delegate` and
+  `mesh delegate --preflight` use it to skip peers that would only refuse.
+
+**Provenance — every verdict says what produced it**
+- Answers and refusals now carry `menu_version`, `gate_version` and
+  `mesh_protocol_version` (1). A peer that cached an answer can detect menu
+  drift instead of reusing a stale one.
+- `answer_hash()` is deterministic over the *sent* view (`ts`, `latency_ms`,
+  `cached` and friends excluded); `sign_envelope()` signs that hash —
+  hmac-sha256 when `NEURALOSD_MESH_KEY` is set, plain sha256 integrity-only
+  otherwise — and `verify_signature()` returns `(ok, reason)` with bare
+  reasons (`signature_ok`, `tampered`, `unsigned`, `integrity_only`,
+  `no_key`, `bad_signature`, `unknown_alg`). Redaction happens BEFORE
+  signing: the signature always matches what was sent.
+
+**Trust classes — what crosses the boundary, applied uniformly**
+- `TrustPolicy.for_level()` over `self` / `trusted` / `known` / `untrusted`
+  decides four toggles: expose the score vector, expose candidates, expose
+  the discarded-filter ledger, allow the caller to delegate through us.
+- Redaction is labelled: a `known` caller sees a `confidence_band`
+  (high ≥ 2×floor, medium ≥ floor, low below) instead of raw scores, and a
+  withheld filter ledger is marked `"ledger": "withheld"` so the accounting
+  looks withheld, not absent. The band is computed BEFORE redaction —
+  redaction may hide how confident, never lie about it. `untrusted` callers
+  get `"delegation_allowed": false`.
+- Capabilities advertised to the mesh carry probe triggers and argument
+  TYPES, never enum VALUE lists: a stranger who can read the values can read
+  the rows.
+
+**Protocol negotiation**
+- `handle(mesh_protocol_version=2)` answers `incompatible` with bare
+  `error_code: "mesh_protocol_mismatch"` — gate vocabulary (`refusal_reason`)
+  is never faked for a protocol problem.
+
+**Peer discovery with the router's own scorer**
+- `discover_peers(transport, question, self_id)` scores published peer
+  capabilities with the same tokeniser that routes local questions: probe
+  triggers first, bare skill names as fallback, generic-intent words ignored.
+  Malformed directory entries are skipped, self is excluded, results are
+  capped. With `preflight=True` each shortlisted peer is asked would-you-
+  answer; refusers are dropped, a peer without the verb is kept but marked
+  unverified (`would: None`), other errors marked `unreachable`.
+
+**Honest delegation — `delegate_to_peer()`**
+- Refusals travel as refusals: a peer's `refused` verdict surfaces with its
+  own `refusal_reason`, not as an error. An answer is verified against what
+  the peer ADVERTISED (probe known, results non-empty, menu/gate/protocol
+  current) and stamped `verified: true` / `answered_unverified`.
+- Safety rails: visited-set loop detection, a hop budget (`MAX_HOPS=3`), a
+  deadline checked before the call and mapped onto the socket timeout, and
+  transport failures carrying bare error codes (`unreachable`, `timeout`,
+  `rate_limited`, `gateway_error`).
+- The legacy call shape is preserved: `result["response"]` stays the raw
+  peer response, `result["peer"]` the peer id.
+
+**Registration and heartbeats**
+- `MeshAgent.register()` builds the versioned registration blob without
+  touching the network; publishing is explicit (`transport.register(reg)` /
+  `mesh register --publish`).
+- `heartbeat()` detects menu drift against the previous beat;
+  `heartbeat_loop()` is bounded (`max_beats`), annotates publish failures
+  with the error code, and tolerates transports without the verb.
+
+**Gossip — proposals, never auto-application**
+- `gossip_blob()` exports gap fingerprints (sha256 pairs, questions never
+  leave the edge) with the menu digest. `explain_fingerprints()` inverts
+  them OWNER-SIDE only: given the fingerprints plus your own raw audit, you
+  recover token clusters — a stranger holding only the fingerprints recovers
+  nothing (`known: false, tokens: []`).
+- `propose_triggers()` now carries an honest verdict per cluster:
+  `covered` (already in the menu), `extend_trigger` (every core token known
+  somewhere in the menu — a phrasing variant), `new_subject` (a token NO
+  probe knows — a trigger would teach the router to answer a question the
+  probe cannot; it needs a new probe) and `new_probe` (nothing scores).
+  Proposals remain advisory.
+- `cluster_gaps()` accepts bare question strings as well as audit dicts.
+
+**Transport**
+- Retries only what is provably idempotent: GETs, and POSTs carrying an
+  idempotency key (explicit or derived from `taskId`) — which also travels
+  on the wire as an `Idempotency-Key` header so a gateway-side retry
+  collapses onto the same work. Everything else fails fast. Backoff is
+  `min(2.0, 0.25·2^attempt)` over retryable codes only.
+- HTTP errors map to bare codes (`401/403 → unauthorized`, `404 →
+  not_found`, `409 → conflict`, `429 → rate_limited`, `502 → gateway_error`)
+  and an unreadable error body no longer masks the mapping.
+- Deadlines (`Deadline.from_ms`) bound the socket timeout from above
+  (`max(0.1s, min(timeout, remaining))`); a spent deadline refuses before
+  any call.
+
+**CLI (`neuralosd mesh`)**
+- New subcommands: `preflight`, `delegate`, `gaps`, `verify`, `register`,
+  plus `discover --preflight --json`, `serve --publish --heartbeat`, and
+  `ask --delegate --preflight --max-hops --deadline-ms --trust`. Exit codes
+  are contracts: preflight 0/2 by would-answer, delegate 0 only when the
+  answer verified, verify 0/1, ask 2 on refusal unless delegation produced a
+  response.
+
+**Tests** — 98 new: the dry_run conformance suite (agreement with ask() on
+all 16 gate cases, side-effect freedom, out-of-range parity, envelope shape)
+and the mesh protocol suite (preflight, provenance, trust matrix, signatures,
+discovery, delegation, gossip, transport retry, deadlines).
+
 ## 2.9.2 — Windows console crash on `docs`
 
 - `neuralosd docs usage` (the first command a new user runs) exited 1 with

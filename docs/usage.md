@@ -1227,6 +1227,29 @@ counts), malformed blobs are dropped, counts are capped, and everything
 is deduped per peer. Privacy is enforced at both ends — the questions
 never leave the edge.
 
+**Mesh hardening (v2.9.3)** — the instance's mesh face now speaks a
+versioned, signed, trust-classed protocol:
+
+```bash
+# would this instance answer, without running a probe?
+neuralosd mesh preflight . "how many open incidents"      # exit 0 / 2
+# ask a peer, verifying its answer against what it advertised:
+neuralosd mesh delegate wema-bmc "how many incidents" --preflight --trust trusted
+# or fold delegation into a local ask (refusal falls through to peers):
+neuralosd mesh ask "how many incidents" --delegate --trust trusted
+# prove a verdict is intact and from who it claims:
+neuralosd mesh verify verdict.json                        # exit 0/1
+```
+
+Every verdict carries `menu_version`, `gate_version` and
+`mesh_protocol_version`, plus a signature over exactly the bytes sent
+(hmac-sha256 when `NEURALOSD_MESH_KEY` is set, sha256 integrity-only
+otherwise). Callers are trust-classed — `trusted` sees the full score
+ledger, `known` sees a confidence band with withheld ledgers labelled,
+`untrusted` may not delegate through you. Trigger proposals mined from
+gossip gaps carry honest verdicts (`covered` / `extend_trigger` /
+`new_subject` / `new_probe`) and stay advisory — nothing is auto-applied.
+
 **Roles management** — control who sees what:
 
 ```bash

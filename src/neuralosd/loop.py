@@ -51,7 +51,11 @@ def cluster_gaps(gaps, threshold=0.5):
     trend.
     """
     clusters = []          # each: {"tokens": set, "questions": [str]}
-    for g in gaps:
+    for raw in gaps:
+        # Accept both the audit-dict shape and a bare question string —
+        # callers mixing refusals_from_audit output with raw strings must
+        # not crash the gossip loop.
+        g = raw if isinstance(raw, dict) else {"question": raw}
         qt = _q_tokens(g.get("question"))
         placed = False
         for c in clusters:
@@ -129,6 +133,36 @@ def export_fingerprints(clusters):
             "ts": time.time(),
             "fingerprints": [{"fp": fp, "count": n}
                              for fp, n in sorted(fingerprints.items())]}
+
+
+def explain_fingerprints(fingerprints, gaps, threshold=0.5):
+    """Explain OUR OWN fingerprints back to their tokens — the trusted-peer
+    half of the gossip loop.
+
+    A fingerprint is a hash: the RECEIVING edge can never invert it. Only
+    the edge that BUILT the fingerprint holds the gap log it came from, so
+    the loop closes when that edge — and only that edge, for peers it
+    trusts — answers "yes, this hash is my (incident, attachment) gap".
+    Tokens are returned, questions never are: the same privacy line the
+    export draws, honoured in the other direction.
+
+    Unknown hashes come back with ``known: False`` and an empty token list
+    — an honest "not mine" rather than a guess.
+    """
+    index = {}
+    norm = [{"question": g} if isinstance(g, str) else g for g in gaps or []]
+    for c in cluster_gaps(norm, threshold):
+        core = _core_tokens(c.get("questions") or [])
+        if len(core) < 2:
+            continue
+        for fp in _pair_fps(core):
+            index.setdefault(fp, set()).update(core)
+    out = []
+    for fp in fingerprints or []:
+        fp = fp.get("fp") if isinstance(fp, dict) else fp
+        toks = sorted(index.get(fp, ()))
+        out.append({"fp": fp, "tokens": toks, "known": bool(toks)})
+    return out
 
 
 def ingest_fingerprints(clusters, peer_blob):
