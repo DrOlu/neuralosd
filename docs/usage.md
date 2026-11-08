@@ -168,7 +168,7 @@ neuralosd ask --instance-dir ./inst --model "what did we earn"   # -> model
 | a probe matches and its args extract | runs deterministically — **the model is never loaded** |
 | a probe matches but args are missing | model chooses among the retrieved candidates |
 | nothing matches at all | model is shown the **whole menu** |
-| nothing matches, no `--model` | honest refusal: `no probe matched this question` |
+| nothing matches, no `--model` | honest refusal: `refused (no_probe_matches)` — the bare token is on the envelope as `refusal_reason`, so clients branch on it, not the prose |
 
 The model routes; it does not answer. It may only call the instance's real
 probes, and those still execute in the data layer, so results stay verified.
@@ -1450,9 +1450,21 @@ Each line contains:
   "probe": "chinook_top_customers",
   "confidence": 0.3956,
   "latency_ms": 97,
-  "mode": "retrieval"
+  "mode": "retrieval",
+  "source": "user"
 }
 ```
+
+`source` (v2.9.6) names who asked: `user` (a real caller), `watchdog`
+(the periodic `/ready` health tick), `golden` / `trap` (self-test bank
+replays), or `serve` (arrived over the HTTP or mesh door). Self-test
+replays (`neuralosd golden`, `neuralosd truth`, trap synthesis, build
+closure checks) write to a **separate** ledger —
+`ask_audit.selftest.jsonl` by default — so a fleet that replays its bank
+never inflates the human refusal SLO. Redirect with `NEURALOSD_AUDIT_FILE`
+or the `--audit` flag. The `neuralosd slo` reader accepts a `sources`
+filter (e.g. humans only) and reports `rows_missing_ts` honestly rather
+than inventing dates for pre-v2.9.6 rows.
 
 ### Gap log
 

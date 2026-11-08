@@ -3,10 +3,53 @@ import json
 import os
 import re
 import sys
+from contextlib import contextmanager
 from typing import Any, Callable, Dict, List, Optional
 
 from .probe import ProbeMeta
-from .router import Router, NoResults, extract_args
+from .router import Router, NoResults, extract_args, audit_source
+
+# Default ledger for SELF-TEST traffic (golden/trap replays). The user
+# refusal SLO reads `ask_audit.jsonl`; a fleet that replays its bank through
+# the same router must not multiply the human denominator, so replays are
+# diverted here unless the caller says otherwise (CLI --audit, or the env
+# var below). Never deleted, never migrated — just out of the way.
+SELFTEST_AUDIT_BASENAME = "ask_audit.selftest.jsonl"
+
+
+@contextmanager
+def selftest_ledger(inst, audit_file: Optional[str] = None):
+    """Route every audit row written inside the block to the SELF-TEST ledger.
+
+    The single mechanism behind "self-test traffic never writes the user
+    refusal ledger" — `Instance.golden_run`, `truth`, trap-synthesis
+    verification and build-closure checks all route through here. Precedence
+    for the target file: explicit `audit_file=` argument (the CLI --audit
+    flag) > NEURALOSD_AUDIT_FILE > ask_audit.selftest.jsonl. The user ledger
+    is restored on exit however the block leaves (exception-safe), and rows
+    are additionally stamped via `audit_source` by each caller so the
+    self-test file itself stays auditable by producer.
+    """
+    target = audit_file or os.environ.get("NEURALOSD_AUDIT_FILE") \
+        or SELFTEST_AUDIT_BASENAME
+    target = (target if os.path.isabs(target)
+              else os.path.join(getattr(inst, "state_dir", None)
+                                or os.path.dirname(inst.router.audit_file)
+                                or ".", target))
+    # the router's _audit swallows write failures (an answer must never die
+    # because its ledger is unreachable) — so a typo'd --audit path would
+    # lose every row SILENTLY. Creating the parent here turns that into
+    # mkdir -p semantics at the one place every self-test redirect passes.
+    parent = os.path.dirname(target)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    user_ledger = inst.router.audit_file
+    inst.router.audit_file = target
+    try:
+        yield target
+    finally:
+        inst.router.audit_file = user_ledger
+
 
 
 class Instance:
@@ -20,11 +63,17 @@ class Instance:
         self.probes = list(probes)
         self.state_dir = state_dir or "."
         os.makedirs(self.state_dir, exist_ok=True)
+        # NEURALOSD_AUDIT_FILE: per-instance override of the audit ledger
+        # path. Relative names resolve against state_dir like the default.
+        # Useful for pointing an instance's ledger at a mounted volume or,
+        # together with `golden`, at a dedicated self-test file.
+        audit_name = os.environ.get("NEURALOSD_AUDIT_FILE") or "ask_audit.jsonl"
         self.router = Router(
             probes=self.probes,
             model_fallback=model_fallback,
             cache_file=os.path.join(self.state_dir, ".ask_cache.json"),
-            audit_file=os.path.join(self.state_dir, "ask_audit.jsonl"),
+            audit_file=(audit_name if os.path.isabs(audit_name)
+                        else os.path.join(self.state_dir, audit_name)),
             pii_mask=pii_mask, ttl=ttl, name=name,
         )
         self._synthesize_birth_traps()
@@ -60,7 +109,8 @@ class Instance:
     def lint(self, top: int = 8, max_triggers: int = 40):
         return lint_menu(self.menu, top=top, max_triggers=max_triggers)
 
-    def golden_run(self, golden: Dict, base_port: Optional[int] = None):
+    def golden_run(self, golden: Dict, base_port: Optional[int] = None,
+                   audit_file: Optional[str] = None):
         """Run every golden question through the router, positives and TRAPS.
 
         A positive item declares the probe that must answer it:
@@ -76,7 +126,19 @@ class Instance:
         A confident answer to a trap is the worst failure this system has, so
         it is counted separately from a plain wrong routing and it fails the
         run. Returns a summary dict; exit code is the caller's decision.
+
+        The bank replay is SELF-TEST traffic and writes its audit rows to a
+        separate ledger — `ask_audit.selftest.jsonl` next to the user's — so
+        a fleet that replays its bank does not poison the user refusal SLO.
+        See `selftest_ledger` for the precedence rules. Positives stamp as
+        "golden", traps as "trap".
         """
+        with selftest_ledger(self, audit_file=audit_file) as target:
+            if audit_file:
+                print(f"audit rows -> {target}")
+            return self._golden_run(golden, base_port=base_port)
+
+    def _golden_run(self, golden: Dict, base_port: Optional[int] = None):
         correct = refused_ok = answered_trap = wrong = refused_wrong = 0
         value_checked = wrong_values = 0
         skipped = 0
@@ -85,18 +147,22 @@ class Instance:
             q = item.get("q")
             wants_refusal = bool(item.get("expect_refusal"))
             want_reason = item.get("refusal_reason")
-            try:
-                # a bank replay is a VERIFICATION: it must exercise the real
-                # code path, never the ask cache (a cached answer would let a
-                # broken probe pass on the strength of its old, correct self)
-                env = self.ask(q, use_cache=False)
-                probe, refusal_reason = env.get("probe"), env.get("refusal_reason")
-                answered = env.get("results") not in (None, [], {})
-            except NoResults as e:
-                env = getattr(e, "envelope", {}) or {}
-                probe = env.get("probe")
-                refusal_reason = env.get("refusal_reason")
-                answered = False
+            # provenance: positives are "golden", traps are "trap" — so a
+            # self-test ledger can be audited by source the same way the user
+            # ledger can
+            with audit_source("trap" if wants_refusal else "golden"):
+                try:
+                    # a bank replay is a VERIFICATION: it must exercise the real
+                    # code path, never the ask cache (a cached answer would let a
+                    # broken probe pass on the strength of its old, correct self)
+                    env = self.ask(q, use_cache=False)
+                    probe, refusal_reason = env.get("probe"), env.get("refusal_reason")
+                    answered = env.get("results") not in (None, [], {})
+                except NoResults as e:
+                    env = getattr(e, "envelope", {}) or {}
+                    probe = env.get("probe")
+                    refusal_reason = env.get("refusal_reason")
+                    answered = False
             if wants_refusal:
                 if not answered and (not want_reason
                                      or refusal_reason == want_reason):

@@ -558,9 +558,14 @@ def build_durable(question, instance_dir, model=DEFAULT_MODEL,
                                 f"failure(s) — not caused by this build")
 
     closure_failures = []
+    from .instance import selftest_ledger
+    from .router import audit_source
     for q in (expect_routing or []):
         try:
-            env = inst.ask(q, use_cache=False)
+            # build-closure routing checks are SELF-TEST traffic (v2.9.6):
+            # the builder proving the menu routes must not write user rows
+            with selftest_ledger(inst), audit_source("golden"):
+                env = inst.ask(q, use_cache=False)
             routed = bool(env.get("results") not in (None, [], {}))
         except NoResults:
             routed = False

@@ -15,6 +15,7 @@ import re
 import threading
 import time
 import uuid
+from contextvars import ContextVar
 from typing import Any, Callable, Dict, List, Optional
 
 from .probe import ProbeMeta
@@ -212,6 +213,48 @@ REFUSAL_REASONS = frozenset({
     "low_coverage", "dropped_filter", "out_of_range", "no_results",
     "model_abstained",
 })
+
+# ── audit provenance ──────────────────────────────────────────────────────────
+# Every audit row is stamped with WHO asked: a live user ("user", the
+# default), the health-check tick ("watchdog"), or a self-test replay
+# ("golden" / "trap"). The refusal SLO must measure USERS — a fleet that
+# replays its golden bank through the same router otherwise multiplies the
+# human denominator several-fold and the "user refusal rate" quietly becomes
+# a bank-replay rate. The stamp rides a ContextVar so a threaded HTTP server
+# (ThreadingHTTPServer) isolates per-request sources without a lock, and so
+# `service.py` can wrap one endpoint without touching Router's signature.
+#
+# Producers:
+#   user     — the default; also assumed for legacy rows with no stamp
+#   watchdog — the /ready health tick (it runs a real probe ask)
+#   golden   — `neuralosd golden` / `truth` bank replays (positive items)
+#   trap     — the same replays, for items that expect a refusal
+#   serve    — a /ask served over HTTP (multi-instance + service)
+_AUDIT_SOURCE: ContextVar = ContextVar("neuralosd_audit_source", default=None)
+
+
+class audit_source:
+    """Context manager stamping every audit row written inside the block.
+
+        with audit_source("watchdog"):
+            inst.ask(hc_question)   # row: "source": "watchdog"
+
+    Nesting is a bug (the inner block wins and the outer is forgotten), but
+    that cannot happen with the producers above — none nest. Restores the
+    previous value on exit, however the block leaves (exception-safe).
+    """
+
+    def __init__(self, name: str):
+        self._name = name
+        self._token = None
+
+    def __enter__(self):
+        self._token = _AUDIT_SOURCE.set(self._name)
+        return self
+
+    def __exit__(self, *exc):
+        _AUDIT_SOURCE.reset(self._token)
+        return False
 
 
 def score_probe(meta: ProbeMeta, q_tokens):
@@ -535,7 +578,8 @@ class Router:
                  name: str = "instance", strict_discards: bool = False,
                  floor: Optional[float] = None, margin: Optional[float] = None,
                  min_question_coverage: Optional[float] = None,
-                 refuse_disjunction: Optional[bool] = None):
+                 refuse_disjunction: Optional[bool] = None,
+                 audit_source: str = "user"):
         self.probes = list(probes)
         self.metas = [getattr(p, "_probe") for p in self.probes]
         # Duplicate probe names used to be accepted silently: the menu listed
@@ -558,6 +602,10 @@ class Router:
         self.model_fallback = model_fallback
         self.cache_file = cache_file
         self.audit_file = audit_file
+        # Provenance stamped on every row `source` is missing from. The
+        # ContextVar (`with audit_source("watchdog"): ...`) takes precedence
+        # per-request; this is the fallback for plain Router users.
+        self.audit_source = audit_source
         self.pii_mask = pii_mask
         self.ttl = ttl
         self.name = name
@@ -978,6 +1026,17 @@ class Router:
         return out
 
     def _audit(self, rec):
+        # THE choke point: every row passes through here (refusals, answers,
+        # cache hits), so the provenance stamp is applied exactly once. The
+        # per-request context wins; the constructor default covers everyone
+        # else. Legacy producers keep their rows untouched — this is a
+        # "missing key fills in", not an overwrite.
+        #
+        # The stamp goes on a COPY: env dicts are cached and re-audited on a
+        # cache hit, and a mutated dict would carry the golden run's stamp
+        # into the next USER's audit row for the same question.
+        src = _AUDIT_SOURCE.get() or self.audit_source
+        rec = {**rec, "source": rec.get("source") or src}
         try:
             rec = self._for_storage(rec)
             with open(self.audit_file, "a", encoding="utf-8") as fh:
@@ -1247,29 +1306,25 @@ class Router:
             # lexical retrieval found something, otherwise with the whole menu.
             if self.model_fallback is None:
                 if gate_reason_for_audit:
-                    refusal_reason = gate_reason_for_audit
-                    reason = (f"refused ({refusal_reason}): the best match "
-                              f"was not confident enough to answer")
-                elif args_failed:
+                    # Gate stood down with no model to consult: refused, same
+                    # as the confident-guess case below would have been.
+                    self._refuse(ask_id, time.time(), question, normalized,
+                                 gate_reason_for_audit, retrieved=retrieved)
+                if args_failed:
                     refusal_reason = "args_not_extractable"
-                    reason = ("probes matched but none could extract their "
-                              "required arguments (no model fallback "
-                              "configured)")
                 else:
-                    refusal_reason = (action_intent_reason(normalized, self._menu_vocab)
+                    refusal_reason = (action_intent_reason(normalized,
+                                                           self._menu_vocab)
                                       or "no_probe_matches")
-                    reason = ("refused (action_intent): this instance only answers "
-                              "questions" if refusal_reason == "action_intent"
-                              else "no probe matched this question")
-                env = {"ask_id": ask_id, "question": question,
-                       "normalized": normalized, "probe": None,
-                       "menu_version": self.menu_version,
-                       "error": reason, "results": None,
-                       "refusal_reason": refusal_reason,
-                       "scores": [{"probe": m.name, "score": round(s, 3)}
-                                  for m, s in (retrieved or [])[:3]]}
-                self._audit(env)
-                raise NoResults(env)
+                # THE v2.9.6 FIX: this branch used to build its audit
+                # envelope inline and omit `ts` and `mode`. Every other
+                # refusal path emits the full schema via _refuse; these rows
+                # did not, so `refusal_rate()` — which skips rows without a
+                # numeric ts — counted the ask as NEITHER ask NOR refusal and
+                # the fleet SLO silently undercounted. Route it through the
+                # same door; the per-reason prose lives in _refuse now.
+                self._refuse(ask_id, time.time(), question, normalized,
+                             refusal_reason, retrieved=retrieved)
             conf = None
             candidates = ([m for m, _s in retrieved] if retrieved
                           else list(self.metas))
@@ -1326,7 +1381,15 @@ class Router:
 
         if discarded and self.strict_discards:
             # Asked for a filtered answer; would have returned an unfiltered
-            # one. Refuse rather than answer a different question.
+            # one. Refuse rather than answer a different question. This is a
+            # REFUSAL, so it carries the refusal schema — including the bare
+            # token. "dropped_filter" has sat in REFUSAL_REASONS next to
+            # GATE_VERSION all along; this branch just never emitted it, so
+            # strict-mode refusals reached clients with results=None and no
+            # token to branch on.
+            env["mode"] = "refused"
+            env["probe"] = None
+            env["refusal_reason"] = "dropped_filter"
             env["error"] = (f"would have ignored {_discard_summary(discarded)} "
                             f"— refusing in strict mode")
             env["results"] = None

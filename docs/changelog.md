@@ -1,5 +1,55 @@
 # Changelog
 
+## 2.9.6 — audit: every refusal dated + self-test traffic out of the SLO
+
+Two defects were corrupting the fleet refusal-rate SLO — the number the
+whole fleet reads as "how often does neuralOSd honestly decline":
+
+**1. One refusal branch emitted undated, mode-less rows.** The
+`model_fallback is None` branch (empty retrieval or unextractable args with
+no model to ask) built its NoResults envelope by hand and skipped the two
+keys every other refusal carries: `ts` and `mode`. A `neuralosd slo
+--window 1h` read therefore counted the refusal (the row exists) but could
+not DATE it — the windowed denominator silently dropped those refusals, so
+a fleet refusing hardest exactly when the model was absent looked
+suspiciously healthy. The branch now routes through the same `_refuse()`
+path as every other refusal: full envelope (`ts`, `mode: "refused"`,
+`refusal_reason`, `probe: null`, `results: null`), and the uniform prose
+`refused (reason): the menu cannot answer this confidently, and guessing
+is worse` replaces the old one-off sentence. The bare token in
+`refusal_reason` is unchanged (`no_probe_matches`, `args_not_extractable`,
+...) — clients branching on the token see no difference.
+
+**2. Self-test traffic was counted as user refusals.** Every `neuralosd
+golden` / `truth` bank replay, every periodic `/ready` watchdog tick and
+every trap-synthesis verification appended to the SAME `ask_audit.jsonl` a
+fleet's SLO reads — so a CI that replays its 40-question bank every 5
+minutes multiplied the denominator with machine traffic while the
+"refused" numerators climbed on trap rows. Every audit row now carries a
+`source` stamp — `user` | `watchdog` | `golden` | `trap` | `serve` —
+applied once at the `_audit` choke point (on a copy: cached envelopes are
+re-audited on cache hits and must not leak a stamp). Bank replays write to
+a SEPARATE ledger: `ask_audit.selftest.jsonl`, overridable per run with
+`neuralosd golden --audit FILE` / `neuralosd truth --audit FILE`, or per
+environment with `NEURALOSD_AUDIT_FILE`. The user ledger is restored on
+even a crashed run. `neuralosd slo` (and the `refusal_rate()` reader)
+gains an opt-in `sources=("user",)` filter and reports `rows_missing_ts`
+for pre-2.9.6 rows instead of inventing dates for them: **no in-place
+migration, no fabricated timestamps, no default denominator change** —
+dashboards only move if you opt in to the filter.
+
+Also: the mesh door (`neuralosd mesh ask`, the Synapse `SERVE` handler)
+and HTTP `/ask` stamp `serve`; `/ready` stamps `watchdog`; the strict
+discard path now emits the complete refusal schema with its long-registered
+but never-emitted `dropped_filter` token; the SDK no longer truncates the
+422 body to 300 chars before parsing, which silently turned any refusal
+with a rich envelope into `reason=None`; and `refusal_body()` output is
+byte-identical to the ledger row for the same ask.
+
+Backwards compatible: additive keys only, refusal tokens unchanged,
+`/ready` and multi-mode auth contracts untouched, existing ledgers are
+read as-is (legacy rows count as `user`, as they always implicitly were).
+
 ## 2.9.5 — serve: multi-instance startup crash + auth enforcement
 
 Two defects in `neuralosd serve --instances-dir` (multi-instance mode), both

@@ -148,11 +148,16 @@ class NeuralOSDClient:
                         f"non-JSON response from {path}: {raw[:120]!r}"
                     ) from exc
             except urllib.error.HTTPError as e:
-                detail = e.read().decode(errors="replace")[:300]
+                # parse the FULL body: refusal envelopes carry the bare token
+                # (refusal_reason) late in key order, and truncating to 300
+                # chars before json.loads silently turned every refusal into
+                # reason=None whenever the envelope grew past the cliff. Only
+                # a body that is not JSON at all falls back to prose.
+                detail = e.read().decode(errors="replace")
                 try:
                     parsed = json.loads(detail)
                 except (ValueError, TypeError):
-                    parsed = {"error": detail}
+                    parsed = {"error": detail[:300]}
                 if e.code == 401:
                     raise AuthError(parsed.get(
                         "error", "unauthorized: token missing or wrong"))

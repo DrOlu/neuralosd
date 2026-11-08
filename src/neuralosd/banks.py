@@ -134,6 +134,8 @@ def ingest_feedback(instance_dir, question, verdict, correction=None,
 
 
 def apply_feedback(instance_dir):
+    from .instance import selftest_ledger
+    from .router import audit_source
     """Promote candidates into the banks — each with PROOF:
       trap candidate -> traps.json only if the router already refuses it
                        (a trap the instance answers would fail the bank)
@@ -154,7 +156,11 @@ def apply_feedback(instance_dir):
         if t.get("applied"):
             continue
         try:
-            env = inst.ask(t["q"], use_cache=False)
+            # candidate verification is SELF-TEST traffic — the refusal
+            # proof for a trap or the routing proof for a golden candidate
+            # must not land in the user refusal ledger (v2.9.6)
+            with selftest_ledger(inst), audit_source("trap"):
+                env = inst.ask(t["q"], use_cache=False)
         except Exception:
             env = {}
         answered = env.get("results") not in (None, [], {})
@@ -178,7 +184,8 @@ def apply_feedback(instance_dir):
         if g.get("applied"):
             continue
         try:
-            env = inst.ask(g["q"], use_cache=False)
+            with selftest_ledger(inst), audit_source("golden"):
+                env = inst.ask(g["q"], use_cache=False)
         except Exception:
             env = {}
         probe = env.get("probe")

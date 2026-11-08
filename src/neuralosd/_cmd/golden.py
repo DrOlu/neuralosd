@@ -48,7 +48,11 @@ def run(a):
     with open(golden_path, encoding="utf-8") as f:
         golden = json.load(f)
 
-    summary = inst.golden_run(golden)
+    # v2.9.6: bank replays are self-test traffic — golden_run redirects them
+    # to ask_audit.selftest.jsonl by default so the USER refusal ledger stays
+    # a user ledger. --audit sends them somewhere explicit instead.
+    summary = inst.golden_run(golden,
+                              audit_file=getattr(a, "audit", None) or None)
     # A confidently answered trap fails the run outright, whatever the score.
     raise SystemExit(0 if (summary["wrong"] == 0
                            and summary["answered_traps"] == 0) else 1)

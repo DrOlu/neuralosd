@@ -185,10 +185,17 @@ def main():
                           help="where the value came from (invoice, ledger...)")
     p_golden.add_argument("--method", default=None,
                           help="how it was verified (manual count, SQL...)")
+    p_golden.add_argument("--audit", default=None,
+                          help="audit ledger for this replay (default: "
+                               "ask_audit.selftest.jsonl — the user ledger is "
+                               "never touched by self-test traffic)")
 
     # truth
     p_truth = sub.add_parser("truth", help="Run truth oracle")
     p_truth.add_argument("--dir", default=".", help="Instance dir")
+    p_truth.add_argument("--audit", default=None,
+                         help="audit ledger for this replay (default: "
+                              "ask_audit.selftest.jsonl)")
 
     # invariants
     p_inv = sub.add_parser("invariants", help="Run property checks")

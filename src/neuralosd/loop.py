@@ -210,9 +210,15 @@ def close_probe_birth(metric, instance_dir):
     summary["q"] = item["q"]
 
     from ._cmd._common import load_instance
+    from .instance import selftest_ledger
+    from .router import audit_source
     inst = load_instance(instance_dir)
     try:
-        env = inst.ask(item["q"], use_cache=False)
+        # birth-trap proof is SELF-TEST traffic (v2.9.6): it replays a
+        # synthesized trap through the live router and must not be counted
+        # as a user refusal in the SLO ledger
+        with selftest_ledger(inst), audit_source("trap"):
+            env = inst.ask(item["q"], use_cache=False)
     except Exception as e:
         env = getattr(e, "envelope", None) or {}
     answered = env.get("results") not in (None, [], {})
@@ -546,16 +552,35 @@ def _tail_lines(path, cap):
 
 
 def refusal_rate(instance_dir, window_hours=24, max_refusal_rate=0.4,
-                 tail_lines=200000):
+                 tail_lines=200000, sources=None):
     """The refusal rate over the window IS the menu-gap signal. A breach is
     not a failure of the router — it is a capability gap, quantified.
 
     Reads at most `tail_lines` lines (bounded, newest-first by position):
     a rate computed from a bounded tail is honest as long as the cap is
-    larger than the window's ask volume — and multi-GB audits stay fast."""
+    larger than the window's ask volume — and multi-GB audits stay fast.
+
+    Row contract (v2.9.6): every producer MUST emit a numeric `ts` — the
+    fleet SLO is computed from this file, and a row without one cannot be
+    dated, so it is counted in NEITHER asks nor refusals. Rows without a
+    numeric ts are not silently dropped: they are reported back as
+    `rows_missing_ts` so a producer bug shows up in monitoring instead of
+    quietly shrinking the denominator. Legacy timestamps are never invented
+    for such rows. `mode` is emitted by every producer too; rows missing it
+    are schema defects but do not affect the math (refusal detection keys on
+    empty results, which predates the schema pin and is kept for
+    compatibility).
+
+    `sources` filters by row provenance (the v2.9.6 `source` stamp): pass
+    ("user",) to measure HUMAN traffic only — self-test replays stamp
+    themselves golden/trap, health ticks watchdog, HTTP serves serve. Rows
+    with no stamp (all pre-2.9.6 ledgers) count as "user". The DEFAULT is
+    None: unfiltered, every row counts — exactly the pre-2.9.6 denominator,
+    so dashboards do not move under a patch release.
+    """
     audit_path = os.path.join(instance_dir, "ask_audit.jsonl")
     cutoff = time.time() - window_hours * 3600.0
-    asks = refused = 0
+    asks = refused = missing_ts = 0
     reasons = {}
     if os.path.isfile(audit_path):
         for line in _tail_lines(audit_path, tail_lines):
@@ -564,8 +589,18 @@ def refusal_rate(instance_dir, window_hours=24, max_refusal_rate=0.4,
             except ValueError:
                 continue
             ts = r.get("ts")
-            if not isinstance(ts, (int, float)) or ts < cutoff:
+            if not isinstance(ts, (int, float)):
+                # cannot be dated → cannot enter the window. COUNTED, not
+                # hidden: a producer emitting ts-less rows is a defect the
+                # dashboard must see.
+                missing_ts += 1
                 continue
+            if ts < cutoff:
+                continue
+            if sources is not None:
+                # legacy rows predate the stamp; they were all human traffic
+                if r.get("source", "user") not in sources:
+                    continue
             asks += 1
             if r.get("results") in (None, [], {}):
                 refused += 1
@@ -576,6 +611,7 @@ def refusal_rate(instance_dir, window_hours=24, max_refusal_rate=0.4,
             "refusal_rate": round(rate, 4),
             "slo": max_refusal_rate,
             "breach": asks > 0 and rate > max_refusal_rate,
+            "rows_missing_ts": missing_ts,
             "top_reasons": sorted(reasons.items(), key=lambda kv: -kv[1])[:5]}
 
 
@@ -590,13 +626,17 @@ def fleet_report(dirs, window_hours=24, max_refusal_rate=0.4):
         try:
             from ._cmd._common import load_instance
             entry["probes"] = len(load_instance(d).router.metas)
-        except Exception as e:
+        except (Exception, SystemExit) as e:
+            # load_instance signals a missing instance with SystemExit (the
+            # CLI-error idiom); a report over a mixed fleet must skip such a
+            # dir, not die on it. Either way the refusal-rate row still lands.
             entry["probes"] = None
             entry["error"] = str(e)[:120]
         stats = refusal_rate(d, window_hours=window_hours,
                              max_refusal_rate=max_refusal_rate)
         entry.update({k: stats[k] for k in
-                      ("asks", "refused", "refusal_rate", "breach")})
+                      ("asks", "refused", "refusal_rate", "breach",
+                       "rows_missing_ts")})
         if stats["breach"]:
             breached += 1
         else:

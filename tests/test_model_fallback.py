@@ -125,7 +125,10 @@ def test_no_fallback_and_empty_retrieval_refuses_clearly(tmp_path):
     inst = _inst(tmp_path, None)
     with pytest.raises(NoResults) as e:
         inst.ask("give me a quick briefing")
-    assert "no probe matched" in str(e.value)
+    # v2.9.6: this refusal goes through _refuse like every other, so the
+    # client branches on the BARE TOKEN (which also names itself in the prose)
+    assert "no_probe_matches" in str(e.value)
+    assert e.value.envelope["ts"]          # the SLO can date this refusal
 
 
 def test_no_fallback_and_unextractable_args_says_so(tmp_path):
@@ -139,7 +142,9 @@ def test_no_fallback_and_unextractable_args_says_so(tmp_path):
     inst = _inst(tmp_path, None, probes=[p])
     with pytest.raises(NoResults) as e:
         inst.ask("revenue by period")
-    assert "no model fallback" in str(e.value)
+    # v2.9.6: uniform refusal prose; the token is the contract
+    assert "args_not_extractable" in str(e.value)
+    assert e.value.envelope["refusal_reason"] == "args_not_extractable"
 
 
 def test_model_returning_nothing_is_an_honest_abstention(tmp_path):

@@ -69,7 +69,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from .router import (GATE_VERSION, GENERIC_INTENT, REFUSAL_REASONS,
-                     score_probe, tokens)
+                     score_probe, tokens, audit_source)
 
 # ── the mesh contract, versioned ───────────────────────────────────────────
 # MESH_PROTOCOL_VERSION names the ENVELOPE shape (provenance keys, signature
@@ -808,7 +808,11 @@ class MeshAgent:
         body = {"mesh_protocol_version": MESH_PROTOCOL_VERSION,
                 "instance": self.instance_name, "question": question}
         try:
-            env = self.router.ask(question)
+            # an inbound mesh request is a SERVED question — the same ledger
+            # class as HTTP /ask (v2.9.6); relayed peer traffic stays
+            # distinguishable from direct library asks in the audit trail
+            with audit_source("serve"):
+                env = self.router.ask(question)
             mode = env.get("mode", "")
             if mode.endswith("-error"):
                 err_detail = ""

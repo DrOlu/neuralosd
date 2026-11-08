@@ -1,4 +1,4 @@
-from .router import NoResults, refusal_body
+from .router import NoResults, refusal_body, audit_source
 
 """Minimal HTTP service for an Instance: /healthz /ready /ask /openapi.
 
@@ -104,7 +104,13 @@ def serve(instance, port: int = 8877, host: str = "0.0.0.0",
                 self._send(200, {"ok": True, "instance": inst.name})
             elif path == "/ready":
                 try:
-                    r = inst.ask(inst.menu[0]["triggers"][0])
+                    # the health tick runs a REAL probe — stamp the row so
+                    # 44 watchdog ticks an hour never inflate the user ledger
+                    # (they now land in the self-test file as "watchdog" rows
+                    # when golden's redirect is active, and are filterable via
+                    # sources=("user",) when they do not)
+                    with audit_source("watchdog"):
+                        r = inst.ask(inst.menu[0]["triggers"][0])
                     self._send(200, {"ok": True, "probe": r.get("probe")})
                 except Exception as exc:
                     self._send(503, {"ok": False, "error": str(exc)[:200]})
@@ -154,7 +160,12 @@ def serve(instance, port: int = 8877, host: str = "0.0.0.0",
                 self._send(403, {"error": f"unknown role: {role}"})
                 return
             try:
-                self._send(200, role_inst.ask(q))
+                # served over HTTP = a real (authenticated) caller, but stamp
+                # it anyway: "serve" rows are distinguishable from direct
+                # library asks and from mesh relays in the same ledger
+                with audit_source("serve"):
+                    answer = role_inst.ask(q)
+                self._send(200, answer)
             except NoResults as exc:
                 self._send(422, refusal_body(exc))
             except Exception as exc:

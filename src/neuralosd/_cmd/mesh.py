@@ -319,8 +319,11 @@ def run(a):
             print("error: a question is required for ask", file=sys.stderr)
             return 1
         question = " ".join(a.question)
+        from ..router import audit_source
         try:
-            env = inst.ask(question)
+            # a mesh ask is a SERVED question — same ledger class as /ask
+            with audit_source("serve"):
+                env = inst.ask(question)
         except NoResults as e:
             env = getattr(e, "envelope", None) or {"question": question,
                                                    "results": None}

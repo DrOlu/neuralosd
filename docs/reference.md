@@ -1086,3 +1086,4 @@ Every subcommand accepts standard flags. See `neuralosd <command> --help`.
 | `NEURALOSD_STATE` | `~/.neuralosd/state` | State directory. |
 | `NEURALOS_LAB` | `~/neuralos-lab` | Lab root for venv and archives. |
 | `NEURALOS_DSN` | — | Database DSN override (database instances). |
+| `NEURALOSD_AUDIT_FILE` | — | Audit ledger for SELF-TEST traffic (`golden`/`truth` replays). Absolute path, or relative to the instance's state dir. Default when unset: `ask_audit.selftest.jsonl` — the user ledger `ask_audit.jsonl` never receives replay rows. The CLI `--audit` flag overrides this, which overrides the self-test default. |
