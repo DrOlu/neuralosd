@@ -60,7 +60,7 @@ jobs:
         run: |
           WANTED='${{ github.event.inputs.targets }}'
           case ",$WANTED," in
-            *",${{ matrix.name }},"*|",",) bash tests/smoke_cli.sh "./${{ matrix.asset }}" ;;
+            *",${{ matrix.name }},"*|",",) bash tests/smoke_cli.sh "$(pwd)/${{ matrix.asset }}" ;;
             *) echo "skipped by targets filter" ;;
           esac
 
