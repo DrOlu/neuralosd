@@ -102,7 +102,7 @@ jobs:
           # 2) real serve on the published binary: crash-free startup
           PORT=18987
           cd "$SCRATCH"
-          "$NS" serve --instances-dir work --port $PORT --auth-token tok123 \
+          "$NS" serve --instances-dir "$SCRATCH" --port $PORT --auth-token tok123 \
             > serve.log 2>&1 &
           SRV=$!
           ok=""
