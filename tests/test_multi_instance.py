@@ -306,24 +306,37 @@ class TestServeCli:
         happens before the server binds — in-process threads mask it."""
         d = _make_cli_instances(tmp_path)
         port = _free_port()
+        # warm the interpreter/module cache first: a cold CI runner (macOS
+        # especially) can spend its whole poll window on the very first
+        # import of the CLI chain, which would read as "crash before bind".
+        # --help exercises dispatch machinery without binding anything.
+        warm = subprocess.run(
+            [sys.executable, "-m", "neuralosd", "--help"],
+            capture_output=True, timeout=120)
+        assert warm.returncode == 0, (
+            "python -m neuralosd --help failed; stderr=\n"
+            + warm.stderr.decode(errors="replace"))
         proc = subprocess.Popen(
             [sys.executable, "-m", "neuralosd", "serve",
              "--instances-dir", d, "--port", str(port)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        up = False
+        err = b""
         try:
-            assert _wait_healthz(port, timeout=30), (
-                "subprocess never served /healthz")
-            with urllib.request.urlopen(
-                    f"http://127.0.0.1:{port}/instances", timeout=10) as r:
-                assert set(json.loads(r.read())["instances"]) == {"alpha", "beta"}
+            up = _wait_healthz(port, timeout=90)
+            if up:
+                with urllib.request.urlopen(
+                        f"http://127.0.0.1:{port}/instances", timeout=10) as r:
+                    assert set(json.loads(r.read())["instances"]) == {"alpha", "beta"}
         finally:
             proc.terminate()
             try:
-                _, err = proc.communicate(timeout=10)
+                _, err = proc.communicate(timeout=15)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 _, err = proc.communicate()
         err = (err or b"").decode(errors="replace")
+        assert up, "subprocess never served /healthz; stderr=\n" + err
         assert "NameError" not in err and "Traceback" not in err, err
 
     # ── Bug 2 (v2.9.4): --auth-token was silently ignored in multi mode ────
