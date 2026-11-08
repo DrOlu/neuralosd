@@ -175,9 +175,13 @@ class DurableBuilder:
 
     def open(self, model=DEFAULT_MODEL, provider=DEFAULT_PROVIDER,
              api_key=None):
-        return self._roundtrip({"op": "open", "storage": self.storage_path,
+        resp = self._roundtrip({"op": "open", "storage": self.storage_path,
                                 "model": model, "provider": provider,
                                 "api_key": api_key, "cwd": self.cwd})
+        if resp.get("op") == "error":
+            raise SystemExit(f"error: pi durable open: "
+                             f"{resp.get('message', '')[:200]}")
+        return resp
 
     def submit(self, content, request_id=None):
         import hashlib

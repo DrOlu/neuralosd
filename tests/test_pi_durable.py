@@ -286,3 +286,29 @@ def test_doctor_exit_code_reflects_failures(tmp_path, monkeypatch, capsys):
         as_json = False
     rc = doctor_cmd.run(A)
     assert rc == 1
+
+
+def test_open_error_is_propagated_not_swallowed():
+    """A failed bridge open (bad provider, missing sqlite) must surface the
+    bridge's own message — v2.9.7 discarded the open response, so submit
+    later raised the misleading 'submit: not open' instead of e.g.
+    'provider superagent unavailable'."""
+    import pytest
+    from neuralosd.pidurable import DurableBuilder
+
+    class FakeHandle:
+        def __init__(self):
+            self.sent = []
+
+        def handle(self, obj):
+            self.sent.append(obj)
+            if obj.get("op") == "open":
+                return {"op": "error",
+                        "message": "provider superagent unavailable: "
+                                   "no built-in module"}
+            return {"op": "ok"}
+
+    h = FakeHandle()
+    b = DurableBuilder(storage="<memory>", spawn=lambda: h)
+    with pytest.raises(SystemExit, match="provider superagent unavailable"):
+        b.open(model="m", provider="superagent", api_key="k")

@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.9.8 — durable open errors name their cause
+
+Found seconds after shipping 2.9.7, driving `--durable` against a
+models.json custom provider on a real host: the bridge's open op returns
+a precise error (`provider superagent unavailable: no built-in module`) —
+but the driver discarded the open response, so the first submit raised
+the misleading `pi durable submit: not open` instead. The cause was
+visible only in the bridge's stderr.
+
+`DurableBuilder.open()` now raises `SystemExit` with the bridge's message,
+the same contract submit already had — and the usage doc's claim that
+"the bridge says `provider <name> unavailable`" is finally true at the
+user's terminal.
+
 ## 2.9.7 — durable bridge: it ships, and it launches anywhere
 
 Two defects in the `--durable` path, found by wiring pi builds on a real
