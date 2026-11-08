@@ -50,7 +50,10 @@ jobs:
             esac
           fi
           echo "downloading $ASSET from release $TAG"
-          curl -fsSL -o "$ASSET" \
+          # retry + resume: release-asset 504s from runners are common and
+          # always transient (asset itself verified healthy)
+          curl -fSL --retry 6 --retry-all-errors --retry-delay 15 \
+            --connect-timeout 30 -C - -o "$ASSET" \
             "https://github.com/${{ github.repository }}/releases/download/$TAG/$ASSET"
           chmod +x "$ASSET" 2>/dev/null || true
           ls -lh "$ASSET"
