@@ -1211,19 +1211,32 @@ endpoints included). Durable builds drive @earendil-works/pi-durable
 through a staged node bridge, whose providers are pi-ai BUILT-INS
 (openrouter, anthropic, openai, google, groq, mistral, xai, deepseek,
 together, …). A custom models.json provider answers one-shot builds but
-not durable ones until registered as a built-in provider — the bridge
-says `provider <name> unavailable` rather than hanging. The bridge is
-staged automatically next to whichever node_modules holds
+not durable ones — the bridge reports `provider <name> unavailable` and
+the build stops there instead of failing halfway. The bridge is staged
+automatically next to whichever node_modules holds
 @earendil-works/pi-durable (found by walking up from the instance dir),
-so pip installs work exactly like dev checkouts.
+so pip installs work exactly like dev checkouts, and a stale or
+hand-edited stage is refreshed from the packaged copy on every build.
 
 And one command to check every integration:
 
 ```bash
 neuralosd doctor --instance-dir .      # exit 1 = something needs attention
+```
+
+The `pi` check resolves the provider and pings the model live; the
+`pi_durable` check verifies node, the npm packages, and the packaged
+bridge — the same three things a `--durable` build needs.
 
 Default model `z-ai/glm-5.3-flash` via openrouter; override with
 `--model`/`--provider` or `$NEURALOSD_PI_MODEL` / `$NEURALOSD_PI_PROVIDER`.
+For example, to drive the `pi` CLI through a custom OpenAI-compatible
+gateway defined in models.json:
+
+```bash
+export NEURALOSD_PI_PROVIDER=superagent
+export NEURALOSD_PI_MODEL=z-ai/glm-5.3-flashx
+```
 
 ## 6e. Streaming, gossip, and roles (v2.8.x)
 

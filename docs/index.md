@@ -35,6 +35,32 @@ it's what makes it safe for regulated environments.
 - **Streaming ingestion** — `neuralosd watch` tails logs into a bounded
   buffer and alerts on thresholds with webhooks.
 
+## What's new in 2.9.8 — the pi build path, wired end to end
+
+Four releases of fixing what only breaks on a real host (2.9.5 → 2.9.8):
+
+- **Multi-instance doors stop colliding** (2.9.5) — two `serve
+  --instances-dir` defects that corrupted fleet state fixed.
+- **Every refusal is dated, and self-test traffic is out of the SLO**
+  (2.9.6) — defect rows carry `ts`/`mode`/`refusal_reason`; `golden` and
+  `trap` replays land in a separate ledger so the fleet refusal-rate SLO
+  measures users, not the test suite.
+- **The durable bridge actually ships — and loads** (2.9.7) —
+  `pi_durable_bridge.mjs` was missing from every pip install AND could
+  never load from site-packages (ESM resolves from the file's own path).
+  It's packaged now, and staged automatically beside whichever
+  node_modules holds @earendil-works/pi-durable, so `--durable` works
+  the same from pip, binaries, and dev checkouts. A packaging
+  completeness test keeps every loose file honest.
+- **Build failures name their cause** (2.9.8) — a failed durable open
+  (bad provider, missing sqlite) reports the bridge's own message
+  instead of a downstream `submit: not open`.
+
+The `pi` and `pi_durable` doctor checks now cover the whole path — and a
+one-shot build through a custom models.json provider was proven live:
+pi authored a verified new probe against the real workbook, banks
+untouched, both banks replaying green.
+
 ## What's new in 2.9.4 — mesh hardening: preflight, provenance, trust
 
 - **Preflight — "would you even answer this?"** — `Router.dry_run()` and

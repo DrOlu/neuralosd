@@ -845,14 +845,16 @@ Actuation with proof (v2.9.0) — named, journaled, reversible actions.
 
 ## neuralosd.pidurable
 
-Pi Durable driver (v2.7.0) — durable, resumable build conversations.
+Pi Durable driver (v2.7.0; bridge packaging + staging v2.9.7, open-error
+propagation v2.9.8) — durable, resumable build conversations.
 
 | | |
 |---|---|
-| `DurableBuilder(storage, model, provider, spawn, cwd)` | line-JSON driver over the shipped Node bridge; `submit` (exactly-once requestId), `wait`, `status`, `close` |
+| `DurableBuilder(storage, model, provider, spawn, cwd)` | line-JSON driver over the shipped Node bridge; `open` (raises `SystemExit` with the bridge's own message on failure — a bad provider says `provider <name> unavailable`, not a downstream symptom), `submit` (exactly-once requestId), `wait`, `status`, `close` |
 | `stable_request_id(instance_dir, question)` | the idempotency key for a build |
 | `build_durable(...)` (pisources) | durable build with the full verification/restore pipeline; storage survives failures for --resume |
-| `pi_durable_available()` / `bridge_script_path()` | node + package checks; the shipped bridge |
+| `pi_durable_available()` / `bridge_script_path()` | node + npm packages + the packaged bridge; what `doctor`'s `pi_durable` check calls |
+| `pi_durable_command(storage, model, provider, cwd)` | node argv; stages the bridge into `<dir-of-node_modules>/.neuralosd-bridge/` (found by walking up from `cwd`, default the instance dir) so its ESM imports resolve from pip installs; falls back to the packaged path; the stage is content-compared against the packaged copy every build |
 
 ## neuralosd.watch
 
@@ -1087,3 +1089,5 @@ Every subcommand accepts standard flags. See `neuralosd <command> --help`.
 | `NEURALOS_LAB` | `~/neuralos-lab` | Lab root for venv and archives. |
 | `NEURALOS_DSN` | — | Database DSN override (database instances). |
 | `NEURALOSD_AUDIT_FILE` | — | Audit ledger for SELF-TEST traffic (`golden`/`truth` replays). Absolute path, or relative to the instance's state dir. Default when unset: `ask_audit.selftest.jsonl` — the user ledger `ask_audit.jsonl` never receives replay rows. The CLI `--audit` flag overrides this, which overrides the self-test default. |
+| `NEURALOSD_PI_PROVIDER` | `openrouter` | pi provider for `build` / `pi ask` / `reason`. Any provider the pi CLI resolves (built-in or a custom `~/.pi/agent/models.json` entry). |
+| `NEURALOSD_PI_MODEL` | `z-ai/glm-5.3-flash` | pi model id. `--model`/`--provider` flags override these. |
