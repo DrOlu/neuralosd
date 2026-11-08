@@ -1,5 +1,46 @@
 # Changelog
 
+## 2.9.7 — durable bridge: it ships, and it launches anywhere
+
+Two defects in the `--durable` path, found by wiring pi builds on a real
+host:
+
+**1. `pi_durable_bridge.mjs` never shipped.** The file lived in the source
+tree, so every dev checkout worked — but `[tool.setuptools.package-data]`
+listed docs, skills and templates and NOT `*.mjs`. Every pip install of
+2.9.6 (and earlier) contained a `pidurable.py` whose bridge script did not
+exist: the node child died instantly with module-not-found and the driver
+surfaced it as a bare `BrokenPipeError` on the first submit. The
+pi_durable doctor check could not catch it because it only verifies that
+node can import the npm packages, not that OUR bridge exists. Binary
+releases were unaffected (Nuitka bundles the source tree directly).
+
+**2. Even when shipped, the bridge could not load.** A bridge file's ESM
+imports resolve from the FILE's own directory walking up — never from the
+cwd. A pip-installed bridge (site-packages) can therefore never import
+`@earendil-works/*`: the packages live in some unrelated node_modules the
+bridge's ancestry never reaches. Dev checkouts only worked by accident
+(the repo's own node_modules sat above the source tree).
+
+- `*.mjs` is now in package-data; the wheel carries the bridge.
+- `pi_durable_command` walks up from the instance dir (exactly like node)
+  to find the node_modules holding `@earendil-works/pi-durable`, stages
+  the packaged bridge into `<dir-of-node_modules>/.neuralosd-bridge/`,
+  and launches it from there — every `@earendil-works/*` import resolves.
+  The stage is content-compared against the packaged copy on every build
+  (self-heals upgrades and hand-edited corruption); without any
+  node_modules it falls back to the packaged path.
+- `pi_durable_available()` (doctor) now also verifies the packaged bridge
+  file exists, so defect class 1 fails at doctor time, not at a user's
+  `--durable` invocation.
+- New `tests/test_packaging_completeness.py`: every non-.py file under
+  `src/neuralosd/` must be matched by package-data patterns (any future
+  loose file fails CI at test time), plus staging/fallback/staleness
+  tests for the launcher.
+- Documented the provider split: one-shot builds accept every
+  models.json custom provider (pi CLI resolves them); durable builds
+  accept pi-ai built-in providers only.
+
 ## 2.9.6 — audit: every refusal dated + self-test traffic out of the SLO
 
 Two defects were corrupting the fleet refusal-rate SLO — the number the

@@ -26,14 +26,61 @@ def bridge_script_path():
     return os.path.join(os.path.dirname(__file__), "pi_durable_bridge.mjs")
 
 
+def _pi_durable_node_modules(start_dir):
+    """Walk up from start_dir like node does, looking for the node_modules
+    that actually holds @earendil-works/pi-durable. Returns the node_modules
+    dir or None."""
+    d = os.path.abspath(start_dir or os.getcwd())
+    while True:
+        if os.path.isdir(os.path.join(
+                d, "node_modules", "@earendil-works", "pi-durable")):
+            return os.path.join(d, "node_modules")
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+
+
+def _staged_bridge_path(node_modules_dir):
+    """Stage the packaged bridge beside node_modules so its ESM imports
+    resolve.
+
+    A bridge file's imports resolve from the FILE's own directory walking
+    up — never from the cwd. A pip-installed bridge (site-packages) can
+    therefore never import @earendil-works/* (surfaced as a bare
+    BrokenPipeError). Node resolves <ancestor>/node_modules/<pkg>, so a
+    copy at <dir-of-node_modules>/.neuralosd-bridge/ finds every
+    @earendil-works package inside that node_modules. Refreshed whenever
+    the packaged copy is newer (or the stage was hand-edited/corrupted)."""
+    stage_dir = os.path.join(os.path.dirname(node_modules_dir),
+                             ".neuralosd-bridge")
+    os.makedirs(stage_dir, exist_ok=True)
+    staged = os.path.join(stage_dir, "pi_durable_bridge.mjs")
+    packaged = bridge_script_path()
+    with open(packaged, "rb") as f:
+        packaged_bytes = f.read()
+    try:
+        with open(staged, "rb") as f:
+            same = f.read() == packaged_bytes
+    except OSError:
+        same = False
+    if not same:
+        import shutil
+        shutil.copyfile(packaged, staged)
+    return staged
+
+
 def node_available() -> bool:
     import shutil
     return shutil.which("node") is not None
 
 
 def pi_durable_available() -> bool:
-    """Node present AND the pi-durable package resolvable from here."""
+    """Node present, our packaged bridge shipped, AND the pi-durable
+    package resolvable from here."""
     if not node_available():
+        return False
+    if not os.path.isfile(bridge_script_path()):
         return False
     import subprocess
     try:
@@ -48,8 +95,21 @@ def pi_durable_available() -> bool:
 
 
 def pi_durable_command(storage, model=DEFAULT_MODEL,
-                       provider=DEFAULT_PROVIDER):
-    return ["node", bridge_script_path(),
+                       provider=DEFAULT_PROVIDER, cwd=None):
+    """Build the node argv for the bridge.
+
+    When @earendil-works/pi-durable is resolvable from `cwd` (default: the
+    process cwd — pass the INSTANCE dir), the bridge is staged next to that
+    node_modules and launched from there; otherwise the packaged script is
+    used as-is (dev checkouts where the repo node_modules sits above it)."""
+    script = bridge_script_path()
+    nm = _pi_durable_node_modules(cwd)
+    if nm is not None:
+        try:
+            script = _staged_bridge_path(nm)
+        except OSError:
+            script = bridge_script_path()
+    return ["node", script,
             "--storage", storage,
             "--model", model,
             "--provider", provider]
@@ -81,7 +141,7 @@ class DurableBuilder:
     def _spawn_real(self, model, provider):
         import subprocess
         argv = pi_durable_command(self.storage_path, model=model,
-                                  provider=provider)
+                                  provider=provider, cwd=self.cwd)
         try:
             return subprocess.Popen(
                 argv, cwd=self.cwd, stdin=subprocess.PIPE,

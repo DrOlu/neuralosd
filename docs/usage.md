@@ -1205,6 +1205,18 @@ neuralosd build "average shipping cost per unit by region" \
 neuralosd pi --instance-dir ./portal durable --status
 ```
 
+Provider note — one-shot builds run the `pi` CLI, so ANY provider your
+`~/.pi/agent/models.json` defines works (custom OpenAI-compatible
+endpoints included). Durable builds drive @earendil-works/pi-durable
+through a staged node bridge, whose providers are pi-ai BUILT-INS
+(openrouter, anthropic, openai, google, groq, mistral, xai, deepseek,
+together, …). A custom models.json provider answers one-shot builds but
+not durable ones until registered as a built-in provider — the bridge
+says `provider <name> unavailable` rather than hanging. The bridge is
+staged automatically next to whichever node_modules holds
+@earendil-works/pi-durable (found by walking up from the instance dir),
+so pip installs work exactly like dev checkouts.
+
 And one command to check every integration:
 
 ```bash
