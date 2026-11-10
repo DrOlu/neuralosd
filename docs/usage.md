@@ -3,6 +3,10 @@
 Step-by-step instructions for installing, configuring, building, deploying,
 and operating neuralOS instances. Every command is copy-paste ready.
 
+> **Looking for a command's flags?** The [CLI reference](cli.md) documents
+> **every subcommand** — all 37 top-level commands, the 20 `mesh` subcommands
+> and the 3 `door` subcommands — with flags and runnable examples.
+
 ---
 
 ## Table of Contents
