@@ -265,7 +265,8 @@ Generate an OpenAPI 3.1 spec from the registered probes.
 
 #### `Router.lint(top=8, max_triggers=40) → Dict`
 
-Run the trigger collision linter. Returns `{"hard": [...], "soft": [...], "bloat": [...]}`.
+Run the trigger collision linter. Returns `{"hard": [...], "soft": [...], "bloat": [...],
+"trigger_spam": [(probe, cluster_size, sample_trigger), ...]}`.
 
 #### `Exception: NoResults(envelope)`
 
@@ -517,7 +518,8 @@ Property. Returns the generated needle_menu.json-compatible menu.
 
 #### `Instance.lint(top=8, max_triggers=40) → Dict`
 
-Trigger collision report. Returns `{"hard": [...], "soft": [...], "bloat": [...]}`.
+Trigger collision report. Returns `{"hard": [...], "soft": [...], "bloat": [...],
+"trigger_spam": [(probe, cluster_size, sample_trigger), ...]}`.
 
 #### `Instance.golden_run(golden: Dict) → int`
 

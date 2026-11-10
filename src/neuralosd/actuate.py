@@ -3,7 +3,9 @@
 The safety model is the same as rmagent-actuate:
   1. DRY-RUN first: the action is validated, a plan_id is minted, nothing
      touches the system. The operator reviews the plan.
-  2. APPLY: requires the plan_id from a seen dry-run (no blind fires).
+  2. APPLY: requires the plan_id from a seen dry-run (no blind fires)
+     and is ONE-SHOT: dry_run -> applied -> undone -> applied is the only
+     legal path, so a replayed --apply can never fire the action twice.
      The side effect fires; the journal records who/when/what/why.
   3. UNDO: reverses a previously applied action. Also journaled.
 
@@ -116,6 +118,23 @@ def actuate(action, target, reason, operator, instance_dir,
             raise SystemExit(
                 f"error: no dry-run found with plan_id {apply_plan!r} — "
                 f"run the dry-run first, review the plan, then --apply")
+        # ONE-SHOT GUARD: dry_run -> applied -> undone is the only legal path.
+        # Without this, a replayed --apply fired the side effect again
+        # (duplicate firewall rule / double host isolation / credential
+        # rotated twice after an operator retry). State is read from the
+        # journal — durable — because the CLI is a new process every time.
+        already = [e for e in journal
+                   if e.get("plan_id") == apply_plan
+                   and e.get("op") == "apply"]
+        undone = [e for e in journal
+                  if e.get("plan_id") == apply_plan
+                  and e.get("op") in ("undo", "undo_plan")]
+        if already and not undone:
+            raise SystemExit(
+                f"error: plan {apply_plan!r} has already been applied — "
+                f"re-applying would fire the action twice. Undo it first "
+                f"(--undo --undo-plan {apply_plan}) if you really mean to "
+                f"re-run it.")
         applied = True
         if side_effect is not None:
             side_effect()

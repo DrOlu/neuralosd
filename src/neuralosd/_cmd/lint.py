@@ -24,3 +24,6 @@ def run(a):
         if isinstance(report, dict) else []
     if collisions:
         raise SystemExit(1)
+    # trigger_spam is advisory: >=3 near-duplicate trigger variants is a
+    # review signal (the shape that once gamed the routing breadth term),
+    # not a routing error — legitimate paraphrase clusters trip it too.

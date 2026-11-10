@@ -1,5 +1,45 @@
 # Changelog
 
+## 2.9.10 — one-shot actuation, intent-faithful routing, a bounded ask cache
+
+Three defects reproduced in the wild, fixed and regression-pinned.
+
+**Safety — actuation is one-shot.** Re-running `--apply --plan <id>`
+fired the side effect a second time (duplicate firewall rule, a host
+isolation applied twice — whose second application could defeat the
+first undo). The APPLY branch only ever checked that a dry-run with the
+plan id existed; nothing refused an applied → applied transition. State
+is now read from the journal — durable, because the CLI is a new process
+every time — and `dry_run → applied → undone → applied` is the only
+legal path. A replayed `--apply` is refused by name and pointed at the
+undo path. There is deliberately no `--force`.
+
+**Routing — the breadth term measured repetition, not coverage.**
+`score_probe`'s breadth bonus was `1.0 * sum(overlaps)`, which grows with
+the NUMBER of triggers: a probe with 22 variants of "<qualifier>
+detections" outranked (32.3 vs 22.3) the probe whose single trigger was
+the question verbatim — "are detections increasing" routed to the
+detections listing, and a dispositions probe ranked below the detections
+probe, so the discard gate refused a question the instance could answer.
+Breadth now counts the DISTINCT question tokens any trigger covers —
+bounded by the question length, therefore not gameable by adding
+synonyms. Best-term, exact-phrase bonus, name/description terms and the
+unconsumed-argument penalty are untouched; the bundled itsm golden bank
+re-runs byte-identical. `neuralosd lint` now reports `trigger_spam`:
+probes holding ≥ 3 trigger variants that share ≥ 80 % of their tokens
+(advisory — legitimate paraphrase clusters trip it too; collisions
+remain the failing condition).
+
+**Cache — dead entries accumulated forever.** `_cache_load()` correctly
+refused entries with a wrong `menu_version`, past the TTL, or malformed
+payloads — but `_cache_store()` only ever appended, so refused rows
+accumulated for the life of the instance (measured: 13 live keys inside
+a 2.5 MB `.ask_cache.json`, every ask re-serialising the whole file).
+The store now evicts dead states on every write and caps the cache at
+`CACHE_MAX = 500`, keeping the newest. No migration, no rewrite of
+legacy rows, no fabricated timestamps: existing files keep loading and
+are pruned on the next write.
+
 ## 2.9.8 — durable open errors name their cause
 
 Found seconds after shipping 2.9.7, driving `--durable` against a

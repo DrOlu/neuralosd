@@ -20,6 +20,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .probe import ProbeMeta
 
+# The ask cache is an OPTIMISATION: exceeding this only costs a
+# re-computation, never correctness. Long-lived instances must not grow it
+# without bound (see _cache_store).
+CACHE_MAX = 500
+
 # Only pure function words are stopped. Intent-bearing words (how, many,
 # much, show, list, count, top, best) are PRESERVED so that phrase
 # specificity survives — "how many rows" must not collapse to "rows".
@@ -265,7 +270,19 @@ def score_probe(meta: ProbeMeta, q_tokens):
     overlaps = [len(q_tokens & tt) for tt in trig_tokens]
     best = max(overlaps, default=0)
     s = 4.0 * best
-    s += 1.0 * sum(overlaps)                 # small bonus for breadth
+    # Breadth = DISTINCT question tokens any trigger covers, not the sum of
+    # per-trigger overlaps. sum(overlaps) made the score grow with the NUMBER
+    # of near-duplicate triggers, so a probe with 22 variants of
+    # "<qualifier> detections" outranked a probe whose single trigger was the
+    # question verbatim ("are detections increasing" -> wrong probe).
+    # Distinct coverage is bounded by the question length and therefore
+    # cannot be gamed by adding synonyms. ("how many rows" -> row_count,
+    # the case the best-term comment below cites, still holds: best is
+    # untouched.)
+    covered_by_any = set()
+    for tt in trig_tokens:
+        covered_by_any |= (q_tokens & tt)
+    s += 1.0 * len(covered_by_any)
     s += 1.0 * len(q_tokens & tokens(meta.name.replace("_", " ")))
     s += 0.3 * len(q_tokens & tokens(meta.description))
     # EXACT PHRASE bonus: a trigger the question fully covers. Plural
@@ -991,7 +1008,32 @@ class Router:
                         c = loaded
                 except Exception:
                     c = {}
-            c[key] = {"ts": time.time(), "menu_version": self.menu_version,
+            # EVICT DEAD STATES: anything _cache_load would refuse must not
+            # be retained, or a long-lived instance accumulates megabytes of
+            # unreachable rows (observed in the wild: 13 live keys inside a
+            # 2.5 MB .ask_cache.json — and every ask re-serialised the whole
+            # file). Nothing migrates or rewrites legacy entries here beyond
+            # dropping them on the next write; existing files keep loading.
+            now = time.time()
+            live = {}
+            for k, v in c.items():
+                if not isinstance(v, dict):
+                    continue
+                if v.get("menu_version") != self.menu_version:
+                    continue
+                try:
+                    if now - float(v.get("ts") or 0) >= self.ttl:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+                live[k] = v
+            if len(live) >= CACHE_MAX:
+                newest = sorted(live.items(),
+                                key=lambda kv: float(kv[1].get("ts") or 0),
+                                reverse=True)[: CACHE_MAX - 1]
+                live = dict(newest)
+            c = live
+            c[key] = {"ts": now, "menu_version": self.menu_version,
                       "payload": env}
             tmp = f"{self.cache_file}.{os.getpid()}.{threading.get_ident()}.tmp"
             with open(tmp, "w", encoding="utf-8") as fh:
