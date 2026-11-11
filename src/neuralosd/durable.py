@@ -29,8 +29,11 @@ def _golden_run(instance_dir, **params):
     from ._cmd._common import load_instance
     inst = load_instance(instance_dir)
     golden_path = os.path.join(instance_dir, "golden.json")
-    bank = json.loads(open(golden_path, encoding="utf-8").read()) \
-        if os.path.isfile(golden_path) else {"items": []}
+    if os.path.isfile(golden_path):
+        with open(golden_path, encoding="utf-8") as fh:
+            bank = json.load(fh)
+    else:
+        bank = {"items": []}
     summary = inst.golden_run(bank)
     summary["instance"] = os.path.basename(instance_dir.rstrip("/"))
     summary["ts"] = time.time()

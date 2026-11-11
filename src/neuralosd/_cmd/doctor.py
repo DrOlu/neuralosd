@@ -79,10 +79,14 @@ def _checks(instance_dir):
         inst = load_instance(instance_dir)
         golden_path = os.path.join(instance_dir, "golden.json")
         traps_path = os.path.join(instance_dir, "traps.json")
-        bank = json.loads(open(golden_path, encoding="utf-8").read()) \
-            if os.path.isfile(golden_path) else {"items": []}
+        if os.path.isfile(golden_path):
+            with open(golden_path, encoding="utf-8") as fh:
+                bank = json.load(fh)
+        else:
+            bank = {"items": []}
         if os.path.isfile(traps_path):
-            t = json.loads(open(traps_path, encoding="utf-8").read())
+            with open(traps_path, encoding="utf-8") as fh:
+                t = json.load(fh)
             bank["items"].extend(t.get("items", []))
         summary = inst.golden_run(bank)
         ok = summary["wrong"] == 0 and summary["answered_traps"] == 0

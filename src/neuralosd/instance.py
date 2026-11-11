@@ -241,13 +241,8 @@ class Instance:
         the wrapper. The instance name already lives in the directory name,
         so the wrapper carries no information that is not recoverable.
         """
-        json.dump(self.menu,
-                  open(path, "w", encoding="utf-8"),
-                  indent=2, ensure_ascii=False)
-
-
-import json  # noqa: E402
-import os  # noqa: E402
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(self.menu, fh, indent=2, ensure_ascii=False)
 
 
 def _tokens(text):

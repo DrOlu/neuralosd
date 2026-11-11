@@ -85,6 +85,19 @@ def synthesize_trap_for(probe_meta, traps_path):
 # ── v2.3.0: negative-feedback ingestion + oracle provenance ──────────
 # ── F3: negative-feedback ingestion ────────────────────────────────────────
 
+def _load_bank(path):
+    """Read a bank file (traps.json / golden.json); absent = empty bank.
+
+    One closed-handle reader for the four `json.loads(open(...).read())`
+    sites that leaked a file descriptor per call (P3, but a bank replayed in
+    a loop should not hold one handle per case).
+    """
+    if not os.path.isfile(path):
+        return {"items": []}
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
 def _candidates_path(instance_dir):
     return os.path.join(instance_dir, "candidates.json")
 
@@ -169,8 +182,7 @@ def apply_feedback(instance_dir):
             summary["held"] += 1
             continue
         traps_path = os.path.join(instance_dir, "traps.json")
-        bank = json.loads(open(traps_path, encoding="utf-8").read()) \
-            if os.path.isfile(traps_path) else {"items": []}
+        bank = _load_bank(traps_path)
         item = {"q": t["q"], "expect_refusal": True,
                 "note": "promoted from user feedback (refusal proven at "
                         "apply time)",
@@ -195,8 +207,7 @@ def apply_feedback(instance_dir):
             summary["held"] += 1
             continue
         golden_path = os.path.join(instance_dir, "golden.json")
-        bank = json.loads(open(golden_path, encoding="utf-8").read()) \
-            if os.path.isfile(golden_path) else {"items": []}
+        bank = _load_bank(golden_path)
         bank["items"].append({
             "q": g["q"], "expect_probe": probe,
             "status": "candidate",
@@ -226,8 +237,7 @@ def record_golden(instance_dir, q, expect_probe=None, expect_refusal=False,
     With `shape` (count | percent | ratio | date | text), the bank verifies
     the ANSWER against the value — not just the routing (v2.4.0)."""
     golden_path = os.path.join(instance_dir, "golden.json")
-    bank = json.loads(open(golden_path, encoding="utf-8").read()) \
-        if os.path.isfile(golden_path) else {"items": []}
+    bank = _load_bank(golden_path)
     item = {"q": q, "oracle": {"value": value, "by": by,
                                "when": ts if ts is not None else time.time(),
                                "source": source, "method": method,
@@ -247,8 +257,7 @@ def receipts(instance_dir):
     """The evidence chain, printable for an auditor: every golden case and
     its receipt — or an honest 'no receipt' where none exists."""
     golden_path = os.path.join(instance_dir, "golden.json")
-    bank = json.loads(open(golden_path, encoding="utf-8").read()) \
-        if os.path.isfile(golden_path) else {"items": []}
+    bank = _load_bank(golden_path)
     lines = ["oracle receipts — the evidence chain for every golden case", ""]
     for it in bank.get("items", []):
         o = it.get("oracle")
