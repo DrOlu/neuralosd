@@ -1,5 +1,65 @@
 # Changelog
 
+## 2.9.12 — the audit release: fourteen defects, every state machine named
+
+A full audit of the implicit state machines behind the runtime. Every defect
+below was reproduced before it was fixed; every fix carries a regression
+test, and the census lives in `docs/audits/state-machines.md` with the
+reproductions in `docs/audits/findings.md`.
+
+**Actuation — the one-shot guard could be permanently disabled.** The guard
+asked whether a plan had EVER been undone, so one early rollback let a later
+replay fire the action twice. State is now the plan's LAST transition
+(`(none) → DRY_RUN → APPLIED → UNDONE → APPLIED`), a second undo is refused
+instead of firing the reverse action again, and apply/undo refuse a
+substituted action or target under a plan id (the plan is a promise about
+what will be touched). A torn trailing journal line — the normal result of a
+crash mid-append — is tolerated and repaired at the writer; corruption with
+valid rows after it refuses by name rather than deriving state from a
+partial history. Pre-v2.9.10 rows without `op` are read through their flags,
+so an upgraded process still refuses a duplicate.
+
+**CLI — `--plan` was a trigger, not a selector (P0).** `neuralosd actuate
+--plan <id>` without `--apply` fired the side effect; the rollback spelling
+the apply notice itself printed (`--undo --plan`) was routed to APPLY; and a
+bare `--undo` silently dry-ran. Firing now requires the explicit `--apply`
+word, `--apply` and `--undo` are mutually exclusive, and both require a
+plan.
+
+**Service — a role header reset the socket (P0).** The HTTP boundary tested
+an undefined `_acl_roles` name, so any request carrying `X-NeuralOS-Role` to
+an instance without `acl.json` raised `NameError` and the client saw a
+closed connection instead of the documented 403. One `acl_roles()` reader
+now serves the resolver and the boundary, and a torn or wrong-shaped
+`acl.json` reads as "no roles". `/ready` is documented as authenticated (it
+executes a probe); only `/healthz` is open.
+
+**Multi-instance door — malformed questions were answered.** `{"question":
+42}` answered "42" and `{"question": ""}` performed a real ask. The door now
+mirrors the single-instance contract (malformed JSON, non-object body,
+non-string question, empty question → 400) and dispatches on a normalized
+path, so `/healthz?lb=1` and `/alpha/ask?trace=1` reach their routes.
+
+**Router — the refusal vocabulary was incomplete, and a corrupt instance
+config changed the operating point.** `below_floor`, `ambiguous` and
+`comparative` were returned by the gate and written to the audit ledger but
+missing from `REFUSAL_REASONS`; they are now declared (`GATE_VERSION` stays
+1 — no semantics changed), and an AST test fails if `_gate_decide` ever
+returns a literal outside the set. An instance-scoped `router.json` that
+exists but cannot be parsed now refuses by name and path instead of silently
+falling back to the cwd's thresholds.
+
+**Lifecycle, watch, and hygiene.** `mothballed.json` is written atomically
+and read tolerantly (a torn marker no longer reads as "nothing demoted" or
+crashes fleet/SLO). A rule's per-rule `webhook` is carried into the alert it
+produces, so it is actually delivered. The unreachable `_cmd/gossip.py` shim
+is removed, and every `_cmd` shim's argparse-dest contract is now enforced
+by a sweep. File handles are closed in `Instance.export`, the bank readers,
+and five command modules.
+
+Full suite: 1341 passed, 8 skipped. Bundled itsm golden 13/13, truth 13/13,
+invariants hold. Wheel-vs-source differential parity on the gate decision.
+
 ## 2.9.11 — one gate, one directory: the calibrated floor belongs to the instance
 
 Three defects found while verifying v2.9.10, reproduced, fixed and
