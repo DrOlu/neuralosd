@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import threading
 import time
 import uuid
@@ -136,14 +137,31 @@ def _envf(name, default):
         return default
 
 
-def _router_config(instance_name):
+def _router_config(instance_name, config_dir=None):
     """Per-instance router thresholds from router.json, if present.
 
     Written by `neuralosd calibrate` after fitting floor/margin against the
     golden and trap banks, so an operator's chosen operating point survives
     restarts without environment variables.
+
+    Resolution order: the instance directory first (config_dir — where
+    `calibrate` writes), then the process cwd (legacy behaviour). E7: this
+    used to be CWD-ONLY, so the same instance answered differently
+    depending on which directory the CLI happened to start in — the
+    binary-vs-wheel divergence reported on v2.9.10 was exactly this: one
+    invocation ran with cwd=instance (floor 15 honoured, weak question
+    refused), the other from elsewhere (floor fell back to the default 3.0
+    and the same weak question was ANSWERED). The calibrated thresholds
+    are a property of the instance, not of the shell.
     """
-    for candidate in (f"{instance_name}.router.json", "router.json"):
+    candidates = []
+    if config_dir:
+        candidates.append(os.path.join(config_dir,
+                                       f"{instance_name}.router.json"))
+        candidates.append(os.path.join(config_dir, "router.json"))
+    candidates.append(f"{instance_name}.router.json")
+    candidates.append("router.json")
+    for candidate in candidates:
         if os.path.isfile(candidate):
             try:
                 with open(candidate, encoding="utf-8") as fh:
@@ -596,7 +614,8 @@ class Router:
                  floor: Optional[float] = None, margin: Optional[float] = None,
                  min_question_coverage: Optional[float] = None,
                  refuse_disjunction: Optional[bool] = None,
-                 audit_source: str = "user"):
+                 audit_source: str = "user",
+                 config_dir: Optional[str] = None):
         self.probes = list(probes)
         self.metas = [getattr(p, "_probe") for p in self.probes]
         # Duplicate probe names used to be accepted silently: the menu listed
@@ -635,7 +654,7 @@ class Router:
         # whose only match was a generic prefix ("how many ...") answered
         # confidently from an unrelated probe. Defaults: refuse-over-guess.
         # Per-instance override: router.json next to probes.py / the menu.
-        cfg = _router_config(name)
+        cfg = _router_config(name, config_dir=config_dir)
         self.floor = float(floor if floor is not None
                            else cfg.get("floor", _envf("NEURALOSD_FLOOR", 3.0)))
         self.margin = float(margin if margin is not None
@@ -645,8 +664,11 @@ class Router:
             else cfg.get("min_question_coverage",
                          _envf("NEURALOSD_MIN_QUESTION_COVERAGE", 0.5)))
         self.refuse_disjunction = bool(
-            refuse_disjunction if refuse_disjunction is not None
-            else cfg.get("refuse_disjunction", True))
+            refuse_disjunction if refuse_disjunction is not None else
+            cfg.get("refuse_disjunction", True))
+        # E7: the last gate decision path (see _gate) — published to stderr
+        # under NEURALOSD_GATE_TRACE=1, kept here for tests and debugging.
+        self.last_gate_trace = None
         # What the winner is allowed to know about, per probe: triggers, name,
         # description AND enum values. A question token that appears nowhere in
         # that set is a domain noun the probe has never heard of.
@@ -807,6 +829,38 @@ class Router:
 
     # -- internal helpers --------------------------------------------------
     def _gate(self, normalized, runner_up, chosen):
+        """Traced wrapper: run the decision, keep the decision path, and
+        publish it to stderr when NEURALOSD_GATE_TRACE is set.
+
+        E7: the wheel and a frozen build of the same version were observed
+        disagreeing on this very decision (same instance, same question —
+        one refused below_floor, the other answered). With the trace on,
+        both builds print the identical one-line decision path, so any
+        residual divergence is visible in two terminal lines instead of a
+        week of guessing. `self.last_gate_trace` keeps the last decision
+        for tests.
+        """
+        if not chosen:
+            return None                      # nothing executable; handled upstream
+        meta, score, kwargs = chosen
+        trace = {"probe": meta.name,
+                 "score": round(float(score), 4),
+                 "floor": self.floor,
+                 "margin": self.margin,
+                 "per_probe_gate": float(meta.conf_gate or 0.0),
+                 "args_seen": _args_seen(kwargs, normalized, meta),
+                 "extracted": {k: v for k, v in (kwargs or {}).items()
+                               if isinstance(v, (str, int, float, bool))}}
+        reason = self._gate_decide(normalized, runner_up, chosen, trace)
+        trace["decision"] = reason
+        self.last_gate_trace = trace
+        if os.environ.get("NEURALOSD_GATE_TRACE", "").lower() in (
+                "1", "true", "yes"):
+            print("gate_trace: " + json.dumps(trace, ensure_ascii=False,
+                                              default=str), file=sys.stderr)
+        return reason
+
+    def _gate_decide(self, normalized, runner_up, chosen, trace):
         """The three-outcome decision. Returns None (CONFIDENT) or a reason.
 
         None            -> execute the chosen probe (today's behaviour)
@@ -817,7 +871,6 @@ class Router:
                            winner (it won on generic words like "how many")
         "comparative"   -> the question compares alternatives and no probe
                            claims to compare
-
         Deliberately computed from the MENU and the QUESTION only: no probe
         runs, no model is called, microseconds.
 
@@ -851,12 +904,14 @@ class Router:
         # the system just did.
         action = action_intent_reason(normalized, self._menu_vocab)
         if action:
+            trace["note"] = "action_intent"
             return action
 
-        if _args_seen(kwargs, normalized) > 0:
+        if _args_seen(kwargs, normalized, meta) > 0:
             return None                      # explicit entity reference
         per_probe = meta.conf_gate if meta.conf_gate else 0.0
         if max(self.floor, per_probe) > 0 and score < max(self.floor, per_probe):
+            trace["effective_floor"] = max(self.floor, per_probe)
             return "below_floor"
 
         q_words = set(re.findall(r"[a-z0-9]+", normalized.lower()))
@@ -864,6 +919,7 @@ class Router:
             head = qual.split()[0]
             hit = head in q_words if len(qual.split()) == 1 else qual in normalized.lower()
             if hit and head not in self._vocab.get(meta.name, frozenset()):
+                trace["dropped_qualifier"] = qual
                 return "dropped_filter"
         qt = tokens(normalized)
         # Numbers are entity references ("user 4"), not subjects.
@@ -886,6 +942,7 @@ class Router:
         # out of scope - refusing is correct no matter which probe scored top.
         unknown = [t for t in sorted(domain) if not self._known_anywhere(t)]
         if unknown:
+            trace["unknown_nouns"] = unknown
             return "no_probe_matches"
 
         if runner_up is not None:
@@ -894,11 +951,17 @@ class Router:
             # probe that was skipped (its arguments did not extract) produced
             # false refusals on questions whose best prose match was not
             # routable anyway.
+            trace["runner_up"] = runner_up[0].name
+            trace["runner_up_score"] = round(float(runner_up[1]), 4)
+            trace["cover"] = round(cover(meta.name), 4)
+            trace["runner_up_cover"] = round(cover(runner_up[0].name), 4)
             if (score - runner_up[1] < self.margin
                     and cover(meta.name) <= cover(runner_up[0].name)):
                 return "ambiguous"
         if self.min_question_coverage > 0 and cover(meta.name) < \
                 self.min_question_coverage:
+            trace["cover"] = round(cover(meta.name), 4)
+            trace["min_question_coverage"] = self.min_question_coverage
             return "low_coverage"
         if self.refuse_disjunction:
             q = normalized.lower()
@@ -1465,13 +1528,42 @@ ARG_MATCH_BONUS = 3.0
 UNCONSUMED_PENALTY = 12.0
 
 
-def _args_seen(kwargs, question: str) -> int:
-    """How many extracted argument values appear in the question itself."""
+def _args_seen(kwargs, question: str, meta: "ProbeMeta | None" = None) -> int:
+    """How many extracted argument values appear in the question itself.
+
+    E7 (gate path only): extract_args fills OPTIONAL args from their spec
+    default when the question does not name them — an enum fallback like
+    "all", a default page number, status="open". Such a filled value can
+    then coincide with a word in the question text, and counting it let a
+    sentence that merely contains "all" (or "today", or a page number)
+    switch the ENTIRE confidence gate off — floor, margin, qualifier checks
+    all skipped — promoting a weak 6.3 match into a confident answer.
+    Worse, enum extraction is substring-based, so a default value that
+    appears as a word is INDISTINGUISHABLE at this layer from one the
+    question deliberately named. Per the defect prescription, gate bypass
+    therefore requires a NON-DEFAULT argument (no `required: False`, no
+    `default`) whose value the question contains: required args only ever
+    hold genuinely extracted values, so the word in the question is real
+    evidence there. Optional args — even genuinely named ones — never
+    disable the gate; the prose score has to carry the question. Callers
+    without meta (the ARG_MATCH_BONUS scoring term) keep the original
+    behaviour.
+    """
+    if not kwargs:
+        return 0
     q = question.lower()
+    specs = (meta.args if meta is not None else None) or {}
     n = 0
-    for value in (kwargs or {}).values():
-        if isinstance(value, str) and value and value.lower() in q:
-            n += 1
+    for name, value in kwargs.items():
+        if not isinstance(value, str) or not value:
+            continue
+        if value.lower() not in q:
+            continue
+        spec = specs.get(name)
+        if spec is not None and (spec.get("required") is False
+                                 or spec.get("default") is not None):
+            continue    # optional/defaulted arg: never bypasses the gate
+        n += 1
     return n
 
 

@@ -1,5 +1,73 @@
 # Changelog
 
+## 2.9.11 — one gate, one directory: the calibrated floor belongs to the instance
+
+Three defects found while verifying v2.9.10, reproduced, fixed and
+regression-pinned. Two are in the actuation CLI, one is the routing gate
+that was reported as "the binary and the wheel disagree".
+
+**Actuate — the CLI could never actually apply.** `neuralosd actuate
+--apply --plan <id>` dry-ran forever: the CLI shim read attributes the
+argparse parser never defines (`apply_plan`/`undo_plan_id` where the
+dests are `plan`/`undo_plan`), so apply and undo were both unreachable
+and the blind-apply guard could not fire. The shim now falls back across
+the real dest names and `--apply` without a plan refuses with exit 2 and
+a message that names `--plan`. Pinned in `tests/test_actuate_cli.py`
+(subprocess CLI, argparse-dest contract test that fails if any
+`getattr` chain in the shim stops resolving).
+
+**Actuate — the stub executor printed "✓ APPLIED".** The CLI wires
+`side_effect = lambda: None`, so a "successful" apply changed nothing on
+the host while the journal recorded `applied: true`. The journal may
+never claim an effect that did not occur: apply/undo notices now print
+an explicit STUB warning and journal entries carry `"stub": true` (and
+undo reports echo it). A future real executor flips one flag.
+
+**Routing — `router.json` was read from the process CWD, so the
+calibrated floor was a coin flip.** `calibrate` writes the fitted
+floor/margin into the INSTANCE directory, but the router looked for
+`router.json` in the CURRENT WORKING DIRECTORY only. The same instance
+answered differently depending on which directory the CLI was launched
+from: launched inside the instance dir, "list the distinct tiers"
+against a floor-30 calibration refused `below_floor`; launched from the
+parent, the floor silently fell back to the default 3.0 and the same
+question was answered. Reproduced with a SINGLE v2.9.10 binary from two
+directories — this is the v2.9.10 "wheel vs binary gate divergence":
+same source, different launch directory. Thresholds are now resolved
+from the instance directory first (cwd stays as a legacy fallback), and
+a new CI job (`verify-release.yml` → `differential`) asks the same
+calibrated question of the published binary and the wheel from a parent
+directory and asserts byte-identical gate decisions on every release.
+
+**Routing — the entity bypass was switched off by a coincidence word.**
+The gate's bypass (`any extracted value appears in the question →
+skip floor, margin and qualifier checks`) counted values that
+`extract_args` had filled from an OPTIONAL argument's default — an enum
+fallback like "all", a default page number, `status="open"`. A sentence
+that merely contained that word turned a weak sub-floor match into a
+confident answer. Worse, enum extraction is substring-based, so a
+default value appearing as a word is indistinguishable from one the
+question deliberately named. Bypass now requires a NON-DEFAULT argument
+(no `required: False`, no `default`) whose value the question contains;
+required args only ever hold genuinely extracted values. Optional-arg
+questions must now be carried by their prose score — conservative by
+design. The scoring term (`ARG_MATCH_BONUS`) keeps its original
+behaviour.
+
+**Publishing the gate decision path.** `NEURALOSD_GATE_TRACE=1` prints
+one JSON line to stderr — probe, score, floor, margin, per-probe gate,
+args_seen, extracted args, decision — for every gate evaluation,
+identically in the wheel and a frozen binary; `Router.last_gate_trace`
+keeps the last decision for tests. A build-vs-build divergence is now a
+two-line diff, and the differential CI job asserts the decision path is
+published by both builds.
+
+Pinned in `tests/test_gate_trace_and_config.py` (11 tests: instance-dir
+resolution, cwd legacy fallback, default-word bypass, named-optional
+non-bypass, required-enum bypass, trace contents, stderr publication,
+trace-off by default). Full suite: 1254 passed, 8 skipped. Bundled itsm
+golden 13/13, truth 13/13, invariants hold.
+
 ## 2.9.10 — one-shot actuation, intent-faithful routing, a bounded ask cache
 
 Three defects reproduced in the wild, fixed and regression-pinned.

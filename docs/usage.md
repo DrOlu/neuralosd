@@ -760,7 +760,27 @@ Design details that matter:
 - **An extracted entity bypasses the thresholds.** "status of incident
   INC0000000077173" matched a caged pattern — that extraction IS the confidence
   signal. Applying prose thresholds there would refuse the questions caged
-  probes exist for.
+  probes exist for. Since 2.9.11 the bypass requires a **non-default** argument
+  (no `required: False`, no `default`) whose value the question contains:
+  values extract_args filled from an optional arg's DEFAULT (an enum fallback
+  like `"all"`, a default page number) can coincide with a word in the
+  sentence, and used to switch the whole gate off on that coincidence.
+  Optional-arg questions are carried by their prose score instead.
+- **The gate decision path is publishable.** `NEURALOSD_GATE_TRACE=1` prints
+  one JSON line to stderr per gate evaluation — probe, score, floor, margin,
+  per-probe gate, `args_seen`, extracted args and the decision — identically
+  in the wheel and a frozen binary, so build-vs-build divergence is a two-line
+  diff. `Router.last_gate_trace` keeps the last decision in-process.
+- **`router.json` is resolved from the instance directory first.** Since
+  2.9.11 the calibrated floor/margin are found next to `probes.py` regardless
+  of which directory the CLI was launched from (the process CWD is still
+  checked as a legacy fallback). Before, launching the same instance from a
+  parent directory silently dropped the calibration — the reported "binary
+  vs wheel gate divergence" on 2.9.10 was exactly this. The release pipeline
+  enforces parity: `verify-release.yml`'s `differential` job asks the same
+  calibrated question of the published binary and the wheel from a parent
+  directory and fails unless both refuse identically
+  (`scripts/differential_gate_check.py`).
 
 Every refusal carries its **score vector** (top-3 probes + scores) and a
 `refusal_reason`:

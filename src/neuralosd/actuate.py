@@ -46,7 +46,7 @@ def _load_journal(instance_dir):
 
 def actuate(action, target, reason, operator, instance_dir,
             apply_plan=None, undo_plan_id=None, side_effect=None,
-            ts=None):
+            stub=False, ts=None):
     """One actuation step: dry-run, apply, or undo.
 
     Returns a report dict. The journal is always written (even for
@@ -60,6 +60,10 @@ def actuate(action, target, reason, operator, instance_dir,
     undo_plan_id: the plan_id to reverse
     side_effect: the callable that actually touches the system (injectable
                  for tests; production wires it to Plasma's actuation CLI)
+    stub:       True when side_effect is a no-op placeholder (the CLI's
+                 default executor). Applies/undoes journaled through this
+                 path record "stub": true — the journal must never claim
+                 an effect that did not occur.
     """
     if action not in ACTIONS:
         raise SystemExit(
@@ -90,7 +94,7 @@ def actuate(action, target, reason, operator, instance_dir,
             "op": "undo", "plan_id": undo_plan_id,
             "action": action, "target": target,
             "reason": reason, "operator": operator, "ts": ts,
-            "undone": True,
+            "undone": True, "stub": bool(stub),
             "original_reason": original.get("reason"),
         }
         _journal(instance_dir, undo_entry)
@@ -98,7 +102,7 @@ def actuate(action, target, reason, operator, instance_dir,
         if side_effect is not None:
             side_effect()
         return {"undone": True, "plan_id": undo_plan_id,
-                "action": action, "target": target}
+                "action": action, "target": target, "stub": bool(stub)}
 
     # ── DRY-RUN or APPLY ──────────────────────────────────────────────
     plan_id = "plan-" + uuid.uuid4().hex[:12]
@@ -141,10 +145,10 @@ def actuate(action, target, reason, operator, instance_dir,
         entry = {"op": "apply", "plan_id": apply_plan,
                  "action": action, "target": target, "reason": reason,
                  "operator": operator, "ts": ts, "applied": True,
-                 "dry_run": False}
+                 "dry_run": False, "stub": bool(stub)}
         _journal(instance_dir, entry)
         return {"applied": True, "plan_id": apply_plan, "action": action,
-                "target": target, "dry_run": False}
+                "target": target, "dry_run": False, "stub": bool(stub)}
     else:
         # DRY-RUN: nothing touches the system
         entry = {"op": "dry_run", "plan_id": plan_id,

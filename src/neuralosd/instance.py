@@ -75,6 +75,7 @@ class Instance:
             audit_file=(audit_name if os.path.isabs(audit_name)
                         else os.path.join(self.state_dir, audit_name)),
             pii_mask=pii_mask, ttl=ttl, name=name,
+            config_dir=self.state_dir,
         )
         self._synthesize_birth_traps()
 

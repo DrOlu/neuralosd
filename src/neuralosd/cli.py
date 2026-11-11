@@ -77,8 +77,10 @@ def _harden_streams():
             pass
 
 
-def main():
-    _harden_streams()
+def build_parser():
+    """The full argparse tree. Factored out of main() so tests (and the
+    E5-class dest-contract test) can inspect what dests the parser sets
+    without executing the dispatch."""
     ap = argparse.ArgumentParser(
         prog="neuralosd",
         description="Deterministic-first agentic runtime for neuralOS")
@@ -687,6 +689,12 @@ def main():
     p_sc.add_argument("--python", default="3.12")
     p_sc.add_argument("--force", action="store_true", help="rebuild from scratch")
 
+    return ap
+
+
+def main():
+    _harden_streams()
+    ap = build_parser()
     a = ap.parse_args()
     if not a.command:
         ap.print_help()
