@@ -579,10 +579,32 @@ def _tail_lines(path, cap):
         return list(collections.deque(fh, maxlen=cap))
 
 
+def _envi(name, default):
+    """Integer from the environment, or the default (the _envf idiom)."""
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+# Below this many asks in the window the rate is not a signal: one refusal is
+# 100 %. Undersized samples still report their rate, but cannot breach.
+MIN_ASKS_FOR_SLO = 10
+
+
 def refusal_rate(instance_dir, window_hours=24, max_refusal_rate=0.4,
-                 tail_lines=200000, sources=None):
+                 tail_lines=200000, sources=None, min_asks=None):
     """The refusal rate over the window IS the menu-gap signal. A breach is
     not a failure of the router — it is a capability gap, quantified.
+
+    A breach needs a SAMPLE. `min_asks` (default ``MIN_ASKS_FOR_SLO`` = 10,
+    overridable with ``--min-asks`` or ``NEURALOSD_MIN_ASKS``) is the
+    smallest window that can be judged: below it ``insufficient_data`` is
+    True and ``breach`` stays False, because one refusal in a one-ask
+    window is a 100 % rate and a statistical artefact, not a menu failure.
+    The rate itself is never hidden — undersized samples still report
+    ``refusal_rate`` and their ask count, so an operator can see the
+    traffic that is too thin to judge.
 
     Reads at most `tail_lines` lines (bounded, newest-first by position):
     a rate computed from a bounded tail is honest as long as the cap is
@@ -606,6 +628,9 @@ def refusal_rate(instance_dir, window_hours=24, max_refusal_rate=0.4,
     None: unfiltered, every row counts — exactly the pre-2.9.6 denominator,
     so dashboards do not move under a patch release.
     """
+    if min_asks is None:
+        min_asks = _envi("NEURALOSD_MIN_ASKS", MIN_ASKS_FOR_SLO)
+    min_asks = int(min_asks)
     audit_path = os.path.join(instance_dir, "ask_audit.jsonl")
     cutoff = time.time() - window_hours * 3600.0
     asks = refused = missing_ts = 0
@@ -635,19 +660,30 @@ def refusal_rate(instance_dir, window_hours=24, max_refusal_rate=0.4,
                 why = r.get("refusal_reason") or "refused"
                 reasons[why] = reasons.get(why, 0) + 1
     rate = (refused / asks) if asks else 0.0
+    undersized = asks < min_asks
     return {"asks": asks, "refused": refused,
             "refusal_rate": round(rate, 4),
             "slo": max_refusal_rate,
-            "breach": asks > 0 and rate > max_refusal_rate,
+            # A breach needs a sample. breach is what the dashboard and the
+            # exit codes read, so a 1-ask window must not set it.
+            "breach": (not undersized) and rate > max_refusal_rate,
+            "insufficient_data": undersized,
+            "min_asks": min_asks,
             "rows_missing_ts": missing_ts,
             "top_reasons": sorted(reasons.items(), key=lambda kv: -kv[1])[:5]}
 
 
-def fleet_report(dirs, window_hours=24, max_refusal_rate=0.4):
+def fleet_report(dirs, window_hours=24, max_refusal_rate=0.4, min_asks=None):
     """Per-instance health across a fleet: menu size, activity, refusal
-    rate vs SLO. The dashboard (and the exit code) read this."""
+    rate vs SLO. The dashboard (and the exit code) read this.
+
+    Instances whose window is smaller than `min_asks` are neither healthy
+    nor breaching: they are counted in their own `undersized` bucket and
+    rendered n/a, because calling a 1-ask window "ok" is as wrong as
+    paging on it.
+    """
     instances = []
-    breached = healthy = 0
+    breached = healthy = undersized = 0
     for d in dirs:
         d = os.path.abspath(d)
         entry = {"instance": os.path.basename(d.rstrip("/")), "path": d}
@@ -661,18 +697,21 @@ def fleet_report(dirs, window_hours=24, max_refusal_rate=0.4):
             entry["probes"] = None
             entry["error"] = str(e)[:120]
         stats = refusal_rate(d, window_hours=window_hours,
-                             max_refusal_rate=max_refusal_rate)
+                             max_refusal_rate=max_refusal_rate,
+                             min_asks=min_asks)
         entry.update({k: stats[k] for k in
                       ("asks", "refused", "refusal_rate", "breach",
-                       "rows_missing_ts")})
-        if stats["breach"]:
+                       "insufficient_data", "rows_missing_ts")})
+        if stats["insufficient_data"]:
+            undersized += 1
+        elif stats["breach"]:
             breached += 1
         else:
             healthy += 1
         entry["mothballed"] = len(mothballed_names(d))
         instances.append(entry)
     return {"instances": instances, "breached": breached, "healthy": healthy,
-            "slo": max_refusal_rate}
+            "undersized": undersized, "slo": max_refusal_rate}
 
 
 def write_badge(instance_dir, out_path, actions_out=None):

@@ -209,9 +209,12 @@ def test_refusal_rate_computed_over_a_window(tmp_path):
               encoding="utf-8") as fh:
         for r in rows:
             fh.write(json.dumps(r) + "\n")
-    stats = refusal_rate(out, window_hours=24)
+    # min_asks=4: this test is about the window arithmetic, not the E8
+    # sample-size gate (a 4-ask window is undersized at the default 10).
+    stats = refusal_rate(out, window_hours=24, min_asks=4)
     assert stats["asks"] == 4
     assert abs(stats["refusal_rate"] - 0.75) < 1e-9
+    assert stats["insufficient_data"] is False
     assert stats["breach"] is True                  # default SLO 0.4
 
 
@@ -226,7 +229,10 @@ def test_fleet_dashboard_reports_each_instance(tmp_path):
                   encoding="utf-8") as fh:
             for r in rows:
                 fh.write(json.dumps(r) + "\n")
-    report = fleet_report([a, b], window_hours=24, max_refusal_rate=0.4)
+    # One ask each: min_asks=1 so the fleet buckets, not the E8 gate, are
+    # what this test checks.
+    report = fleet_report([a, b], window_hours=24, max_refusal_rate=0.4,
+                          min_asks=1)
     assert len(report["instances"]) == 2
     assert all(i["refusal_rate"] == 1.0 for i in report["instances"])
     assert report["breached"] == 2

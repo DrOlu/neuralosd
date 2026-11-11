@@ -320,6 +320,10 @@ def build_parser():
     p_slo.add_argument("--instance-dir", required=True)
     p_slo.add_argument("--window-hours", type=int, default=24)
     p_slo.add_argument("--max-refusal-rate", type=float, default=0.4)
+    p_slo.add_argument(
+        "--min-asks", type=int, default=None,
+        help="smallest window that can breach (default 10; "
+             "env NEURALOSD_MIN_ASKS)")
 
     # fleet — multi-instance dashboard (v2.4.0)
     p_fl = sub.add_parser(
@@ -327,6 +331,10 @@ def build_parser():
     p_fl.add_argument("dirs", nargs="+", help="instance dirs (globs ok)")
     p_fl.add_argument("--window-hours", type=int, default=24)
     p_fl.add_argument("--max-refusal-rate", type=float, default=0.4)
+    p_fl.add_argument(
+        "--min-asks", type=int, default=None,
+        help="smallest window that can breach (default 10; "
+             "env NEURALOSD_MIN_ASKS)")
 
     # badge — golden-bank shields + CI gate (v2.4.0)
     p_bd = sub.add_parser(
