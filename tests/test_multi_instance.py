@@ -423,3 +423,58 @@ class TestServeCli:
         run_multi(_serve_ns(d, 8877, host="0.0.0.0"))
         err = capsys.readouterr().err
         assert "WARNING" in err and "NO" in err and "--auth-token" in err
+
+
+# ── F7: the multi door enforces the same request contract as serve ─────────
+# It used to coerce: {"question": 42} became "42" and "" became a real ask.
+
+@pytest.fixture()
+def multi_live(tmp_path):
+    from http.server import ThreadingHTTPServer
+    _make_instance_a(tmp_path)
+    server = MultiInstanceServer(instances_dir=str(tmp_path))
+    port = _free_port()
+    httpd = ThreadingHTTPServer(("127.0.0.1", port),
+                                make_handler(server))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        httpd.shutdown()
+
+
+def _multi_post(url, body):
+    req = urllib.request.Request(
+        url, data=body, headers={"Content-Type": "application/json"},
+        method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status, json.loads(r.read().decode() or "{}")
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read().decode() or "{}")
+
+
+@pytest.mark.parametrize("body,fragment", [
+    (b'{"question": 42}', "question must be a string"),
+    (b'{"question": ""}', "empty question"),
+    (b'{"question": "   "}', "empty question"),
+    (b'[]', "must be a JSON"),
+    (b'{not json', "malformed JSON"),
+])
+def test_multi_ask_rejects_malformed_bodies_like_serve(multi_live, body,
+                                                       fragment):
+    code, parsed = _multi_post(f"{multi_live}/alpha/ask", body)
+    assert code == 400, parsed
+    assert fragment in parsed["error"], parsed
+
+
+def test_multi_routes_ignore_the_query_string(multi_live):
+    """F7: /healthz?lb=1 and /alpha/ask?trace=1 are the same routes; the
+    handler normalized for AUTH but then dispatched on the raw path."""
+    with urllib.request.urlopen(f"{multi_live}/healthz?lb=1", timeout=5) as r:
+        assert r.status == 200
+    code, body = _multi_post(
+        f"{multi_live}/alpha/ask?trace=1",
+        json.dumps({"question": "how many rows"}).encode())
+    assert code == 200, body
+    assert body["probe"] == "row_count"
