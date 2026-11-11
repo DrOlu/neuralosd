@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.9.13 — a refusal rate needs a sample
+
+**SLO — one refusal was a 100 % rate and a fleet incident.** `refusal_rate()`
+breached whenever `asks > 0` and the rate was above the SLO, so a single
+correctly-refused ask in a 24 h window paged a scheduler. On a 21-instance
+fleet three low-traffic instances flapped to BREACH every window, and
+`fleet` exited 1 on the artefact.
+
+A breach now needs a sample. Below `MIN_ASKS_FOR_SLO` (10, `--min-asks N` or
+`NEURALOSD_MIN_ASKS`) the window reports `insufficient_data: true` and
+`breach: false`; exactly 10 asks is judged normally, and a
+`max_refusal_rate` of 1.0 or more can never breach. The rate itself is never
+hidden — undersized windows still report `refusal_rate`, `asks` and
+`refused`, so thin traffic stays visible. `fleet_report()` carries the new
+fields, counts undersized instances in their own additive `undersized`
+bucket, and both `slo` and `fleet` render them `n/a` (distinct from `ok`)
+and exit 0; only a real breach drives the exit code. The default 40 % SLO,
+the window/source/tail semantics and the `ask_audit.jsonl` row contract are
+unchanged.
+
 ## 2.9.12 — the audit release: fourteen defects, every state machine named
 
 A full audit of the implicit state machines behind the runtime. Every defect
