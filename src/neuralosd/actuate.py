@@ -12,6 +12,27 @@ The safety model is the same as rmagent-actuate:
 The actual system change is behind `side_effect` — an injectable callable.
 Tests never touch a real system; production wires it to Plasma's
 actuation CLI or the Windows API.
+
+The journal is the durable state machine (the CLI is a new process for
+every command), so every decision below is derived from it, never from
+process memory. States per plan_id:
+
+    (none) --dry_run--> DRY_RUN --apply--> APPLIED --undo--> UNDONE
+                                                   ^              |
+                                                   +---- apply ---+
+
+Illegal transitions are refused BY NAME (see `_illegal`), never
+repaired silently and never forced. A plan is APPLIED/UNDONE according to
+its LAST transition, not "has ever been": a single earlier undo must not
+disable the one-shot guard for every later apply (F1), and a second undo
+must not fire the reverse action twice (F2).
+
+Journal compatibility: rows written before v2.9.10 carry no "op" key; a
+row with `dry_run: true` reads as a dry-run and a row with `applied: true`
+reads as an apply, so an old journal still guards against a duplicate
+fire (F5). A single torn TRAILING line is the normal result of a crash
+mid-append and is ignored; malformed data anywhere else refuses by name
+rather than being guessed around (F4).
 """
 import json
 import os
@@ -26,22 +47,162 @@ ACTIONS = {
     "quarantine_file": "Move the file to the quarantine directory",
 }
 
+# The legal transitions, one table shared by the guard, the error text and
+# the audit doc (docs/audits/state-machines.md). Keys are current states;
+# values are the ops allowed from that state.
+LEGAL_TRANSITIONS = {
+    None: {"dry_run"},
+    "dry_run": {"apply"},
+    "applied": {"undo"},
+    "undone": {"apply"},
+}
+
 
 def _journal_path(instance_dir):
     return os.path.join(instance_dir, "actuation_journal.jsonl")
 
 
+def _repair_torn_tail(path):
+    """Close the crash window before appending to a torn journal.
+
+    A crash can leave a partial last line with no newline. Reading tolerates
+    it, but if the next command appends after it the torn bytes become a
+    MIDDLE line and every later read would refuse. Repair the artifact at
+    the one place that writes: terminate a complete-but-unterminated tail,
+    truncate an unparseable one (it was never a committed row).
+    """
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except FileNotFoundError:
+        return
+    if not data or data.endswith(b"\n"):
+        return
+    cut = data.rfind(b"\n") + 1
+    tail = data[cut:]
+    try:
+        json.loads(tail.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        with open(path, "r+b") as fh:
+            fh.truncate(cut)
+            fh.flush()
+            os.fsync(fh.fileno())
+    else:
+        with open(path, "ab") as fh:
+            fh.write(b"\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+
+
 def _journal(instance_dir, entry):
-    with open(_journal_path(instance_dir), "a", encoding="utf-8") as fh:
+    """Append one journal row durably.
+
+    One write + fsync: a crash loses at most the trailing partial line,
+    which `_read_journal` knows how to recognise as a torn append instead
+    of crashing every later command.
+    """
+    path = _journal_path(instance_dir)
+    _repair_torn_tail(path)
+    with open(path, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
 
 
-def _load_journal(instance_dir):
+def _op_of(entry):
+    """The operation a journal row records, including legacy rows.
+
+    v2.9.10 and earlier wrote rows WITHOUT "op"; infer it from the same
+    flags the old writer set so an old journal is still a state machine.
+    """
+    op = entry.get("op")
+    if op:
+        return op
+    if entry.get("dry_run"):
+        return "dry_run"
+    if entry.get("applied"):
+        return "apply"
+    if entry.get("undone"):
+        return "undo"
+    return None
+
+
+def _read_journal(instance_dir):
+    """(entries, error) — tolerant ONLY of a torn trailing append.
+
+    Returns the parsed rows and None, or the parsed prefix and a message
+    naming the corruption. A malformed line is acceptable exactly when it
+    is the last non-blank line (a crash between write and newline); the
+    same damage in the middle means rows were lost or reordered, and the
+    state machine must refuse rather than reason from a partial history.
+    """
     path = _journal_path(instance_dir)
     if not os.path.isfile(path):
-        return []
+        return [], None
     with open(path, encoding="utf-8") as fh:
-        return [json.loads(line) for line in fh if line.strip()]
+        lines = fh.readlines()
+    entries = []
+    for i, line in enumerate(lines):
+        if not line.strip():
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            if any(l.strip() for l in lines[i + 1:]):
+                return entries, (f"actuation journal is corrupt at line {i + 1} "
+                                 f"and more rows follow it — refusing to "
+                                 f"derive state from a partial history")
+            continue          # crash mid-append: the last row was never written
+        if not isinstance(obj, dict):
+            if any(l.strip() for l in lines[i + 1:]):
+                return entries, (f"actuation journal line {i + 1} is not a "
+                                 f"JSON object and more rows follow it")
+            continue
+        entries.append(obj)
+    return entries, None
+
+
+def _plan_state(entries, plan_id):
+    """(state, identity): the plan's LAST transition and who it promises to touch.
+
+    state is None if the plan has no rows. `identity` is the most recent
+    dry-run/apply row — the one that DECLARED action/target — so an undone
+    plan is still compared against what was applied, not against whatever
+    an older writer may have put in its undo row.
+    """
+    state, identity = None, None
+    for entry in entries:
+        if entry.get("plan_id") != plan_id:
+            continue
+        op = _op_of(entry)
+        if op == "dry_run" and state is None:
+            state, identity = "dry_run", entry
+        elif op == "apply":
+            state, identity = "applied", entry
+        elif op == "undo":
+            state = "undone"
+    return state, identity
+
+
+def _illegal(plan_id, state, op, detail, hint):
+    label = state.upper() if state else "UNKNOWN"
+    raise SystemExit(
+        f"error: plan {plan_id!r} is {label} — {op} refused "
+        f"({detail}; legal from here: "
+        f"{', '.join(sorted(LEGAL_TRANSITIONS.get(state, set()))) or 'none'}). "
+        f"{hint}")
+
+
+def _same_plan(entry, action, target):
+    """The action/target named now must be the ones the plan recorded.
+
+    A plan is a promise about WHAT will be touched; accepting a different
+    action/target under the same plan_id journals an effect that was never
+    reviewed (F3). Reason/operator are per-entry attribution and may differ
+    (a second operator may undo what the first applied).
+    """
+    return (str(entry.get("action")) == str(action)
+            and str(entry.get("target")) == str(target))
 
 
 def actuate(action, target, reason, operator, instance_dir,
@@ -80,32 +241,51 @@ def actuate(action, target, reason, operator, instance_dir,
     ts = ts if ts is not None else time.time()
     instance_dir = os.path.abspath(instance_dir)
     os.makedirs(instance_dir, exist_ok=True)
+    journal, corrupt = _read_journal(instance_dir)
+    if corrupt:
+        raise SystemExit(f"error: {corrupt}. Archive or repair "
+                         f"{_journal_path(instance_dir)} before actuating.")
 
     # ── UNDO ──────────────────────────────────────────────────────────
     if undo_plan_id:
-        journal = _load_journal(instance_dir)
-        original = next((e for e in journal
-                         if e.get("plan_id") == undo_plan_id
-                         and e.get("applied")), None)
-        if original is None:
-            raise SystemExit(
-                f"error: no applied action with plan_id {undo_plan_id!r}")
+        state, applied = _plan_state(journal, undo_plan_id)
+        if state != "applied":
+            if state is None:
+                raise SystemExit(
+                    f"error: no applied action with plan_id "
+                    f"{undo_plan_id!r}")
+            if state == "undone":
+                _illegal(undo_plan_id, state, "undo",
+                         "a second undo would fire the reverse action twice",
+                         "The plan is already reversed; apply it again "
+                         "(--apply --plan) if that is what you mean.")
+            _illegal(undo_plan_id, state, "undo",
+                     "the plan was never applied",
+                     "Only an APPLIED plan can be undone.")
+        if not _same_plan(applied, action, target):
+            _illegal(undo_plan_id, state, "undo",
+                     f"the plan recorded action={applied.get('action')!r} "
+                     f"target={applied.get('target')!r}, not "
+                     f"action={action!r} target={target!r}",
+                     "Undo the plan you reviewed; start a new dry-run for a "
+                     "different action or target.")
+        # Fire BEFORE journaling: the journal may never claim an effect
+        # that did not occur, so a failing side effect leaves the plan
+        # APPLIED (retryable) with no undo row.
+        if side_effect is not None:
+            side_effect()
         undo_entry = {
             "op": "undo", "plan_id": undo_plan_id,
             "action": action, "target": target,
             "reason": reason, "operator": operator, "ts": ts,
             "undone": True, "stub": bool(stub),
-            "original_reason": original.get("reason"),
+            "original_reason": applied.get("reason"),
         }
         _journal(instance_dir, undo_entry)
-        # fire the undo side effect if the caller provided one
-        if side_effect is not None:
-            side_effect()
         return {"undone": True, "plan_id": undo_plan_id,
                 "action": action, "target": target, "stub": bool(stub)}
 
     # ── DRY-RUN or APPLY ──────────────────────────────────────────────
-    plan_id = "plan-" + uuid.uuid4().hex[:12]
     if apply_plan is not None:
         # APPLY: the operator saw the dry-run and is pulling the trigger
         if apply_plan is True or apply_plan == "":
@@ -113,33 +293,30 @@ def actuate(action, target, reason, operator, instance_dir,
                 "error: --apply needs --plan <id> from a seen dry-run — "
                 "blind actuation is the pattern this module exists to "
                 "prevent")
-        # look up the dry-run to confirm it was seen
-        journal = _load_journal(instance_dir)
-        dr = next((e for e in journal
-                   if e.get("plan_id") == apply_plan
-                   and e.get("dry_run")), None)
-        if dr is None:
+        state, record = _plan_state(journal, apply_plan)
+        if state is None:
             raise SystemExit(
                 f"error: no dry-run found with plan_id {apply_plan!r} — "
                 f"run the dry-run first, review the plan, then --apply")
-        # ONE-SHOT GUARD: dry_run -> applied -> undone is the only legal path.
-        # Without this, a replayed --apply fired the side effect again
-        # (duplicate firewall rule / double host isolation / credential
-        # rotated twice after an operator retry). State is read from the
-        # journal — durable — because the CLI is a new process every time.
-        already = [e for e in journal
-                   if e.get("plan_id") == apply_plan
-                   and e.get("op") == "apply"]
-        undone = [e for e in journal
-                  if e.get("plan_id") == apply_plan
-                  and e.get("op") in ("undo", "undo_plan")]
-        if already and not undone:
-            raise SystemExit(
-                f"error: plan {apply_plan!r} has already been applied — "
-                f"re-applying would fire the action twice. Undo it first "
-                f"(--undo --undo-plan {apply_plan}) if you really mean to "
-                f"re-run it.")
-        applied = True
+        if state == "applied":
+            _illegal(apply_plan, state, "apply",
+                     "the plan has already been applied — re-applying "
+                     "would fire the action twice",
+                     f"Undo it first (--undo --undo-plan {apply_plan}) if "
+                     f"you really mean to re-run it.")
+        # The reviewed plan is a promise about WHAT will be touched; a
+        # different action/target under its id was never reviewed (F3).
+        # Checked from DRY_RUN and from UNDONE (against the last apply).
+        if not _same_plan(record, action, target):
+            _illegal(apply_plan, state, "apply",
+                     f"the dry-run recorded action="
+                     f"{record.get('action')!r} target="
+                     f"{record.get('target')!r}, not action={action!r} "
+                     f"target={target!r}",
+                     "Run a new dry-run for the action you actually "
+                     "mean to apply.")
+        # Fire BEFORE journaling: a side effect that raises leaves the plan
+        # in its current state (retryable) and writes no claim of success.
         if side_effect is not None:
             side_effect()
         entry = {"op": "apply", "plan_id": apply_plan,
@@ -149,13 +326,14 @@ def actuate(action, target, reason, operator, instance_dir,
         _journal(instance_dir, entry)
         return {"applied": True, "plan_id": apply_plan, "action": action,
                 "target": target, "dry_run": False, "stub": bool(stub)}
-    else:
-        # DRY-RUN: nothing touches the system
-        entry = {"op": "dry_run", "plan_id": plan_id,
-                 "action": action, "target": target, "reason": reason,
-                 "operator": operator, "ts": ts, "applied": False,
-                 "dry_run": True}
-        _journal(instance_dir, entry)
-        return {"dry_run": True, "applied": False, "plan_id": plan_id,
-                "action": action, "target": target, "reason": reason,
-                "description": ACTIONS[action]}
+
+    # DRY-RUN: nothing touches the system
+    plan_id = "plan-" + uuid.uuid4().hex[:12]
+    entry = {"op": "dry_run", "plan_id": plan_id,
+             "action": action, "target": target, "reason": reason,
+             "operator": operator, "ts": ts, "applied": False,
+             "dry_run": True, "stub": bool(stub)}
+    _journal(instance_dir, entry)
+    return {"dry_run": True, "applied": False, "plan_id": plan_id,
+            "action": action, "target": target, "reason": reason,
+            "description": ACTIONS[action]}
