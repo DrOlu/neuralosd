@@ -1006,8 +1006,9 @@ neuralosd init --source <path|prefix> --name <name> [--out <dir>] \
     [--since 1h] [--header H --secret-ref env:VAR]
 neuralosd browser --session acme snapshot|click|fill|network ...
 neuralosd snapshot --instance-dir <dir> --label q3
-neuralosd slo --instance-dir <dir> [--window-hours 24 --max-refusal-rate 0.4]
-neuralosd fleet <dirs|globs> [...] [--max-refusal-rate 0.4]
+neuralosd slo --instance-dir <dir> [--window-hours 24 --max-refusal-rate 0.4 \
+    --min-asks 10]
+neuralosd fleet <dirs|globs> [...] [--max-refusal-rate 0.4 --min-asks 10]
 neuralosd badge --instance-dir <dir> --out badge.json [--actions-out wf.yml]
 neuralosd synonyms --instance-dir <dir> [--audit a.jsonl] [--apply proposals.json]
 neuralosd ask --instance-dir <dir> "q" [--as-of q3] [--role analyst]
@@ -1088,6 +1089,7 @@ Every subcommand accepts standard flags. See `neuralosd <command> --help`.
 | `NEURALOSD_PORT` | `8420` | Default daemon port. |
 | `NEURALOSD_INSTANCES` | `~/.neuralosd/instances` | Instance directory. |
 | `NEURALOSD_STATE` | `~/.neuralosd/state` | State directory. |
+| `NEURALOSD_MIN_ASKS` | `10` | Smallest number of asks in the SLO window that can breach. Below it `refusal_rate()` reports `insufficient_data: true` and `breach: false` (the rate is still reported), and `slo`/`fleet` render the instance `n/a` and exit 0. `--min-asks` overrides it. |
 | `NEURALOS_LAB` | `~/neuralos-lab` | Lab root for venv and archives. |
 | `NEURALOS_DSN` | — | Database DSN override (database instances). |
 | `NEURALOSD_AUDIT_FILE` | — | Audit ledger for SELF-TEST traffic (`golden`/`truth` replays). Absolute path, or relative to the instance's state dir. Default when unset: `ask_audit.selftest.jsonl` — the user ledger `ask_audit.jsonl` never receives replay rows. The CLI `--audit` flag overrides this, which overrides the self-test default. |
