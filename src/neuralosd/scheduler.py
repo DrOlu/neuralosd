@@ -24,14 +24,15 @@ class Scheduler:
 
     def _load(self):
         try:
-            self.entries = json.load(open(self.schedules_file, encoding="utf-8"))
+            with open(self.schedules_file, encoding="utf-8") as fh:
+                self.entries = json.load(fh)
         except Exception:
             self.entries = []
 
     def _save(self):
         with self._lock:
-            json.dump(self.entries, open(self.schedules_file, "w", encoding="utf-8"),
-                      indent=2, ensure_ascii=False)
+            with open(self.schedules_file, "w", encoding="utf-8") as fh:
+                json.dump(self.entries, fh, indent=2, ensure_ascii=False)
 
     def add(self, name: str, every_s: int, instance: str, question: str):
         entry = {"name": name, "every_s": every_s, "instance": instance,

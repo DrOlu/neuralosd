@@ -17,8 +17,10 @@ This module provides:
     GET  /{name}/ready           → instance readiness (runs a probe)
     GET  /{name}/openapi.json    → instance OpenAPI spec
     POST /{name}/ask             → route through that instance's router
-    POST /query                  → cross-instance query (routes sub-questions
-                                   to the right instances and combines)
+
+  Cross-instance POST /query is NOT implemented: this docstring used to
+  advertise it while the handler 404'd every request. It stays out of the
+  route list until a real router-to-router fan-out exists.
 
   Lazy loading: instances load on FIRST request, not at server startup.
   A bad instance doesn't kill the server; it just refuses for that instance.
@@ -165,15 +167,18 @@ def make_handler(server: MultiInstanceServer, auth_token: str = None):
             if not self._authorized() and not self._open_path():
                 self._reject()
                 return
-            if self.path == "/healthz":
+            # F7: /healthz?lb=1 and /instances/ are the same routes; the
+            # open-path check already normalized, so the dispatch must too.
+            path = self.path.split("?", 1)[0].rstrip("/") or "/"
+            if path == "/healthz":
                 self._send(200, {"ok": True, "server": "neuralosd-multi"})
                 return
-            if self.path == "/instances":
+            if path == "/instances":
                 self._send(200, {"instances": server.names,
                                  "errors": server._errors})
                 return
 
-            name, action = _PathRouter.parse(self.path)
+            name, action = _PathRouter.parse(path)
             if name is None:
                 self._send(404, {"error": "not found"})
                 return
@@ -198,17 +203,38 @@ def make_handler(server: MultiInstanceServer, auth_token: str = None):
             if not self._authorized():
                 self._reject()
                 return
-            name, action = _PathRouter.parse(self.path)
+            path = self.path.split("?", 1)[0].rstrip("/") or "/"
+            name, action = _PathRouter.parse(path)
             if name is None:
                 self._send(404, {"error": "not found"})
                 return
 
+            # F7: mirror the single-instance contract (service.serve) rather
+            # than coercing. `{"question": 42}` used to become the string
+            # "42" and `{"question": ""}` a real ask — malformed input
+            # answered as if it were a question, and empty asks inflated the
+            # refusal-rate denominator.
             try:
                 n = int(self.headers.get("Content-Length") or 0)
                 payload = json.loads(self.rfile.read(n) or b"{}")
-                q = str(payload.get("question") or "").strip()
-            except Exception as exc:
-                self._send(400, {"error": f"bad request: {exc}"})
+            except (ValueError, TypeError) as exc:
+                self._send(400, {"error": f"bad request: malformed JSON "
+                                          f"({exc})"})
+                return
+            if not isinstance(payload, dict):
+                self._send(400, {"error": "bad request: body must be a JSON "
+                                          "object with a \"question\" key"})
+                return
+            q = payload.get("question")
+            if q is None:
+                q = ""
+            if not isinstance(q, str):
+                self._send(400, {"error": f"bad request: question must be a "
+                                          f"string, got {type(q).__name__}"})
+                return
+            q = q.strip()
+            if not q:
+                self._send(400, {"error": "empty question"})
                 return
 
             inst = server.get(name)

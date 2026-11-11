@@ -133,6 +133,67 @@ class TestE6StubTruthfulness:
         assert entry["stub"] is False
 
 
+class TestF11PlanIsASelectorNotATrigger:
+    """F11 (P0): `--plan <id>` on its own reached the library's APPLY branch
+    and fired the action. The flag selects a plan; only --apply fires it.
+    Also pins the flag grammar around --undo (including the older
+    `--undo --plan <id>` spelling the success notice used to print)."""
+
+    def test_plan_without_apply_does_not_fire(self, tmp_path):
+        inst = tmp_path / "inst"
+        plan = _report(_run(inst, *ACT))["plan_id"]
+        r = _run(inst, *ACT, "--plan", plan)
+        assert r.returncode != 0
+        assert "--apply" in r.stderr
+        assert [e["op"] for e in _ops(inst)] == ["dry_run"]
+
+    def test_dry_run_with_plan_does_not_fire(self, tmp_path):
+        inst = tmp_path / "inst"
+        plan = _report(_run(inst, *ACT))["plan_id"]
+        r = _run(inst, *ACT, "--dry-run", "--plan", plan)
+        assert r.returncode != 0
+        assert [e["op"] for e in _ops(inst)] == ["dry_run"]
+
+    def test_undo_accepts_the_legacy_plan_spelling(self, tmp_path):
+        inst = tmp_path / "inst"
+        plan = _report(_run(inst, *ACT))["plan_id"]
+        assert _run(inst, *ACT, "--apply", "--plan", plan).returncode == 0
+        r = _run(inst, *ACT, "--undo", "--plan", plan)
+        assert r.returncode == 0, r.stderr
+        assert [e["op"] for e in _ops(inst)] == ["dry_run", "apply", "undo"]
+        # and the state machine still refuses a second undo
+        r2 = _run(inst, *ACT, "--undo", "--undo-plan", plan)
+        assert r2.returncode != 0
+        assert "UNDONE" in r2.stderr
+
+    def test_undo_without_a_plan_is_refused(self, tmp_path):
+        r = _run(tmp_path / "inst", *ACT, "--undo")
+        assert r.returncode != 0
+        assert "--undo-plan" in r.stderr
+        assert _ops(tmp_path / "inst") == []
+
+    def test_apply_and_undo_together_are_refused(self, tmp_path):
+        r = _run(tmp_path / "inst", *ACT, "--apply", "--undo",
+                 "--undo-plan", "plan-x")
+        assert r.returncode != 0
+        assert "different transitions" in r.stderr
+
+
+class TestF4CliSurvivesATornJournal:
+    def test_reapply_after_a_crash_torn_line_is_refused_not_a_traceback(
+            self, tmp_path):
+        inst = tmp_path / "inst"
+        plan = _report(_run(inst, *ACT))["plan_id"]
+        assert _run(inst, *ACT, "--apply", "--plan", plan).returncode == 0
+        with open(inst / "actuation_journal.jsonl", "a",
+                  encoding="utf-8") as fh:
+            fh.write('{"op": "apply", "plan_id": "torn')
+        r = _run(inst, *ACT, "--apply", "--plan", plan)
+        assert r.returncode != 0
+        assert "JSONDecodeError" not in r.stderr
+        assert "APPLIED" in r.stderr            # refused by state, by name
+
+
 class TestArgparseDestContract:
     """E5 was a silent dest mismatch: the parser set `plan`, the shim read
     `apply_plan`. This test reads the shim's getattr(a, "name") literals

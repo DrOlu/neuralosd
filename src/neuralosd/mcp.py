@@ -34,7 +34,8 @@ def handle(request, instance_dir: str):
         inst = importlib.util.module_from_spec(spec)
         sys.modules["neuralos_mcp_inst"] = inst
         spec.loader.exec_module(inst)
-        raw = json.load(open("needle_menu.json", encoding="utf-8"))
+        with open("needle_menu.json", encoding="utf-8") as fh:
+            raw = json.load(fh)
         menu = raw if isinstance(raw, list) else (
             raw.get("menu") or raw.get("probes") or [])
         tools = []

@@ -386,12 +386,41 @@ def _mothball_path(instance_dir):
     return os.path.join(instance_dir, "mothballed.json")
 
 
+def _write_mothballed(instance_dir, blob):
+    """Atomic write of the mothballed marker (tmp + fsync + replace).
+
+    A crash mid-write used to truncate mothballed.json; with the tolerant
+    reader that would silently REINSTATE every demoted probe. The replace
+    makes the reader see either the old file or the new one, never a torn
+    one.
+    """
+    path = _mothball_path(instance_dir)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(blob, fh, indent=2)
+        fh.write("\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
+
 def mothballed_names(instance_dir):
+    """Demoted probe names, tolerant of a corrupt/absent marker.
+
+    Same contract as `_cmd._common._mothballed_names`: fleet/SLO reporting
+    must not crash because one instance's hygiene file is damaged. Writes
+    go through `_write_mothballed`, so corruption here is external.
+    """
     path = _mothball_path(instance_dir)
     if not os.path.isfile(path):
         return []
-    with open(path, encoding="utf-8") as fh:
-        return list(json.load(fh).get("names", []))
+    try:
+        with open(path, encoding="utf-8") as fh:
+            blob = json.load(fh)
+    except (ValueError, OSError):
+        return []
+    names = blob.get("names", []) if isinstance(blob, dict) else []
+    return [n for n in names if isinstance(n, str)]
 
 
 def mothball(instance_dir, age_days=180, apply=False):
@@ -427,11 +456,9 @@ def mothball(instance_dir, age_days=180, apply=False):
               "kept": [n for n in names if n not in mothballed]}
     if apply and mothballed:
         current = set(mothballed_names(instance_dir))
-        with open(_mothball_path(instance_dir), "w",
-                  encoding="utf-8") as fh:
-            json.dump({"names": sorted(current | set(mothballed)),
-                       "ts": time.time()}, fh, indent=2)
-            fh.write("\n")
+        _write_mothballed(instance_dir,
+                          {"names": sorted(current | set(mothballed)),
+                           "ts": time.time()})
     return report
 
 
@@ -439,14 +466,15 @@ def reinstate(instance_dir, name):
     path = _mothball_path(instance_dir)
     if not os.path.isfile(path):
         return False
-    with open(path, encoding="utf-8") as fh:
-        blob = json.load(fh)
-    if name not in blob.get("names", []):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            blob = json.load(fh)
+    except (ValueError, OSError):
+        return False
+    if not isinstance(blob, dict) or name not in blob.get("names", []):
         return False
     blob["names"] = [n for n in blob["names"] if n != name]
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(blob, fh, indent=2)
-        fh.write("\n")
+    _write_mothballed(instance_dir, blob)
     return True
 
 
@@ -653,8 +681,11 @@ def write_badge(instance_dir, out_path, actions_out=None):
     from ._cmd._common import load_instance
     inst = load_instance(instance_dir)
     golden_path = os.path.join(instance_dir, "golden.json")
-    bank = json.loads(open(golden_path, encoding="utf-8").read()) \
-        if os.path.isfile(golden_path) else {"items": []}
+    if os.path.isfile(golden_path):
+        with open(golden_path, encoding="utf-8") as fh:
+            bank = json.load(fh)
+    else:
+        bank = {"items": []}
     summary = inst.golden_run(bank)
     total = summary["total"]
     passed = summary["correct"] + summary["refused_ok"]

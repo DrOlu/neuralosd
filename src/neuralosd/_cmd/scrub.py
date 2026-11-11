@@ -94,7 +94,8 @@ def run(a):
             touched.append("cache")
         else:
             try:
-                blob = json.load(open(cache_path, encoding="utf-8"))
+                with open(cache_path, encoding="utf-8") as fh:
+                    blob = json.load(fh)
             except ValueError:
                 blob = {}
             out = {}

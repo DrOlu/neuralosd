@@ -142,6 +142,24 @@ def test_no_token_is_401_and_healthz_stays_open(live):
         assert r.status == 200
 
 
+def test_role_header_without_acl_is_a_403_not_a_dead_socket(live):
+    """F6 (P0): the boundary tested an undefined `_acl_roles` name, so a
+    request carrying X-NeuralOS-Role raised NameError inside the handler and
+    the client saw RemoteDisconnected instead of the documented 403."""
+    req = urllib.request.Request(
+        f"{live}/ask", data=json.dumps({"question": "how many rows"}).encode(),
+        headers={**AUTH, "X-NeuralOS-Role": "analyst"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            body = json.loads(r.read().decode())
+            code = r.status
+    except urllib.error.HTTPError as e:
+        code, body = e.code, json.loads(e.read().decode() or "{}")
+    assert code == 403, body
+    assert "acl.json" in body["error"]
+    assert "NameError" not in body["error"]
+
+
 def test_sdk_exposes_the_bare_reason(live):
     from neuralosd_sdk import NeuralOSDClient, RefusalError
 
@@ -151,3 +169,17 @@ def test_sdk_exposes_the_bare_reason(live):
         client.ask("what is the weather in lagos")
     assert exc.value.reason == "no_probe_matches"
     assert exc.value.envelope["probe"] is None
+
+
+def test_acl_reader_survives_a_torn_or_non_object_file(tmp_path):
+    """F6 hardening: a damaged acl.json must read as "no roles" (a 403),
+    never as an AttributeError inside the request handler."""
+    from neuralosd.service import acl_roles
+
+    (tmp_path / "acl.json").write_text('{"roles": {"analyst": ', encoding="utf-8")
+    assert acl_roles(tmp_path) == {}
+    (tmp_path / "acl.json").write_text('["analyst"]', encoding="utf-8")
+    assert acl_roles(tmp_path) == {}
+    (tmp_path / "acl.json").write_text(
+        '{"roles": {"analyst": "inst-a"}}', encoding="utf-8")
+    assert acl_roles(tmp_path) == {"analyst": "inst-a"}

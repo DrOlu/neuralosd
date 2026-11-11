@@ -128,7 +128,12 @@ def evaluate_rules(rules, events, now=None):
                            "matches": len(matched_events),
                            "threshold": threshold,
                            "sample": [e.get("message", "")
-                                      for e in matched_events[:3]]})
+                                      for e in matched_events[:3]],
+                           # F14: run_cycle reads alert["webhook"] to choose
+                           # the destination; dropping the key here meant a
+                           # per-rule webhook was configured, validated and
+                           # then silently never delivered.
+                           "webhook": rule.get("webhook")})
     return alerts
 
 

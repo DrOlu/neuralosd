@@ -3,9 +3,11 @@ from .router import NoResults, refusal_body, audit_source
 """Minimal HTTP service for an Instance: /healthz /ready /ask /openapi.
 
 Optional bearer-token auth: pass `auth_token` (or set $NEURALOSD_API_TOKEN)
-and every endpoint except the liveness probes (/healthz, /ready) requires
-`Authorization: Bearer <token>` or `X-API-Token: <token>`. This is the
-"front door with a lock" that makes binding non-loopback a defensible act.
+and every endpoint except the liveness probe (/healthz) requires
+`Authorization: Bearer <token>` or `X-API-Token: <token>`. /ready EXECUTES a
+real probe, so it is authenticated too (it used to be documented as open).
+This is the "front door with a lock" that makes binding non-loopback a
+defensible act.
 """
 import hmac
 import json
@@ -37,6 +39,28 @@ def _token_ok(provided: str, expected: str) -> bool:
                                (expected or "").encode())
 
 
+def acl_roles(instance_dir):
+    """The instance's acl.json role map, or {} when unconfigured/unreadable.
+
+    One reader for both the resolver and the HTTP boundary: the boundary
+    used to test an undefined `_acl_roles` name here (F6), so every request
+    that carried X-NeuralOS-Role without an acl.json died with a NameError
+    and a closed socket instead of the documented 403.
+    """
+    if not instance_dir:
+        return {}
+    acl_path = os.path.join(instance_dir, "acl.json")
+    if not os.path.isfile(acl_path):
+        return {}
+    try:
+        with open(acl_path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (ValueError, OSError):
+        return {}
+    roles = data.get("roles") if isinstance(data, dict) else None
+    return roles if isinstance(roles, dict) else {}
+
+
 def resolve_role_instance(role, inst, instance_dir, cache=None):
     """RBAC (v2.8.0): resolve the instance a request's role should run on.
 
@@ -44,18 +68,10 @@ def resolve_role_instance(role, inst, instance_dir, cache=None):
     acl.json -> a role-scoped instance, built once and cached. An unknown
     role -> (None, error) so the caller returns 403.
     """
-    acl_roles = {}
-    if instance_dir:
-        acl_path = os.path.join(instance_dir, "acl.json")
-        if os.path.isfile(acl_path):
-            try:
-                with open(acl_path, encoding="utf-8") as fh:
-                    acl_roles = json.load(fh).get("roles", {})
-            except (ValueError, OSError):
-                acl_roles = {}
+    roles = acl_roles(instance_dir)
     if not role:
         return inst, None
-    if role not in acl_roles:
+    if role not in roles:
         return None, "unknown role"
     cache = cache if cache is not None else {}
     if role not in cache:
@@ -151,7 +167,7 @@ def serve(instance, port: int = 8877, host: str = "0.0.0.0",
                 self._send(400, {"error": "empty question"})
                 return
             role = self.headers.get("X-NeuralOS-Role") or None
-            if role and not _acl_roles:
+            if role and not acl_roles(instance_dir):
                 self._send(403, {"error": "no acl.json — roles are not "
                                           "configured on this instance"})
                 return
