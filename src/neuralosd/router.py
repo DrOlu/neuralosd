@@ -155,21 +155,36 @@ def _router_config(instance_name, config_dir=None):
     are a property of the instance, not of the shell.
     """
     candidates = []
+    instance_scoped = set()
     if config_dir:
-        candidates.append(os.path.join(config_dir,
-                                       f"{instance_name}.router.json"))
-        candidates.append(os.path.join(config_dir, "router.json"))
+        for name in (f"{instance_name}.router.json", "router.json"):
+            path = os.path.join(config_dir, name)
+            candidates.append(path)
+            instance_scoped.add(path)
     candidates.append(f"{instance_name}.router.json")
     candidates.append("router.json")
     for candidate in candidates:
-        if os.path.isfile(candidate):
-            try:
-                with open(candidate, encoding="utf-8") as fh:
-                    d = json.load(fh)
-                if isinstance(d, dict):
-                    return d
-            except (ValueError, OSError):
-                pass
+        if not os.path.isfile(candidate):
+            continue
+        try:
+            with open(candidate, encoding="utf-8") as fh:
+                d = json.load(fh)
+            if not isinstance(d, dict):
+                raise ValueError("top level is not a JSON object")
+            return d
+        except (ValueError, OSError) as exc:
+            # F9: an instance's OWN calibrated config that exists but cannot
+            # be read is not "absent". Silently falling through to the cwd
+            # (or to defaults) answered with a different operating point
+            # than the operator configured — the E7 class of divergence,
+            # reintroduced through corruption instead of cwd.
+            if candidate in instance_scoped:
+                raise SystemExit(
+                    f"error: {candidate} exists but cannot be read as a "
+                    f"router config ({exc}) — refusing to fall back to "
+                    f"another directory's thresholds. Fix or remove it.")
+            # Legacy cwd candidates stay tolerant: a stray router.json in
+            # whatever directory the process started in must not break it.
     return {}
 
 # Arg names whose enum values are MEASURES, not filters. A measure named in a
@@ -235,6 +250,13 @@ REFUSAL_REASONS = frozenset({
     "action_intent", "args_not_extractable", "no_probe_matches",
     "low_coverage", "dropped_filter", "out_of_range", "no_results",
     "model_abstained",
+    # F8: these three have been returned by Router._gate_decide and written
+    # to ask_audit.jsonl since the calibrated gate shipped, but were missing
+    # from the declared vocabulary — a consumer validating a refusal against
+    # this set saw a real gate refusal as an unknown token. Adding them
+    # corrects the declaration; it introduces no new semantics, so
+    # GATE_VERSION stays 1.
+    "below_floor", "ambiguous", "comparative",
 })
 
 # ── audit provenance ──────────────────────────────────────────────────────────
