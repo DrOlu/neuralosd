@@ -225,3 +225,40 @@ def test_run_cycle_end_to_end(tmp_path):
                         rules=rules, once=True)
     assert report2["ingested"] == 0
     assert report2["alerts"] == []
+
+
+def test_per_rule_webhook_is_kept_and_delivered(tmp_path):
+    """F14: evaluate_rules dropped the rule's `webhook` key, so run_cycle's
+    `alert.get("webhook") or webhook` always fell back to the global one —
+    a per-rule destination was configured and then never used."""
+    from neuralosd.watch import evaluate_rules, run_cycle
+    now = time.time()
+    rules = [{"name": "delivered", "match": {"level": "err"},
+              "threshold": 1, "webhook": "http://hooks/one"},
+             {"name": "report-only", "match": {"level": "warn"},
+              "threshold": 1}]
+    events = [{"ts": now, "level": "err", "message": "a"},
+              {"ts": now, "level": "warn", "message": "b"}]
+    alerts = evaluate_rules(rules, events, now=now)
+    by_rule = {a["rule"]: a.get("webhook") for a in alerts}
+    assert by_rule == {"delivered": "http://hooks/one",
+                       "report-only": None}
+
+    # end to end: the per-rule URL is the one posted to
+    out = _build(tmp_path, name="hooks")
+    log = tmp_path / "hooks.log"
+    log.write_text("Nov  2 03:11:22 web01 sshd[1]: fail a\n", encoding="utf-8")
+    posted = []
+
+    def poster(url, payload):
+        posted.append(url)
+        return True
+
+    report = run_cycle(instance_dir=out,
+                       sources=[{"kind": "syslog", "path": str(log)}],
+                       rules=[{"name": "ssh", "match": {"app": "sshd"},
+                               "threshold": 1, "window_minutes": 60,
+                               "webhook": "http://hooks/rule"}],
+                       once=True, poster=poster)
+    assert posted == ["http://hooks/rule"]
+    assert report["notifications"] == [{"rule": "ssh", "delivered": True}]
