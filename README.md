@@ -206,6 +206,16 @@ python3 -m neuralosd.mcp /path/to/instance
 # or add to Claude Desktop / Cursor MCP config
 ```
 
+## Code signing
+
+The Windows release binaries are Authenticode-signed. Signing runs inside the
+release workflow through [SignPath](https://signpath.io) and is gated on the
+`SIGNPATH_*` repository configuration (`docs/signing.md`); the job fails
+unless `Get-AuthenticodeSignature` reports `Valid` for every signed asset.
+The project is applying to the [SignPath Foundation](https://signpath.org/)
+for publicly trusted code signing and will use SignPath Foundation-issued
+signing once approved.
+
 ## License
 
-MIT
+[MIT](LICENSE)
