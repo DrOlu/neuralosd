@@ -1,5 +1,31 @@
 # Changelog
 
+## 3.0.0 — every state machine explicit
+
+The agentic surface added mutable state the F-series census did not cover.
+This release extends the census (sections 13–19) and makes the new machines
+explicit in code, with transition tables and tests:
+
+- **Async runs (`RunStore`)**: `queued → running → done | failed |
+  cancelled`, terminal states final. Fixed a cancellation observed during a
+  probe being overwritten by the late success, and terminal runs being
+  movable again.
+- **HITL tokens (`ConfirmStore`)**: `pending → confirmed | expired`,
+  single-use, and the three failure answers are now distinct — `invalid`,
+  `expired`, `already_used` — instead of one "invalid or expired" string.
+- **Scheduler**: fixed a deadlock in `remove()` (a non-reentrant lock plus
+  `_save()` taking it again); `schedules.json` and each result file are now
+  written atomically with a closed handle; each entry records
+  `last_run`/`last_status`/`last_error` instead of only a counter.
+- **Traces** are bounded per run (`max_events`) and rewritten atomically
+  once the bound is reached.
+- The door registry, sidecar provisioning and the MCP instance caches are
+  documented in the census; the registry already saved atomically.
+
+Findings G1–G6 are recorded in `docs/audits/findings.md`; the executable
+contracts are `tests/test_agentic_state_machines.py` and
+`tests/test_scheduler_state.py`.
+
 ## 2.9.16 — the agentic surface
 
 An agent harness does not ask once; it plans, retries, delegates and runs
