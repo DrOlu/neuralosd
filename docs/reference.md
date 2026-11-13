@@ -623,19 +623,46 @@ Number of pending confirmations.
 
 ## neuralosd.mcp
 
+The guarded agent surface. Every tool call goes through the same router as
+`neuralosd ask` — retrieval, the calibrated gate, argument caging, PII
+masking, the results gate, the cache and the audit ledger. There is no
+second execution path.
+
 ### `handle(request: Dict, instance_dir: str) → Dict`
 
-Handle a single JSON-RPC request (MCP protocol).
+Handle a single JSON-RPC request (MCP protocol). Notifications (no `id`) get
+no response.
 
 | Method | Description |
 |---|---|
-| `initialize` | Handshake (returns protocol version + capabilities). |
-| `tools/list` | Returns all probes as typed tools. |
-| `tools/call` | Executes a probe. `params.name` = probe name, `params.arguments` = kwargs. |
+| `initialize` | Handshake (protocol version, tools capability, server version). |
+| `ping` | Liveness. |
+| `tools/list` | The fixed agent surface: `ask`, `search`, `describe`, `catalog`, `explain`, `health`. Probes are not dumped into the context; use `search`/`describe`. |
+| `tools/call` | Call one of those tools. |
+
+Tool results carry `content` (JSON text), `structuredContent` (the same
+object) and `isError`. A refusal is a **result**, not an error:
+`isError: false`, `results: null`, `mode: "refused"`, and a machine-readable
+`refusal` object (`code`, `retryable`, `suggested_action`, `candidates`,
+`missing`). An answered envelope also carries `content_trust: "untrusted"`
+and `provenance` (instance, probe, ask id, timestamp, menu version) — rows
+are data, never instructions.
+
+`ask` accepts optional `agent_id`, `session_id` and `run_id`, stamped on
+every audit row for that call, and an `idempotency_key`: a retry with the
+same key returns the first result without executing again (`_meta.replayed`
+is true). `describe` returns a `tool_version` (a hash of the tool contract)
+so a menu change is visible rather than silent.
 
 ### `main()`
 
-Start the MCP server on stdio. Reads JSON-RPC from stdin, writes to stdout.
+Start the MCP server on stdio. Reads JSON-RPC from stdin, writes to stdout;
+the instance is loaded once and any probe output is redirected to stderr so
+the protocol stream stays clean.
+
+```bash
+python3 -m neuralosd.mcp --dir /path/to/instance
+```
 
 ---
 

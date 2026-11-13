@@ -199,12 +199,20 @@ pending = store.create(probe_fn, args, reason="low confidence")
 result = store.confirm(pending["confirm_token"])
 ```
 
-## MCP server (expose probes to any AI agent)
+## MCP server (a guarded surface for AI agents)
 
 ```bash
-python3 -m neuralosd.mcp /path/to/instance
+python3 -m neuralosd.mcp --dir /path/to/instance
 # or add to Claude Desktop / Cursor MCP config
 ```
+
+The server exposes six tools — `ask`, `search`, `describe`, `catalog`,
+`explain`, `health` — and every call goes through the same router as
+`neuralosd ask`: the calibrated gate, argument caging, PII masking, the
+results gate, the cache and the audit ledger. A refusal is a result with a
+machine-readable `refusal.code`, not an error and never a guess. Tools are
+discovered with `search`/`describe` instead of dumping the whole menu into
+the agent's context.
 
 ## Code signing
 

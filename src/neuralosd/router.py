@@ -302,6 +302,34 @@ class audit_source:
         return False
 
 
+# Extra attribution an agent surface stamps on every audit row: which agent,
+# which session, which run. Additive only — a key the row already carries
+# wins, so this can never rewrite the ask's own question/probe/refusal
+# fields. Kept separate from `source` so the SLO vocabulary does not grow
+# one token per harness.
+_AUDIT_FIELDS: ContextVar = ContextVar("neuralosd_audit_fields", default=None)
+
+
+class audit_fields:
+    """Context manager adding agent/session/run attribution to audit rows.
+
+        with audit_fields(agent_id="planner", session_id="s-7"):
+            inst.ask("how many rows")   # row also carries agent_id/session_id
+    """
+
+    def __init__(self, **fields):
+        self._fields = {k: v for k, v in fields.items() if v is not None}
+        self._token = None
+
+    def __enter__(self):
+        self._token = _AUDIT_FIELDS.set(self._fields)
+        return self
+
+    def __exit__(self, *exc):
+        _AUDIT_FIELDS.reset(self._token)
+        return False
+
+
 def score_probe(meta: ProbeMeta, q_tokens):
     # The BEST single trigger match dominates, so a probe with one exact
     # phrase beats a probe with many partially-overlapping triggers.
@@ -1163,13 +1191,32 @@ class Router:
         # cache hit, and a mutated dict would carry the golden run's stamp
         # into the next USER's audit row for the same question.
         src = _AUDIT_SOURCE.get() or self.audit_source
-        rec = {**rec, "source": rec.get("source") or src}
+        # Agent attribution is additive: the row's own keys win, so a caller
+        # can never overwrite question/probe/refusal by supplying a field.
+        fields = _AUDIT_FIELDS.get() or {}
+        rec = {**fields, **rec, "source": rec.get("source") or src}
         try:
             rec = self._for_storage(rec)
             with open(self.audit_file, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
         except Exception:
             pass
+
+    # -- public retrieval --------------------------------------------------
+    def retrieve(self, query: str, k: int = 8):
+        """Rank the probes for a query WITHOUT executing anything.
+
+        Public form of the retrieval step ``ask`` uses, for agent surfaces
+        (MCP ``search``, HTTP): an agent should be able to ask "which tools
+        could answer this?" before spending a call. Returns
+        ``[(ProbeMeta, score), ...]`` in rank order; empty when nothing
+        scores.
+        """
+        if not isinstance(query, str):
+            raise TypeError(
+                f"query must be a str, got {type(query).__name__}")
+        normalized, _moved = self._normalize(query.strip())
+        return self._retrieve(normalized, k)
 
     # -- public dry run ----------------------------------------------------
     def dry_run(self, question: str, k: int = 8) -> Dict[str, Any]:
