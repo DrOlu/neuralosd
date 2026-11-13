@@ -175,7 +175,17 @@ def test_confirm_probe_pauses_then_executes(inst_dir):
 def test_invalid_confirm_token_is_an_error(inst_dir):
     out = _call(inst_dir, "confirm", {"token": "nope"})
     assert out["isError"] is True
-    assert "invalid or expired" in out["structuredContent"]["error"]
+    assert out["structuredContent"]["code"] == "invalid"
+
+
+def test_confirm_token_is_single_use(inst_dir):
+    pending = _call(inst_dir, "ask", {"question": "reset everything"})
+    token = pending["structuredContent"]["confirm_token"]
+    first = _call(inst_dir, "confirm", {"token": token})
+    assert first["isError"] is False
+    second = _call(inst_dir, "confirm", {"token": token})
+    assert second["isError"] is True
+    assert second["structuredContent"]["code"] == "already_used"
 
 
 # ── builder tools ────────────────────────────────────────────────────────

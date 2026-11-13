@@ -1,9 +1,17 @@
-# Implicit state machines — census (F-series audit)
+# Implicit state machines — census (F-series audit; refreshed for 3.0.0)
 
 Scope: every place in `neuralosd` where behaviour depends on a stored or
 in-process state, not just on the current request. For each machine this
 records the states, the events, the guards, the actions, the transitions that
 are illegal, the observable trace, the file:line anchors, and a verdict.
+
+> **3.0.0 refresh.** Sections 1–12 are the F-series census. Sections 13–19
+> cover the state introduced by the agentic surface (async runs, HITL
+> confirmations, the scheduler, the door registry, sidecar provisioning,
+> the append-only agent stores, and the MCP instance caches). The new
+> mutable machines have explicit transition tables in code; the defects
+> found in this pass were fixed with tests (`tests/test_agentic_state_machines.py`,
+> `tests/test_scheduler_state.py`).
 
 A **mutable** machine is one whose state outlives a single call (a journal, a
 marker file, a cache, an offset) or is shared across requests. A **decision**
@@ -201,6 +209,111 @@ A save of `undo` from `APPLIED` is legal; a second `undo` from `UNDONE` is not.
 
 ---
 
+## 13. Async runs (`RunStore`) — **enforced**
+
+| | |
+|---|---|
+| **States** | `queued`, `running`, `done`, `failed`, `cancelled` |
+| **Events** | `submit(fn)`, worker start, worker finish, `cancel(run_id)` |
+| **Guards** | `RUN_LEGAL_TRANSITIONS`; every transition under one lock; `cancel` is an event allowed from `queued`/`running`; terminal states never move |
+| **Actions** | run `fn` in a daemon thread; publish `result` only on `done`; set `started`/`finished`/`updated` |
+| **Illegal** | `running→running`; any move out of a terminal state; publishing a result after a cancellation; `cancel` of a finished run reporting success |
+| **Trace** | in-memory run dict (`status`, times, `result`/`error`, `cancel`); `GET /runs/{id}` |
+| **Anchors** | `src/neuralosd/agentic.py:278` (`RUN_STATES`), `:282` (`RUN_LEGAL_TRANSITIONS`), `:292` (`_transition`), `:309` (`submit`), `:373` (`cancel`) |
+| **Verdict** | Enforced. Fixed: a cancellation observed during the probe was overwritten by the late `done`, and terminal states were mutable. `tests/test_agentic_state_machines.py`. |
+
+---
+
+## 14. HITL confirmations (`ConfirmStore`) — **enforced**
+
+| | |
+|---|---|
+| **States** | `pending`, `confirmed`, `expired` |
+| **Events** | `create`, `confirm(token)`, `expire()` |
+| **Guards** | TTL; a token is single-use; terminal tokens are remembered (pruned after `max(2×ttl, 1h)`); execution happens outside the lock |
+| **Actions** | run the stored closure; the router masks/audits it via `_execute_confirmed` |
+| **Illegal** | confirming twice; confirming after expiry; executing an unknown token |
+| **Trace** | pending/used maps; HTTP 202/404; envelope `mode: pending_confirmation` / `confirmed`; audit row `mode: confirmed` |
+| **Anchors** | `src/neuralosd/hitl.py:14` (`CONFIRM_STATES`), `:32` (`create`), `:53` (`confirm`), `:97` (`expire`) |
+| **Verdict** | Enforced. Fixed: a second confirm and an expired token were both reported as "invalid or expired"; `already_used`/`expired`/`invalid` are now distinct. `tests/test_agentic_state_machines.py`, `tests/test_agentic_surface.py`. |
+
+---
+
+## 15. Scheduler (mutable, persisted) — **enforced**
+
+| | |
+|---|---|
+| **States** | per entry `scheduled → due → running → scheduled` (by `next_due`); outcome `last_status` = `ok`/`error` |
+| **Events** | `add`, `remove`, interval tick, run success/failure |
+| **Guards** | `RLock` (`remove` holds the lock and calls `_save`); atomic `schedules.json`; atomic result file; a failure records `last_error` |
+| **Actions** | `ask_fn`; write `state/scheduled/<name>.json` |
+| **Illegal** | a lost schedule from a truncated JSON; a leaked file handle; a silent failure |
+| **Trace** | `schedules.json` (`next_due`, `runs`, `last_run`, `last_status`, `last_error`); `scheduled/<name>.json` |
+| **Anchors** | `src/neuralosd/scheduler.py:35` (`_save`), `:50` (`add`), `:72` (`_loop`), `:86` (`_run`) |
+| **Verdict** | Enforced. Fixed: `remove()` deadlocked on a non-reentrant lock; both writes were non-atomic; a failure left no state. `tests/test_scheduler_state.py`. |
+
+---
+
+## 16. Door registry (`~/.neuralosd/doors.json`) — **enforced**
+
+| | |
+|---|---|
+| **States** | `absent` → `registered` (`native`/`relay`) → `stopped` |
+| **Events** | deploy/proxy registers; `door stop` |
+| **Guards** | atomic `tmp` + `os.replace`; corrupt/missing reads as empty; `stop` refuses an unknown name |
+| **Actions** | record `sandbox`/`host_port`/`vm_port`/`kind`/`backend`; remove on stop |
+| **Illegal** | a torn write becoming the registry; stopping an unregistered name and reporting success |
+| **Trace** | `doors.json`; `door list`/`stop` output |
+| **Anchors** | `src/neuralosd/_cmd/door.py:54` (`_load`), `:64` (`_save`), `:76` (`_forget`), `:345` (`stop`) |
+| **Verdict** | Enforced (atomic save, tolerant load). |
+
+---
+
+## 17. Sidecar provisioning — **guarded (no transition table needed)**
+
+| | |
+|---|---|
+| **States** | `absent` → `provisioned`; a failed provision leaves `absent` |
+| **Events** | `sidecar --setup [--force]`; `is_provisioned()` |
+| **Guards** | the executable's existence IS the state; provisioning is explicit (never during an ask); `--force` recreates |
+| **Actions** | create a dedicated venv; report `action` = `created`/`recreated`/`already` |
+| **Illegal** | treating a partial venv as provisioned; provisioning silently on a query |
+| **Trace** | status dict (`uv`, `provisioned`, executable); action |
+| **Anchors** | `src/neuralosd/provision.py:66` (`is_provisioned`), `:98` (`status`), `:138` (`provision`) |
+| **Verdict** | Guarded. |
+
+---
+
+## 18. Agent append-only stores — **bounded, not FSMs**
+
+Sessions (`.agentic/memory/<session>.jsonl`), traces
+(`.agentic/traces/<run>.jsonl`), idempotency (`IdempotencyStore`) and budgets
+(`BudgetStore`) have no transitions: they are logs, maps and a sliding
+window. They are listed so "stateful" is not mistaken for "FSM".
+
+| Store | Bound | Anchor |
+|---|---|---|
+| Sessions | append-only, one JSONL per session | `agentic.py:200` (`SessionStore`) |
+| Traces | `max_events` per run, enforced on write with an atomic rewrite | `agentic.py:237` (`TraceStore`) |
+| Idempotency | `max_entries` (500), FIFO eviction | `agentic.py:150` (`IdempotencyStore`) |
+| Budgets | sliding window per agent | `agentic.py:176` (`BudgetStore`) |
+
+---
+
+## 19. MCP instance and role caches — **memoized loads, no illegal edge**
+
+| | |
+|---|---|
+| **States** | per directory `UNLOADED` → `LOADED`; per (dir, role) the same |
+| **Events** | first tool call; `build` invalidates both |
+| **Guards** | load under one process; `build` drops the cache so the new menu is seen |
+| **Illegal** | serving a stale menu after a build; loading a directory as a different instance |
+| **Trace** | process memory; `health`/`catalog` menu versions |
+| **Anchors** | `src/neuralosd/mcp.py:73` (`_instance`), `:110` (`_role_instance`) |
+| **Verdict** | Enforced by invalidation; `absent→loaded` is the only edge. |
+
+---
+
 ## Enforcement summary
 
 | Machine | Single source of truth | Guard at every mutation | Illegal refused by name | Tests |
@@ -217,3 +330,9 @@ A save of `undo` from `APPLIED` is legal; a second `undo` from `UNDONE` is not.
 | Single serve | `service.serve` | yes | 400/401/403/422 | `test_service_refusal_contract.py` |
 | Pi bridge | `_roundtrip`/`wait` | partial (timeout limit) | n/a | provider tests |
 | Synapse | `_classify_reply` | n/a (pure) | unknown → not trusted | mesh protocol tests |
+| Async runs | `RUN_LEGAL_TRANSITIONS` | yes (one lock) | yes (`IllegalRunTransition`) | `test_agentic_state_machines.py` |
+| HITL tokens | `CONFIRM_STATES` | yes (single-use/TTL) | yes (`invalid`/`expired`/`already_used`) | `test_agentic_state_machines.py` |
+| Scheduler | `_save`/`_run` | yes (RLock + atomic) | n/a | `test_scheduler_state.py` |
+| Door registry | `_save`/`_load` | yes (atomic) | unknown name refused | `test_scheduler_state.py` (pattern) |
+| Sidecar | `is_provisioned` | yes (explicit) | n/a | provision tests |
+| Agent stores | bounds in `agentic.py` | yes (caps) | n/a | `test_agentic_state_machines.py` |

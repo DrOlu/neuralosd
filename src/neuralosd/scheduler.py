@@ -19,7 +19,9 @@ class Scheduler:
         self.ask_fn = ask_fn
         self.entries = []
         self._stop = threading.Event()
-        self._lock = threading.Lock()
+        # Re-entrant: remove() holds the lock and calls _save(), which also
+        # takes it. A plain Lock deadlocked every remove() call.
+        self._lock = threading.RLock()
         self._load()
 
     def _load(self):
@@ -31,13 +33,19 @@ class Scheduler:
 
     def _save(self):
         with self._lock:
-            with open(self.schedules_file, "w", encoding="utf-8") as fh:
+            # Atomic: a crash mid-write must not truncate schedules.json.
+            tmp = self.schedules_file + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(self.entries, fh, indent=2, ensure_ascii=False)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, self.schedules_file)
 
     def add(self, name: str, every_s: int, instance: str, question: str):
         entry = {"name": name, "every_s": every_s, "instance": instance,
                  "question": question, "next_due": time.time() + every_s,
-                 "runs": 0}
+                 "runs": 0, "last_run": None, "last_status": None,
+                 "last_error": None}
         with self._lock:
             self.entries = [e for e in self.entries if e["name"] != name]
             self.entries.append(entry)
@@ -63,25 +71,36 @@ class Scheduler:
             now = time.time()
             for e in list(self.entries):
                 if now >= e.get("next_due", 0):
-                    self._run(e)
+                    status, error = self._run(e)
                     with self._lock:
                         e["next_due"] = time.time() + e["every_s"]
                         e["runs"] = e.get("runs", 0) + 1
+                        e["last_run"] = time.time()
+                        e["last_status"] = status
+                        e["last_error"] = error
                     self._save()
             self._stop.wait(2)
 
     def _run(self, e):
+        """Run one schedule; return (status, error) so the entry records the
+        outcome instead of only incrementing a counter."""
         try:
             env = self.ask_fn(e["instance"], e["question"])
             out = os.path.join(self.out_dir, f"{e['name']}.json")
-            json.dump({"name": e["name"], "ts": time.time(),
-                       "question": e["question"], "result": env},
-                      open(out, "w", encoding="utf-8"), indent=1, ensure_ascii=False,
-                      default=str)
+            tmp = out + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump({"name": e["name"], "ts": time.time(),
+                           "question": e["question"], "result": env},
+                          fh, indent=1, ensure_ascii=False, default=str)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, out)
             print(f"[scheduler] ran {e['name']} -> {out}", flush=True)
+            return "ok", None
         except Exception as exc:
-            print(f"[scheduler] {e['name']} failed: {str(exc)[:200]}",
-                  flush=True)
+            msg = str(exc)[:200]
+            print(f"[scheduler] {e['name']} failed: {msg}", flush=True)
+            return "error", msg
 
     def stop(self):
         self._stop.set()

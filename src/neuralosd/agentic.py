@@ -235,36 +235,63 @@ class SessionStore:
 # ── tracing ───────────────────────────────────────────────────────────────
 
 class TraceStore:
-    """A run/episode log: one JSONL file per run, bounded per run."""
+    """A run/episode log: one JSONL file per run, bounded per run.
+
+    The bound is enforced on write: once a run has `max_events` rows, the
+    oldest are dropped and the file is rewritten atomically. An agent run
+    can call the surface thousands of times; an unbounded trace is a disk
+    leak with a friendly name.
+    """
 
     def __init__(self, instance_dir, max_events=1000):
         self.dir = os.path.join(instance_dir, ".agentic", "traces")
         self.max_events = max_events
+        self._counts = {}
+        self._lock = threading.Lock()
         os.makedirs(self.dir, exist_ok=True)
 
     def _path(self, run_id):
         safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(run_id))[:80] or "run"
         return os.path.join(self.dir, f"{safe}.jsonl")
 
+    @staticmethod
+    def _rows(path):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                return [json.loads(line) for line in fh if line.strip()]
+        except (OSError, ValueError):
+            return []
+
     def record(self, run_id, event):
         if not run_id:
             return
         event = {"ts": time.time(), **event}
         path = self._path(run_id)
-        try:
-            with open(path, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(event, ensure_ascii=False, default=str)
-                         + "\n")
-        except OSError:
-            pass
+        with self._lock:
+            try:
+                count = self._counts.get(path)
+                if count is None:
+                    count = len(self._rows(path))
+                if count < self.max_events:
+                    with open(path, "a", encoding="utf-8") as fh:
+                        fh.write(json.dumps(event, ensure_ascii=False,
+                                            default=str) + "\n")
+                    self._counts[path] = count + 1
+                    return
+                rows = self._rows(path)[-(self.max_events - 1):]
+                rows.append(event)
+                tmp = path + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    for row in rows:
+                        fh.write(json.dumps(row, ensure_ascii=False,
+                                            default=str) + "\n")
+                os.replace(tmp, path)
+                self._counts[path] = len(rows)
+            except OSError:
+                pass
 
     def read(self, run_id, limit=None):
-        path = self._path(run_id)
-        try:
-            with open(path, encoding="utf-8") as fh:
-                rows = [json.loads(line) for line in fh if line.strip()]
-        except (OSError, ValueError):
-            return []
+        rows = self._rows(self._path(run_id))
         return rows[-limit:] if limit else rows
 
     def runs(self):
@@ -277,38 +304,85 @@ class TraceStore:
 
 # ── long-running runs ─────────────────────────────────────────────────────
 
+RUN_STATES = ("queued", "running", "done", "failed", "cancelled")
+
+# The legal transitions. `cancel` is an EVENT, not a state: it is allowed
+# from queued/running and is applied when the worker next looks. Terminal
+# states never move again — a late `done` must not overwrite a cancellation,
+# and cancelling a finished run must not pretend it stopped.
+RUN_LEGAL_TRANSITIONS = {
+    "queued": {"running", "cancelled"},
+    "running": {"done", "failed", "cancelled"},
+    "done": set(),
+    "failed": set(),
+    "cancelled": set(),
+}
+
+
+class IllegalRunTransition(Exception):
+    """A run was asked to move along an edge that does not exist."""
+
+
 class RunStore:
-    """Submit a long ask, poll it, cancel it. In-memory and bounded: a run
-    that outlives the process was never durable (use Temporal for that)."""
+    """Submit a long ask, poll it, cancel it.
+
+    The status is an explicit state machine (``RUN_STATES`` /
+    ``RUN_LEGAL_TRANSITIONS``): terminal states are final, a cancellation
+    observed mid-run wins over a late success, and every transition happens
+    under the lock. In-memory and bounded: a run that outlives the process
+    was never durable (use Temporal for that).
+    """
 
     def __init__(self, max_runs=200):
         self._runs = collections.OrderedDict()
         self._lock = threading.Lock()
         self._max = max_runs
 
+    def _transition(self, run, to):
+        current = run["status"]
+        if to not in RUN_LEGAL_TRANSITIONS.get(current, set()):
+            raise IllegalRunTransition(
+                f"run {run['run_id']}: {current} -> {to} is not legal "
+                f"(legal: {sorted(RUN_LEGAL_TRANSITIONS.get(current, ()))})")
+        run["status"] = to
+        run["updated"] = time.time()
+
     def submit(self, fn, meta=None):
         run_id = uuid.uuid4().hex[:12]
         run = {"run_id": run_id, "status": "queued", "created": time.time(),
-               "started": None, "finished": None, "result": None,
-               "error": None, "cancel": False, "meta": meta or {}}
+               "started": None, "finished": None, "updated": time.time(),
+               "result": None, "error": None, "cancel": False,
+               "meta": meta or {}}
         with self._lock:
             self._runs[run_id] = run
             while len(self._runs) > self._max:
                 self._runs.popitem(last=False)
 
         def _work():
-            run["status"] = "running"
-            run["started"] = time.time()
-            try:
+            with self._lock:
                 if run["cancel"]:
-                    run["status"] = "cancelled"
-                else:
-                    run["result"] = fn()
-                    run["status"] = "done"
+                    self._transition(run, "cancelled")
+                    run["finished"] = time.time()
+                    return
+                self._transition(run, "running")
+                run["started"] = time.time()
+            try:
+                result = fn()
             except Exception as exc:  # noqa: BLE001 - reported, not raised
-                run["error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
-                run["status"] = "failed"
-            finally:
+                with self._lock:
+                    run["error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+                    self._transition(
+                        run, "cancelled" if run["cancel"] else "failed")
+                    run["finished"] = time.time()
+                return
+            with self._lock:
+                if run["cancel"]:
+                    # A cancellation observed during the work wins: the run
+                    # is cancelled and its late result is not published.
+                    self._transition(run, "cancelled")
+                else:
+                    run["result"] = result
+                    self._transition(run, "done")
                 run["finished"] = time.time()
 
         threading.Thread(target=_work, daemon=True,
@@ -321,11 +395,15 @@ class RunStore:
             return dict(run) if run else None
 
     def cancel(self, run_id):
+        """Request cancellation. False when the run is unknown or terminal."""
         with self._lock:
             run = self._runs.get(run_id)
             if run is None:
                 return False
+            if run["status"] in ("done", "failed", "cancelled"):
+                return False
             run["cancel"] = True
             if run["status"] == "queued":
-                run["status"] = "cancelled"
+                self._transition(run, "cancelled")
+                run["finished"] = time.time()
             return True

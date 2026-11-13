@@ -29,6 +29,26 @@ hygiene.
 
 ---
 
+## G-series — 3.0.0 agentic state machines
+
+The 3.0.0 refresh extended the census to the state the agentic surface
+introduced. These defects were reproduced before fixing; each carries a
+test.
+
+| id | sev | area | one line |
+|---|---|---|---|
+| G1 | P2 | async runs | a cancellation observed during the probe was overwritten by the late `done` (the run reported success) |
+| G2 | P2 | async runs | terminal states were mutable: a late worker could move `done`/`cancelled` again |
+| G3 | P2 | HITL | a second confirm and an expired token both reported "invalid or expired"; an agent could not tell "already did this" from "try again" |
+| G4 | P0 | scheduler | `remove()` held a non-reentrant lock and called `_save()`, which took it again — every remove deadlocked |
+| G5 | P2 | scheduler | `schedules.json` and each result file were written non-atomically (and a result file leaked its handle) |
+| G6 | P3 | traces | `TraceStore.max_events` was never enforced; a long agent run grew one JSONL without bound |
+
+Tests: `tests/test_agentic_state_machines.py` (G1–G3, G6),
+`tests/test_scheduler_state.py` (G4–G5).
+
+---
+
 ## F1 — the one-shot guard was order-insensitive (P1)
 
 **Reproduction** (library): dry-run `p`; apply `p`; undo `p`; apply `p`;
