@@ -1,5 +1,5 @@
 <div class="raft-hero" markdown="0">
-<p class="raft-eyebrow">Verified agent runtime &middot; v2.9.8</p>
+<p class="raft-eyebrow">Verified agent runtime &middot; v2.9.16</p>
 <h1>The model picks.<br>The runtime verifies.<br>The code answers.</h1>
 <p class="raft-lede">neuralOSd is an offline, on-device data-answering runtime that refuses
 what it cannot verify, accounts for what it excludes, and ships with its own tests.
