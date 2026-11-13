@@ -416,6 +416,9 @@ body {
   overflow-x: auto;
 }
 .md-typeset table:not([class]) {
+  display: table;
+  width: max-content;
+  min-width: 100%;
   border: 2px solid var(--ink);
   border-radius: 9px;
   box-shadow: var(--shadow-sm);
@@ -434,6 +437,9 @@ body {
 }
 .md-typeset table:not([class]) td {
   border-top: 1.5px solid var(--ink);
+}
+.md-typeset table:not([class]) code {
+  white-space: nowrap;
 }
 .md-typeset table:not([class]) tr:hover {
   background: rgba(255, 212, 64, .18);
