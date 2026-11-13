@@ -12,11 +12,12 @@ from typing import Any, Callable, Dict
 
 class ConfirmRequired(Exception):
     """Raised by the guardrail chain when a probe needs human approval."""
-    def __init__(self, probe_name: str, args: Dict, reason: str):
+    def __init__(self, probe_name: str, args: Dict, reason: str,
+                 token: str = None):
         self.probe_name = probe_name
         self.args = args
         self.reason = reason
-        self.token = secrets.token_hex(8)
+        self.token = token or secrets.token_hex(8)
         super().__init__(f"confirmation required for {probe_name} ({reason})")
 
 
@@ -27,13 +28,15 @@ class ConfirmStore:
         self.ttl = ttl
         self._pending = {}    # token -> {"probe_fn", "args", "ts", "reason"}
 
-    def create(self, probe_fn: Callable, args: Dict, reason: str) -> Dict:
-        token = secrets.token_hex(8)
+    def create(self, probe_fn: Callable, args: Dict, reason: str,
+               token: str = None, probe_name: str = None) -> Dict:
+        token = token or secrets.token_hex(8)
         self._pending[token] = {
             "probe_fn": probe_fn, "args": args,
             "ts": time.time(), "reason": reason,
         }
-        return {"confirm_token": token, "probe": probe_fn.__name__,
+        return {"confirm_token": token,
+                "probe": probe_name or probe_fn.__name__,
                 "reason": reason, "ttl": self.ttl}
 
     def confirm(self, token: str) -> Dict:

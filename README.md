@@ -206,13 +206,25 @@ python3 -m neuralosd.mcp --dir /path/to/instance
 # or add to Claude Desktop / Cursor MCP config
 ```
 
-The server exposes six tools — `ask`, `search`, `describe`, `catalog`,
-`explain`, `health` — and every call goes through the same router as
-`neuralosd ask`: the calibrated gate, argument caging, PII masking, the
+The server exposes fourteen tools — `ask`, `search`, `describe`, `catalog`,
+`explain`, `health`, `memory`, `trace`, `delegate`, `discover`, `build`,
+`shadow`, `mothball`, `confirm` — and every call goes through the same router
+as `neuralosd ask`: the calibrated gate, argument caging, PII masking, the
 results gate, the cache and the audit ledger. A refusal is a result with a
 machine-readable `refusal.code`, not an error and never a guess. Tools are
 discovered with `search`/`describe` instead of dumping the whole menu into
 the agent's context.
+
+Agents get the contracts a harness needs: `agent_id` / `session_id` /
+`run_id` stamped on the audit row, per-agent ACL/PII/budget from
+`acl.json`, `idempotency_key` so a retry never executes twice, session
+memory, run traces, mesh delegation, HITL `confirm`, and the verified
+`build`/`shadow`/`mothball` lifecycle.
+
+The HTTP service (`neuralosd serve`) carries the same contracts: `POST /ask`
+(sync or `async: true`), `GET /runs/{id}`, `GET /audit`, `GET /tools`,
+`POST /v1/confirm/{token}`, with `X-Agent-Id` / `X-Session-Id` /
+`X-Run-Id` headers.
 
 ## Code signing
 

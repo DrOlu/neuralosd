@@ -106,6 +106,7 @@ neuralosd ask --strict --instance-dir ./fin "net margin per quarter"
 |---|---|
 | `--model MODEL` | Override the engine model for this question |
 | `--strict` | Reject answers that fall back to partial menus |
+| `--explain` | Dry run: show the probe, arguments and gate decision without executing or auditing |
 | `--as-of ISO` | Point temporal questions at a specific date |
 | `--role ROLE` | Ask under an `acl.json` role (allow-list + row filters apply) |
 

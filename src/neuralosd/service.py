@@ -1,19 +1,49 @@
-from .router import NoResults, refusal_body, audit_source
+"""Minimal HTTP service for an Instance: a guarded agent surface.
 
-"""Minimal HTTP service for an Instance: /healthz /ready /ask /openapi.
+Endpoints
+---------
+    GET  /healthz                 liveness (open, like before)
+    GET  /ready                   executes a probe (authenticated)
+    GET  /openapi.json            the typed spec
+    GET  /tools                   the agent tool surface (same as MCP)
+    POST /ask                     one question (sync, or `async: true`)
+    GET  /runs/{id}               poll a long-running ask
+    DELETE /runs/{id}             cancel a long-running ask
+    GET  /audit?run_id=...        read audit rows for a run/agent/session
+    POST /v1/confirm/{token}      complete a pending HITL confirmation
+
+Identity and policy
+-------------------
+`X-Agent-Id` / `X-Session-Id` / `X-Run-Id` (or the same keys in the body)
+are stamped on the audit row. When `acl.json` declares an `agents` block it
+is an allow-list: an unknown agent gets 403. An agent's `role` selects a
+role-scoped instance; `pii: false` lets that agent see fields the instance
+normally masks; `budget` caps calls per window (429 + `Retry-After`).
+
+Contracts
+---------
+A refusal is 422 with the envelope plus `refusal` (code, retryable,
+suggested_action, candidates, missing). An async ask is 202 with a run id.
+`Idempotency-Key` (header or body) makes a retry return the first result
+instead of executing again. Answers carry `content_trust: untrusted` and
+`provenance` (instance, probe, ask id, ts, run, menu version).
 
 Optional bearer-token auth: pass `auth_token` (or set $NEURALOSD_API_TOKEN)
-and every endpoint except the liveness probe (/healthz) requires
-`Authorization: Bearer <token>` or `X-API-Token: <token>`. /ready EXECUTES a
-real probe, so it is authenticated too (it used to be documented as open).
-This is the "front door with a lock" that makes binding non-loopback a
-defensible act.
+and every endpoint except /healthz requires `Authorization: Bearer <token>`
+or `X-API-Token: <token>`. /ready EXECUTES a real probe, so it is
+authenticated too.
 """
 import hmac
 import json
 import os
 import socketserver
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from .agentic import (BudgetStore, IdempotencyStore, RunStore, SessionStore,
+                      TraceStore, refusal_contract, resolve_agent)
+from .hitl import ConfirmRequired, ConfirmStore
+from .router import NoResults, audit_fields, audit_source, pii_policy
 
 
 class _Server(ThreadingHTTPServer):
@@ -83,10 +113,49 @@ def resolve_role_instance(role, inst, instance_dir, cache=None):
 def serve(instance, port: int = 8877, host: str = "0.0.0.0",
           auth_token: str = None, instance_dir: str = None):
     inst = instance
+    instance_dir = (instance_dir
+                    or getattr(inst, "state_dir", None)
+                    or os.path.dirname(os.path.abspath(
+                        getattr(inst, "audit_file", "ask_audit.jsonl"))))
     _role_cache = {}
+    _runs_store = RunStore()
+    _idem = IdempotencyStore()
+    _budgets = BudgetStore()
+    _sessions = SessionStore(instance_dir)
+    _traces = TraceStore(instance_dir)
+    _confirms = ConfirmStore()
+
+    def _router_of(obj):
+        """serve() accepts an Instance or a bare Router (the tests use one)."""
+        return getattr(obj, "router", obj)
+
+    _router_of(inst).confirm_store = _confirms
 
     def _instance_for_role(role):
-        return resolve_role_instance(role, inst, instance_dir, _role_cache)
+        target, err = resolve_role_instance(role, inst, instance_dir,
+                                            _role_cache)
+        if target is not None:
+            _router_of(target).confirm_store = _confirms
+        return target, err
+
+    def _annotate(env, agent_id, session_id, run_id, menu_version):
+        env = dict(env)
+        env["_meta"] = {"instance": inst.name, "agent_id": agent_id,
+                        "session_id": session_id, "run_id": run_id,
+                        "menu_version": menu_version}
+        env["content_trust"] = "untrusted"
+        env["provenance"] = {"instance": inst.name,
+                             "probe": env.get("probe"),
+                             "ask_id": env.get("ask_id"),
+                             "ts": env.get("ts"),
+                             "run_id": run_id,
+                             "menu_version": menu_version}
+        if env.get("mode") == "refused":
+            env["refusal"] = refusal_contract(env)
+        return env
+
+    def _trace(run_id, event):
+        _traces.record(run_id, event)
 
     class Handler(BaseHTTPRequestHandler):
         def _authorized(self) -> bool:
@@ -106,12 +175,23 @@ def serve(instance, port: int = 8877, host: str = "0.0.0.0",
             self.end_headers()
             self.wfile.write(body)
 
+        def _identity(self, payload=None):
+            payload = payload if isinstance(payload, dict) else {}
+
+            def clean(value):
+                return (value.strip() if isinstance(value, str)
+                        and value.strip() else None)
+
+            return (clean(self.headers.get("X-Agent-Id")
+                          or payload.get("agent_id")),
+                    clean(self.headers.get("X-Session-Id")
+                          or payload.get("session_id")),
+                    clean(self.headers.get("X-Run-Id")
+                          or payload.get("run_id")))
+
         def do_GET(self):
-            # normalize: "/healthz?lb=1" and "/healthz/" are still liveness
-            path = self.path.split("?", 1)[0].rstrip("/") or "/"
-            # /healthz stays open: liveness must not need credentials, and it
-            # exposes nothing but the instance NAME. /ready EXECUTES a real
-            # probe, so it requires auth whenever auth is enabled.
+            raw = self.path.split("?", 1)[0]
+            path = raw.rstrip("/") or "/"
             if not self._authorized() and path != "/healthz":
                 self._send(401, {"error": "unauthorized: pass Authorization: "
                                            "Bearer <token> or X-API-Token"})
@@ -122,9 +202,6 @@ def serve(instance, port: int = 8877, host: str = "0.0.0.0",
                 try:
                     # the health tick runs a REAL probe — stamp the row so
                     # 44 watchdog ticks an hour never inflate the user ledger
-                    # (they now land in the self-test file as "watchdog" rows
-                    # when golden's redirect is active, and are filterable via
-                    # sources=("user",) when they do not)
                     with audit_source("watchdog"):
                         r = inst.ask(inst.menu[0]["triggers"][0])
                     self._send(200, {"ok": True, "probe": r.get("probe")})
@@ -132,15 +209,70 @@ def serve(instance, port: int = 8877, host: str = "0.0.0.0",
                     self._send(503, {"ok": False, "error": str(exc)[:200]})
             elif path == "/openapi.json":
                 self._send(200, inst.openapi())
+            elif path == "/tools":
+                from .mcp import tools
+                self._send(200, {"tools": tools()})
+            elif path == "/audit":
+                rows = self._read_audit()
+                self._send(200, {"rows": rows})
+            elif path.startswith("/runs/"):
+                run_id = path[len("/runs/"):]
+                run = _runs_store.get(run_id)
+                if run is None:
+                    self._send(404, {"error": f"unknown run: {run_id}"})
+                else:
+                    self._send(200, run)
             else:
                 self._send(404, {"error": "not found"})
 
+        def _read_audit(self):
+            from urllib.parse import parse_qs
+            qs = parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+            want = {k: (v[0] if v else None)
+                    for k, v in qs.items()
+                    if k in ("run_id", "agent_id", "session_id", "probe")}
+            limit = int((qs.get("limit") or ["200"])[0])
+            # A bare Router may write somewhere other than the default name
+            # (the tests do); read the ledger it actually uses.
+            path = (getattr(_router_of(inst), "audit_file", None)
+                    or os.path.join(instance_dir, "ask_audit.jsonl"))
+            rows = []
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            row = json.loads(line)
+                        except ValueError:
+                            continue
+                        if all(row.get(k) == v for k, v in want.items()):
+                            rows.append(row)
+            except OSError:
+                return []
+            return rows[-max(1, min(limit, 1000)):]
+
         def do_POST(self):
-            path = self.path.split("?", 1)[0].rstrip("/") or "/"
+            raw_path = self.path.split("?", 1)[0]
+            path = raw_path.rstrip("/") or "/"
             if not self._authorized():
                 self._send(401, {"error": "unauthorized: pass Authorization: "
                                            "Bearer <token> or X-API-Token"})
                 return
+
+            if path.startswith("/v1/confirm/"):
+                token = raw_path[len("/v1/confirm/"):].strip("/")
+                result = _confirms.confirm(token)
+                if isinstance(result, dict) and result.get("error"):
+                    self._send(404, result)
+                else:
+                    result = dict(result) if isinstance(result, dict) else {
+                        "result": result}
+                    result["content_trust"] = "untrusted"
+                    self._send(200, result)
+                return
+
             if path != "/ask":
                 self._send(404, {"error": "not found"})
                 return
@@ -166,7 +298,17 @@ def serve(instance, port: int = 8877, host: str = "0.0.0.0",
             if not q:
                 self._send(400, {"error": "empty question"})
                 return
-            role = self.headers.get("X-NeuralOS-Role") or None
+
+            agent_id, session_id, run_id = self._identity(payload)
+            idem_key = (self.headers.get("Idempotency-Key")
+                        or payload.get("idempotency_key"))
+            policy = resolve_agent(instance_dir, agent_id)
+            if not policy["allowed"]:
+                self._send(403, {"error": f"agent {agent_id!r} is not allowed "
+                                          f"on this instance",
+                                 "code": "policy_denied"})
+                return
+            role = self.headers.get("X-NeuralOS-Role") or policy["role"]
             if role and not acl_roles(instance_dir):
                 self._send(403, {"error": "no acl.json — roles are not "
                                           "configured on this instance"})
@@ -175,19 +317,113 @@ def serve(instance, port: int = 8877, host: str = "0.0.0.0",
             if err:
                 self._send(403, {"error": f"unknown role: {role}"})
                 return
+
+            ck = ((agent_id or "", session_id or "", idem_key)
+                  if idem_key else None)
+            if ck is not None and _idem.get(ck) is not None:
+                replay = dict(_idem.get(ck))
+                replay["_meta"] = {**replay.get("_meta", {}),
+                                   "replayed": True}
+                mode = replay.get("mode")
+                code = 202 if mode == "pending_confirmation" else (
+                    422 if mode == "refused" else 200)
+                self._send(code, replay)
+                return
+
+            retry = _budgets.check(
+                agent_id, policy["budget"]["calls"],
+                policy["budget"]["window"])
+            if retry is not None:
+                self.send_response(429)
+                self.send_header("Retry-After", str(max(1, int(retry))))
+                body = json.dumps({
+                    "error": "budget exhausted",
+                    "code": "budget_exceeded",
+                    "retry_after": max(1, int(retry)),
+                    "limit": policy["budget"]["calls"],
+                    "window": policy["budget"]["window"],
+                }).encode()
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            def run_ask():
+                previous = (_sessions.last(session_id)
+                            if session_id else None)
+                with audit_source("serve"), audit_fields(
+                        agent_id=agent_id, session_id=session_id,
+                        run_id=run_id, surface="serve"), \
+                        pii_policy(policy["pii"]):
+                    try:
+                        env = role_inst.ask(q)
+                    except NoResults as exc:
+                        env = dict(exc.envelope)
+                        env["mode"] = "refused"
+                    except ConfirmRequired as exc:
+                        env = {"mode": "pending_confirmation",
+                               "confirm_token": exc.token,
+                               "probe": exc.probe_name,
+                               "reason": exc.reason,
+                               "expires_in": _confirms.ttl}
+                env = _annotate(env, agent_id, session_id, run_id,
+                                _router_of(role_inst).menu_version)
+                if session_id:
+                    _sessions.remember(
+                        session_id, q,
+                        {"probe": env.get("probe"), "mode": env.get("mode"),
+                         "ask_id": env.get("ask_id"),
+                         "agent_id": agent_id})
+                    env["_meta"]["session"] = {
+                        "turn": _sessions.turns(session_id),
+                        "previous": (previous or {}).get("text")}
+                _trace(run_id or env.get("ask_id"), {
+                    "tool": "ask", "agent_id": agent_id,
+                    "session_id": session_id,
+                    "probe": env.get("probe"), "mode": env.get("mode"),
+                    "ask_id": env.get("ask_id"),
+                    "refusal_reason": env.get("refusal_reason")})
+                return env
+
+            if payload.get("async"):
+                rid = _runs_store.submit(run_ask, meta={"question": q})
+                _trace(rid, {"tool": "ask", "status": "submitted",
+                             "agent_id": agent_id,
+                             "session_id": session_id})
+                self._send(202, {"run_id": rid, "status": "queued"})
+                return
+
             try:
-                # served over HTTP = a real (authenticated) caller, but stamp
-                # it anyway: "serve" rows are distinguishable from direct
-                # library asks and from mesh relays in the same ledger
-                with audit_source("serve"):
-                    answer = role_inst.ask(q)
-                self._send(200, answer)
-            except NoResults as exc:
-                self._send(422, refusal_body(exc))
-            except Exception as exc:
+                env = run_ask()
+            except Exception as exc:  # a surface error, not a protocol crash
                 self._send(500, {"error": str(exc)[:300]})
+                return
+            if ck is not None:
+                _idem.put(ck, dict(env))
+            code = 200
+            if env.get("mode") == "refused":
+                code = 422
+            elif env.get("mode") == "pending_confirmation":
+                code = 202
+            self._send(code, env)
+
+        def do_DELETE(self):
+            path = self.path.split("?", 1)[0].rstrip("/") or "/"
+            if not self._authorized():
+                self._send(401, {"error": "unauthorized: pass Authorization: "
+                                           "Bearer <token> or X-API-Token"})
+                return
+            if path.startswith("/runs/"):
+                run_id = path[len("/runs/"):]
+                if _runs_store.cancel(run_id):
+                    self._send(200, {"run_id": run_id, "cancelled": True})
+                else:
+                    self._send(404, {"error": f"unknown run: {run_id}"})
+            else:
+                self._send(404, {"error": "not found"})
 
     print(f"neuralOS instance '{inst.name}' -> http://{host}:{port} "
-          f"(/healthz /ready /ask)"
+          f"(/healthz /ready /ask /tools /runs /audit /v1/confirm)"
           + ("  [token auth ON]" if auth_token else "  [NO AUTH]"), flush=True)
     _Server((host, port), Handler).serve_forever()

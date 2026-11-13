@@ -70,7 +70,8 @@ def test_tools_list_is_the_agent_surface_not_a_dump(inst_dir):
     tools = out["result"]["tools"]
     names = [t["name"] for t in tools]
     assert names == ["ask", "search", "describe", "catalog", "explain",
-                     "health"]
+                     "health", "memory", "trace", "delegate", "discover",
+                     "build", "shadow", "mothball", "confirm"]
     # every probe is NOT dumped into the context; discovery goes through
     # search/describe, which is what keeps a 200-probe menu usable
     assert "count_rows" not in names

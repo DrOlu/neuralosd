@@ -137,6 +137,9 @@ def build_parser():
                        help="Refuse when the answer would have dropped a "
                             "filter named in the question, instead of "
                             "returning it with a `discarded` ledger")
+    p_ask.add_argument("--explain", action="store_true",
+                       help="Dry run: show the probe, arguments and gate "
+                            "decision WITHOUT executing or auditing")
     p_ask.add_argument("--as-of", default=None, metavar="LABEL",
                        help="answer from a pinned snapshot "
                             "(neuralosd snapshot --label LABEL)")
