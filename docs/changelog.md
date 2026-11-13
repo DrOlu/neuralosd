@@ -1,5 +1,37 @@
 # Changelog
 
+## 2.9.16 — the agentic surface
+
+An agent harness does not ask once; it plans, retries, delegates and runs
+long. The MCP server was a dead end for that caller: it required
+`instance.py` + `needle_menu.json` (the scaffolder writes `probes.py` +
+`bridge.py`, so `tools/list` crashed), and `tools/call` executed
+`fn(**args)`, bypassing the router — no grammar cage, audit row, PII mask,
+row cap, results gate, refusal or cache.
+
+**The MCP surface is now the guarded router.** Fourteen tools: `ask`,
+`search`, `describe`, `catalog`, `explain`, `health`, `memory`, `trace`,
+`delegate`, `discover`, `build`, `shadow`, `mothball`, `confirm`. A refusal
+is a result with a machine-readable `refusal` object (`code`, `retryable`,
+`suggested_action`, `candidates`, `missing`); answers carry
+`content_trust: untrusted` and `provenance`; `describe` exposes a
+`tool_version` so a menu change is visible.
+
+**Agent contracts.** `agent_id` / `session_id` / `run_id` are stamped on
+the audit row. `acl.json` gains an `agents` allow-list with a per-agent
+`role`, `pii` policy and call `budget`. `idempotency_key` replays the first
+result instead of executing again. Sessions remember and recall; runs are
+traced per episode; probes flagged `confirm=True` pause for a HITL token
+instead of firing; mesh delegation (`delegate`/`discover`) and the verified
+`build`/`shadow`/`mothball` lifecycle are tools.
+
+**The HTTP service carries the same contracts.** `POST /ask` (sync or
+`async: true`), `GET /runs/{id}`, `DELETE /runs/{id}`, `GET /audit`,
+`GET /tools`, `POST /v1/confirm/{token}`; `X-Agent-Id` / `X-Session-Id` /
+`X-Run-Id`, `Idempotency-Key`, per-agent policy and budget (429 +
+`Retry-After`), and the refusal contract on 422. `neuralosd ask --explain`
+is a dry run that executes and audits nothing.
+
 ## 2.9.13 — a refusal rate needs a sample
 
 **SLO — one refusal was a 100 % rate and a fleet incident.** `refusal_rate()`
