@@ -9,19 +9,11 @@ repo_name: DrOlu/neuralosd
 
 theme:
   name: material
+  font: false
   palette:
     - scheme: default
-      primary: deep purple
+      primary: custom
       accent: custom
-      toggle:
-        icon: material/brightness-7
-        name: Switch to dark mode
-    - scheme: slate
-      primary: deep purple
-      accent: custom
-      toggle:
-        icon: material/brightness-4
-        name: Switch to light mode
   features:
     - search.suggest
     - search.highlight
@@ -51,7 +43,7 @@ markdown_extensions:
       permalink: true
 
 extra_css:
-  - stylesheets/brand.css
+  - stylesheets/raft.css
 
 extra:
   social:

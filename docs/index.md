@@ -1,9 +1,38 @@
-# neuralOSd
+<div class="raft-hero" markdown="0">
+<p class="raft-eyebrow">Verified agent runtime &middot; v2.9.8</p>
+<h1>The model picks.<br>The runtime verifies.<br>The code answers.</h1>
+<p class="raft-lede">neuralOSd is an offline, on-device data-answering runtime that refuses
+what it cannot verify, accounts for what it excludes, and ships with its own tests.
+Built for regulated environments where a wrong answer is worse than no answer.</p>
+<div class="raft-actions">
+<a class="raft-btn primary" href="usage/">Quick start</a>
+<a class="raft-btn" href="cli/">CLI reference</a>
+<a class="raft-btn" href="https://github.com/DrOlu/neuralosd">GitHub</a>
+</div>
+<div class="raft-badges">
+<span class="raft-badge">Refuse-if-unknown</span>
+<span class="raft-badge">Discard accounting</span>
+<span class="raft-badge">Offline by default</span>
+<span class="raft-badge">Ships with tests</span>
+</div>
+</div>
 
-**The verified agent runtime.** An offline, on-device data-answering runtime
-that **refuses what it cannot verify**, **accounts for what it excludes**,
-and **ships with its own tests**. The model picks; the runtime verifies; the
-code answers.
+<div class="raft-grid">
+<div class="raft-card"><div class="swatch coral">REFUSE</div><div class="body">
+<h3>Weak match, no answer</h3>
+<p>If the evidence does not clear the bar, the runtime refuses and names the reason instead of guessing.</p>
+</div></div>
+<div class="raft-card"><div class="swatch cyan">ACCOUNT</div><div class="body">
+<h3>Nothing disappears quietly</h3>
+<p>Every excluded row is counted and surfaced, so the answer's boundary is visible to the operator.</p>
+</div></div>
+<div class="raft-card"><div class="swatch lime">PROVE</div><div class="body">
+<h3>Verified end to end</h3>
+<p>Invariants, oracle checks and a packaged self-test suite run against the instance you deployed.</p>
+</div></div>
+</div>
+
+<div class="raft-strip">An answer you can audit beats an answer that sounds confident.</div>
 
 ## Quick Start
 
