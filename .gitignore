@@ -14,6 +14,8 @@ _msb_stage/
 .ask_cache.json
 ask_audit.jsonl
 *.xlsx
+# agent session memory + run traces (generated at runtime)
+.agentic/
 
 # template state files (generated at runtime)
 src/neuralosd/templates/itsm/.ask_cache.json

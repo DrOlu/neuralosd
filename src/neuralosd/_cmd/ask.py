@@ -22,6 +22,12 @@ def run(a):
         # rather than returning it with a `discarded` ledger.
         inst.router.strict_discards = True
     question = " ".join(a.question)
+    # Dry run: the decision half of ask() with the execution half removed.
+    # Nothing runs, nothing is cached, nothing is audited.
+    if getattr(a, "explain", False):
+        print(json.dumps(inst.router.dry_run(question), indent=2,
+                         ensure_ascii=False, default=str))
+        return 0
     try:
         env = inst.ask(question)
     except NoResults as e:

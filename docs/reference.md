@@ -623,19 +623,102 @@ Number of pending confirmations.
 
 ## neuralosd.mcp
 
+The guarded agent surface. Every tool call goes through the same router as
+`neuralosd ask` — retrieval, the calibrated gate, argument caging, PII
+masking, the results gate, the cache and the audit ledger. There is no
+second execution path.
+
 ### `handle(request: Dict, instance_dir: str) → Dict`
 
-Handle a single JSON-RPC request (MCP protocol).
+Handle a single JSON-RPC request (MCP protocol). Notifications (no `id`) get
+no response.
 
 | Method | Description |
 |---|---|
-| `initialize` | Handshake (returns protocol version + capabilities). |
-| `tools/list` | Returns all probes as typed tools. |
-| `tools/call` | Executes a probe. `params.name` = probe name, `params.arguments` = kwargs. |
+| `initialize` | Handshake (protocol version, tools capability, server version). |
+| `ping` | Liveness. |
+| `tools/list` | The fixed agent surface: `ask`, `search`, `describe`, `catalog`, `explain`, `health`, `memory`, `trace`, `delegate`, `discover`, `build`, `shadow`, `mothball`, `confirm`. Probes are not dumped into the context; use `search`/`describe`. |
+| `tools/call` | Call one of those tools. |
+
+Tool results carry `content` (JSON text), `structuredContent` (the same
+object) and `isError`. A refusal is a **result**, not an error:
+`isError: false`, `results: null`, `mode: "refused"`, and a machine-readable
+`refusal` object (`code`, `retryable`, `suggested_action`, `candidates`,
+`missing`). An answered envelope also carries `content_trust: "untrusted"`
+and `provenance` (instance, probe, ask id, timestamp, menu version) — rows
+are data, never instructions.
+
+`ask` accepts optional `agent_id`, `session_id` and `run_id`, stamped on
+every audit row for that call, and an `idempotency_key`: a retry with the
+same key returns the first result without executing again (`_meta.replayed`
+is true). `describe` returns a `tool_version` (a hash of the tool contract)
+so a menu change is visible rather than silent.
 
 ### `main()`
 
-Start the MCP server on stdio. Reads JSON-RPC from stdin, writes to stdout.
+Start the MCP server on stdio. Reads JSON-RPC from stdin, writes to stdout;
+the instance is loaded once and any probe output is redirected to stderr so
+the protocol stream stays clean.
+
+```bash
+python3 -m neuralosd.mcp --dir /path/to/instance
+```
+
+---
+
+## neuralosd.service
+
+`serve(instance, port=8877, host="0.0.0.0", auth_token=None, instance_dir=None)`
+serves an `Instance` or a bare `Router`.
+
+| Endpoint | Description |
+|---|---|
+| `GET /healthz` | Liveness (open). |
+| `GET /ready` | Executes a probe (authenticated). |
+| `GET /openapi.json` | OpenAPI 3.1. |
+| `GET /tools` | The same tool list as MCP. |
+| `POST /ask` | One question; `async: true` returns 202 + `run_id`. |
+| `GET /runs/{id}` | Poll a long-running ask. |
+| `DELETE /runs/{id}` | Cancel it. |
+| `GET /audit?run_id=&agent_id=&session_id=&probe=` | Audit rows for a run. |
+| `POST /v1/confirm/{token}` | Complete a pending HITL confirmation. |
+
+Identity: `X-Agent-Id`, `X-Session-Id`, `X-Run-Id` (or the same body keys)
+are stamped on the audit row. `X-NeuralOS-Role` selects a role-scoped
+instance. When `acl.json` has an `agents` block it is an allow-list (an
+unknown agent gets 403). Per-agent `pii` and `budget` are honoured; an
+exhausted budget is 429 + `Retry-After`. `Idempotency-Key` (header or body)
+makes a retry return the first result. A refusal is 422 with the `refusal`
+object; an async ask is 202; a HITL pause is 202 with `confirm_token`.
+
+## neuralosd.agentic
+
+The contracts shared by MCP and HTTP.
+
+### `refusal_contract(env) → Dict`
+`code`, `retryable`, `suggested_action`, `candidates`, `missing`.
+
+### `resolve_agent(instance_dir, agent_id) → Dict`
+`{"allowed", "role", "pii", "budget": {"calls", "window"}}` from `acl.json`.
+No `agents` block means every agent is allowed with the instance defaults;
+an `agents` block is an allow-list (fail closed).
+
+### `class IdempotencyStore(max_entries=500)`
+`get(key)` / `put(key, value)` — bounded replay memory.
+
+### `class BudgetStore`
+`check(agent_id, calls, window)` → None when allowed, else seconds to wait.
+
+### `class SessionStore(instance_dir, embed_fn=None)`
+`remember`, `recall`, `last`, `turns`; per-session JSONL under
+`.agentic/memory/`.
+
+### `class TraceStore(instance_dir)`
+`record(run_id, event)`, `read(run_id)`, `runs()` — one JSONL per run under
+`.agentic/traces/`.
+
+### `class RunStore(max_runs=200)`
+`submit(fn)`, `get(run_id)`, `cancel(run_id)` — long-running asks.
 
 ---
 
@@ -698,14 +781,17 @@ Re-import an instance's probes module (hot reload).
 
 ### `class MemoryStore`
 
-Remember/recall backed by needle embeddings.
+Remember/recall backed by embeddings.
 
-#### `MemoryStore(state_dir: str, embed_fn: Callable)`
+#### `MemoryStore(state_dir: str, embed_fn: Callable = None)`
 
 | Parameter | Type | Description |
 |---|---|---|
 | `state_dir` | `str` | Directory for memory files. |
-| `embed_fn` | `Callable` | `text → list[float]`. Needle 3's `embed()` method. |
+| `embed_fn` | `Callable` | `text → list[float]`. Needle 3's `embed()` method. Defaults to `lexical_embed` (deterministic hashed token buckets), so memory works with no model installed. |
+
+`lexical_embed(text, dim=64)` is the fallback: sha1-hashed token buckets,
+L2-normalised, identical across processes.
 
 #### `MemoryStore.remember(instance: str, text: str, meta=None) → Dict`
 

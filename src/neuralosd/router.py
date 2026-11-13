@@ -302,6 +302,57 @@ class audit_source:
         return False
 
 
+# Extra attribution an agent surface stamps on every audit row: which agent,
+# which session, which run. Additive only — a key the row already carries
+# wins, so this can never rewrite the ask's own question/probe/refusal
+# fields. Kept separate from `source` so the SLO vocabulary does not grow
+# one token per harness.
+_AUDIT_FIELDS: ContextVar = ContextVar("neuralosd_audit_fields", default=None)
+
+
+class audit_fields:
+    """Context manager adding agent/session/run attribution to audit rows.
+
+        with audit_fields(agent_id="planner", session_id="s-7"):
+            inst.ask("how many rows")   # row also carries agent_id/session_id
+    """
+
+    def __init__(self, **fields):
+        self._fields = {k: v for k, v in fields.items() if v is not None}
+        self._token = None
+
+    def __enter__(self):
+        self._token = _AUDIT_FIELDS.set(self._fields)
+        return self
+
+    def __exit__(self, *exc):
+        _AUDIT_FIELDS.reset(self._token)
+        return False
+
+
+# Per-request PII policy. An ACL may let one agent see emails and deny them
+# to another; the instance default is only the default. Storage masking is
+# deliberately NOT overridable: an agent that may read PII still must not
+# write it into the append-only audit log.
+_PII_POLICY: ContextVar = ContextVar("neuralosd_pii_policy", default=None)
+
+
+class pii_policy:
+    """Context manager overriding the instance's response PII masking."""
+
+    def __init__(self, enabled: bool):
+        self._enabled = bool(enabled)
+        self._token = None
+
+    def __enter__(self):
+        self._token = _PII_POLICY.set(self._enabled)
+        return self
+
+    def __exit__(self, *exc):
+        _PII_POLICY.reset(self._token)
+        return False
+
+
 def score_probe(meta: ProbeMeta, q_tokens):
     # The BEST single trigger match dominates, so a probe with one exact
     # phrase beats a probe with many partially-overlapping triggers.
@@ -665,6 +716,10 @@ class Router:
         # per-request; this is the fallback for plain Router users.
         self.audit_source = audit_source
         self.pii_mask = pii_mask
+        # HITL is opt-in per surface: the CLI/library keep today's behaviour
+        # (execute), while `serve` and MCP install a store so a confirm=True
+        # probe pauses for a token instead of firing.
+        self.confirm_store = None
         self.ttl = ttl
         self.name = name
         # When True, an answer that would have dropped a filter the user named
@@ -1163,13 +1218,70 @@ class Router:
         # cache hit, and a mutated dict would carry the golden run's stamp
         # into the next USER's audit row for the same question.
         src = _AUDIT_SOURCE.get() or self.audit_source
-        rec = {**rec, "source": rec.get("source") or src}
+        # Agent attribution is additive: the row's own keys win, so a caller
+        # can never overwrite question/probe/refusal by supplying a field.
+        fields = _AUDIT_FIELDS.get() or {}
+        rec = {**fields, **rec, "source": rec.get("source") or src}
         try:
             rec = self._for_storage(rec)
             with open(self.audit_file, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
         except Exception:
             pass
+
+    def _execute_confirmed(self, meta, kwargs, question, normalized, ask_id):
+        """Run a probe whose human confirmation just arrived.
+
+        Same masking, packaging and audit as the normal path — a confirmed
+        action must not be a second, weaker execution channel.
+        """
+        t0 = time.time()
+        fn = self.by_name[meta.name]
+        try:
+            r = fn(**kwargs)
+            if isinstance(r, dict):
+                results = [{**r, "_tool": meta.name}]
+            elif isinstance(r, list):
+                results = r
+            else:
+                results = None
+            mode = "confirmed"
+        except Exception as exc:  # noqa: BLE001 - reported in the envelope
+            results = [{"error": f"{type(exc).__name__}: {str(exc)[:200]}",
+                        "_tool": meta.name}]
+            mode = "confirmed-error"
+        _pii = _PII_POLICY.get()
+        if (self.pii_mask if _pii is None else _pii):
+            results = mask_pii(results)
+        results = jsonable(results)
+        empty = results in (None, [], {})
+        env = {"ask_id": ask_id, "ts": time.time(), "question": question,
+               "normalized": normalized, "probe": meta.name,
+               "menu_version": self.menu_version, "mode": mode,
+               "confidence": None,
+               "latency_ms": int((time.time() - t0) * 1000),
+               "results": None if empty else results}
+        if empty:
+            env["error"] = "no results produced for this question"
+            env["refusal_reason"] = "no_results"
+        self._audit(env)
+        return env
+
+    # -- public retrieval --------------------------------------------------
+    def retrieve(self, query: str, k: int = 8):
+        """Rank the probes for a query WITHOUT executing anything.
+
+        Public form of the retrieval step ``ask`` uses, for agent surfaces
+        (MCP ``search``, HTTP): an agent should be able to ask "which tools
+        could answer this?" before spending a call. Returns
+        ``[(ProbeMeta, score), ...]`` in rank order; empty when nothing
+        scores.
+        """
+        if not isinstance(query, str):
+            raise TypeError(
+                f"query must be a str, got {type(query).__name__}")
+        normalized, _moved = self._normalize(query.strip())
+        return self._retrieve(normalized, k)
 
     # -- public dry run ----------------------------------------------------
     def dry_run(self, question: str, k: int = 8) -> Dict[str, Any]:
@@ -1411,6 +1523,22 @@ class Router:
                 _meta, kwargs = best[2], best[3]
                 exec_kwargs = dict(kwargs)
                 fn = self.by_name[_meta.name]
+                # HITL: a probe that declared confirm=True does not fire until
+                # a human/agent returns the token. The pending entry runs the
+                # same masking/audit path when confirmed.
+                if (self.confirm_store is not None
+                        and getattr(_meta, "confirm", False)):
+                    from .hitl import ConfirmRequired
+                    exc = ConfirmRequired(
+                        _meta.name, dict(kwargs),
+                        "probe requires confirmation")
+                    self.confirm_store.create(
+                        lambda m=_meta, k=dict(kwargs), q=question,
+                        n=normalized, a=ask_id:
+                        self._execute_confirmed(m, k, q, n, a),
+                        {}, exc.reason, token=exc.token,
+                        probe_name=_meta.name)
+                    raise exc
                 mode = "deterministic"
                 used_probe = _meta.name
                 try:
@@ -1481,7 +1609,10 @@ class Router:
                 self._audit(abstain_env)
                 raise NoResults(abstain_env)
 
-        if self.pii_mask:
+        # Per-request policy (an ACL may grant one agent PII visibility);
+        # None means "use the instance default".
+        _pii = _PII_POLICY.get()
+        if (self.pii_mask if _pii is None else _pii):
             results = mask_pii(results)
         # Mask first (it needs the original key types), then make the payload
         # encodable: Decimal/date/bytes in a result must not 500 the service.
