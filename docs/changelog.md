@@ -1,5 +1,33 @@
 # Changelog
 
+## 3.1.0 — proof bands and three connectors
+
+**Every answer now says which proof it carries.** The envelope gains
+`verification`: `execution` (the probe ran and the results gate passed),
+`golden` (the exact question is in the human-written `golden.json` bank and
+routed to the expected probe), or `refused`. When a golden item has a typed
+value oracle, `golden.oracle` is `passed`/`failed`; a mismatch downgrades
+the answer to `execution` rather than calling it verified. `oracle_available`
+marks a probe that has an independent `truth.json` check. The claim is now
+the path, not a promise about the business logic.
+
+**mitmproxy HAR connector.** `neuralosd init --source mitm:capture.har`
+reads a mitmproxy HAR export into request rows and scaffolds request count,
+status breakdown, failed requests, slowest requests and requests-by-host
+probes. `har_rows()` is bounded and tolerant of malformed entries.
+
+**rea evidence-bundle connector.** `neuralosd init --source
+rea:bundle.json#findings` reads one section of a rea export (`findings`,
+`functions`, `imports`, `strings`, `artifacts`, or a plain list) and
+scaffolds count/list plus the generic distinct/aggregate probes.
+
+**Plasma probes extended.** Severity matching is case-insensitive, failed
+logons match the event type *or* the 4625 message, and new probes cover
+events by severity, top accounts and network events.
+
+Tests: `tests/test_verification_levels.py` (6), `tests/test_integrations.py`
+(6).
+
 ## 3.0.2 — security review
 
 A security pass over the agentic surface and the deploy path.
