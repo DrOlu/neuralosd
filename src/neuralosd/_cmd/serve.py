@@ -21,19 +21,14 @@ def run(a):
     print(f"serving instance '{inst.name}' with {len(inst.probes)} probes "
           f"on http://{host}:{a.port}", file=sys.stderr)
     if host not in LOOPBACK:
-        # This is not hypothetical: /ask exposes the data behind every probe,
-        # and there is no authentication on it yet. Binding wide is a
-        # deliberate act, so say so out loud rather than inheriting 0.0.0.0
-        # from a default and calling it configured.
-        if auth_token:
-            print("bound to a non-loopback address WITH token auth — clients "
-                  "must send Authorization: Bearer <token>.", file=sys.stderr)
-        else:
-            print("WARNING: bound to a non-loopback address, and /ask has NO "
-                  "authentication. Anyone who can reach this port can read every "
-                  "table this instance points at. Use --auth-token (or "
-                  "$NEURALOSD_API_TOKEN), put an authenticating proxy in "
-                  "front, or bind 127.0.0.1 and tunnel.", file=sys.stderr)
+        # Fail closed. /ask exposes every probe's data; binding wide without
+        # a credential is not a default we will let an operator inherit.
+        from ..agentic import agent_tokens
+        if not auth_token and not agent_tokens(instance_dir):
+            raise SystemExit(
+                f"error: refusing to bind {host} without a credential — pass "
+                f"--auth-token (or $NEURALOSD_API_TOKEN), configure per-agent "
+                f"tokens in acl.json, or bind 127.0.0.1")
     serve(inst, port=a.port, host=host, auth_token=auth_token,
           instance_dir=instance_dir)
 
@@ -67,19 +62,9 @@ def run_multi(a):
     if getattr(a, "strict", False):
         print("  strict refusal policy: ON")
 
-    if host not in LOOPBACK:
-        # Same policy as single-instance run(): binding wide is a deliberate
-        # act, so say so out loud. With a token the door is locked; without
-        # one, every instance's data is readable by anyone who can reach the
-        # port — never let that happen silently.
-        if auth_token:
-            print("bound to a non-loopback address WITH token auth — clients "
-                  "must send Authorization: Bearer <token>.", file=sys.stderr)
-        else:
-            print("WARNING: bound to a non-loopback address, and /ask has NO "
-                  "authentication. Anyone who can reach this port can read every "
-                  "table every instance here points at. Use --auth-token (or "
-                  "$NEURALOSD_API_TOKEN), put an authenticating proxy in "
-                  "front, or bind 127.0.0.1 and tunnel.", file=sys.stderr)
+    if host not in LOOPBACK and not auth_token:
+        raise SystemExit(
+            f"error: refusing to bind {host} without a credential — pass "
+            f"--auth-token (or $NEURALOSD_API_TOKEN) or bind 127.0.0.1")
 
     serve_multi(server, host=host, port=a.port, auth_token=auth_token)

@@ -74,6 +74,30 @@ the id maps are bounded and pruned.
 
 ---
 
+## I-series — 3.0.2 security review
+
+| id | sev | area | one line |
+|---|---|---|---|
+| I1 | P0 | identity | `agent_id` was self-asserted over HTTP; any valid token could claim an `admin: true` agent |
+| I2 | P1 | data access | any authenticated caller could read every agent's `/audit` rows and `/runs/{id}` |
+| I3 | P1 | binding | library `serve()` defaulted to `0.0.0.0` with no auth; multi mode only warned on wide bind |
+| I4 | P0 | deploy | deploy start commands interpolated the directory into a shell string and a generated `os.system` call — quote/`$()`/`;` executable |
+| I5 | P1 | deploy | the inner service bound `0.0.0.0` unauthenticated inside the VM |
+| I6 | P2 | snapshots | a snapshot label was a filename; `../` escaped `snapshots/` |
+| I7 | P2 | scheduler | a schedule name was a filename; `../` escaped `scheduled/` |
+| I8 | P2 | HTTP | unbounded worker threads and no socket timeout (slowloris/resource exhaustion) |
+| I9 | P2 | roles | an agent token could select a role via `X-NeuralOS-Role` instead of its ACL role |
+
+Fixes: per-agent `token_sha256` binds identity, role, PII and budget; agents
+see only their own audit/runs; wide binds fail closed without a credential;
+deploy uses `shlex.quote` and a list-based `Popen` and binds the inner
+service to loopback; snapshot labels and schedule names reject separators;
+HTTP caps workers at 64 with a 30 s socket timeout; an agent token's role is
+its ACL role. `docs/security.md` documents the model and its limits.
+Tests: `tests/test_security_hardening.py`.
+
+---
+
 ## F1 — the one-shot guard was order-insensitive (P1)
 
 **Reproduction** (library): dry-run `p`; apply `p`; undo `p`; apply `p`;

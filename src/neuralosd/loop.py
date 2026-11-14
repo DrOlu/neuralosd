@@ -530,10 +530,22 @@ def audit_drift(instance_dir, src):
 
 # ── v2.4.0: pinning, SLO, fleet, badge, synonyms ───────────────────────────
 
+def _snapshot_label(label):
+    """A label becomes a FILENAME. Reject anything that could leave the
+    snapshots directory or smuggle control characters into it."""
+    if (not isinstance(label, str) or not label or len(label) > 80
+            or label in (".", "..")
+            or any(c in label for c in "/\\")
+            or any(ord(c) < 32 for c in label)):
+        raise SystemExit(f"error: invalid snapshot label {label!r}")
+    return label
+
+
 def pin_snapshot(instance_dir, label):
     """Freeze every probe's current observation under a label, with the
     content hash. `ask --as-of <label>` answers from the pin — reproducible
     evidence, even after the source changes."""
+    label = _snapshot_label(label)
     from .menu_adapter import observe
     obs = observe(instance_dir)
     blob = {"label": label, "ts": time.time(), "observations": obs}
@@ -552,6 +564,7 @@ def ask_as_of(instance_dir, question, label):
     """Answer from a PINNED snapshot: derived metrics evaluate against the
     frozen observations. The envelope carries the pin's label + hash — the
     answer is reproducible evidence, not a vibe."""
+    label = _snapshot_label(label)
     from ._cmd._common import load_instance
     path = os.path.join(instance_dir, "snapshots", f"{label}.json")
     if not os.path.isfile(path):

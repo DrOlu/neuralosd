@@ -42,6 +42,16 @@ class Scheduler:
             os.replace(tmp, self.schedules_file)
 
     def add(self, name: str, every_s: int, instance: str, question: str):
+        # The name is a filename component (`scheduled/<name>.json`).
+        if (not isinstance(name, str) or not name or len(name) > 80
+                or name in (".", "..")
+                or any(c in name for c in "/\\")
+                or any(ord(c) < 32 for c in name)):
+            raise ValueError(f"invalid schedule name {name!r}")
+        try:
+            every_s = max(1, int(every_s))
+        except (TypeError, ValueError):
+            raise ValueError(f"invalid every_s {every_s!r}")
         entry = {"name": name, "every_s": every_s, "instance": instance,
                  "question": question, "next_due": time.time() + every_s,
                  "runs": 0, "last_run": None, "last_status": None,

@@ -38,11 +38,13 @@ import json
 import collections
 import os
 import socketserver
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .agentic import (BudgetStore, IdempotencyStore, RunStore, SessionStore,
-                      TraceStore, refusal_contract, resolve_agent)
+                      TraceStore, agent_tokens, effective_role, hash_token,
+                      refusal_contract, resolve_agent)
 from .hitl import ConfirmRequired, ConfirmStore
 from .router import NoResults, audit_fields, audit_source, pii_policy
 
@@ -53,9 +55,37 @@ class _Server(ThreadingHTTPServer):
     HTTPServer.server_bind() calls socket.getfqdn(host), which can hang for
     tens of seconds (or forever) on networks with a slow/unreachable DNS.
     We bind the socket and set server_name to the literal host instead.
+
+    A thread per connection is unbounded by default; a caller can open
+    thousands of sockets and exhaust the process. `MAX_WORKERS` caps the
+    live request threads and answers the overflow with a 503 instead of
+    accepting work it cannot run.
     """
     daemon_threads = True
     allow_reuse_address = True
+    MAX_WORKERS = 64
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._slots = threading.BoundedSemaphore(self.MAX_WORKERS)
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            try:
+                request.sendall(b"HTTP/1.1 503 Service Unavailable\r\n"
+                                b"Content-Length: 0\r\n"
+                                b"Connection: close\r\n\r\n")
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        super().process_request(request, client_address)
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
 
     def server_bind(self):
         socketserver.TCPServer.server_bind(self)
@@ -111,13 +141,24 @@ def resolve_role_instance(role, inst, instance_dir, cache=None):
     return cache[role], None
 
 
-def serve(instance, port: int = 8877, host: str = "0.0.0.0",
+LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
+def serve(instance, port: int = 8877, host: str = "127.0.0.1",
           auth_token: str = None, instance_dir: str = None):
     inst = instance
     instance_dir = (instance_dir
                     or getattr(inst, "state_dir", None)
                     or os.path.dirname(os.path.abspath(
                         getattr(inst, "audit_file", "ask_audit.jsonl"))))
+    # Fail closed: wide binding without any credential exposes every probe's
+    # data and every agent's policy. Per-agent tokens count as a credential.
+    if host not in LOOPBACK and not auth_token and not agent_tokens(instance_dir):
+        raise SystemExit(
+            f"error: refusing to bind {host} without a credential — pass "
+            f"--auth-token (or $NEURALOSD_API_TOKEN), configure per-agent "
+            f"tokens in acl.json, or bind 127.0.0.1")
+
     _role_cache = {}
     _runs_store = RunStore()
     _idem = IdempotencyStore()
@@ -159,14 +200,41 @@ def serve(instance, port: int = 8877, host: str = "0.0.0.0",
         _traces.record(run_id, event)
 
     class Handler(BaseHTTPRequestHandler):
-        def _authorized(self) -> bool:
-            if not auth_token:
-                return True
+        # A client that opens a connection and stalls cannot hold a worker
+        # thread forever (slowloris).
+        timeout = 30
+
+        def _presented_token(self) -> str:
             auth = self.headers.get("Authorization") or ""
-            if auth.startswith("Bearer ") and _token_ok(
-                    auth[len("Bearer "):], auth_token):
-                return True
-            return _token_ok(self.headers.get("X-API-Token"), auth_token)
+            if auth.startswith("Bearer "):
+                return auth[len("Bearer "):]
+            return self.headers.get("X-API-Token") or ""
+
+        def _caller(self, claimed_agent=None):
+            """Resolve the request's credentials to (agent_id, mode).
+
+            Modes: ``open`` (no credential configured — loopback/trusted),
+            ``operator`` (the global token; may act as any agent),
+            ``agent`` (a per-agent token; the claimed id must match),
+            ``missing`` / ``bad`` / ``mismatch`` (reject).
+            """
+            token = self._presented_token()
+            configured = bool(auth_token) or bool(agent_tokens(instance_dir))
+            if not token:
+                return (None, "missing") if configured else (None, "open")
+            if auth_token and _token_ok(token, auth_token):
+                return claimed_agent, "operator"
+            agent = agent_tokens(instance_dir).get(hash_token(token))
+            if not agent:
+                return None, "bad"
+            if claimed_agent and claimed_agent != agent:
+                return None, "mismatch"
+            return agent, "agent"
+
+        def _authorized(self) -> bool:
+            _agent, mode = self._caller(
+                self.headers.get("X-Agent-Id") or None)
+            return mode in ("open", "operator", "agent")
 
         def _send(self, code, payload):
             body = json.dumps(payload, ensure_ascii=False, default=str).encode()
@@ -193,7 +261,10 @@ def serve(instance, port: int = 8877, host: str = "0.0.0.0",
         def do_GET(self):
             raw = self.path.split("?", 1)[0]
             path = raw.rstrip("/") or "/"
-            if not self._authorized() and path != "/healthz":
+            caller_agent, caller_mode = self._caller(
+                self.headers.get("X-Agent-Id") or None)
+            if caller_mode not in ("open", "operator", "agent") \
+                    and path != "/healthz":
                 self._send(401, {"error": "unauthorized: pass Authorization: "
                                            "Bearer <token> or X-API-Token"})
                 return
@@ -214,11 +285,20 @@ def serve(instance, port: int = 8877, host: str = "0.0.0.0",
                 from .mcp import tools
                 self._send(200, {"tools": tools()})
             elif path == "/audit":
-                rows = self._read_audit()
+                # An agent token sees only its own ledger; the operator sees
+                # all. Without this, every agent could read every other
+                # agent's questions and results.
+                rows = self._read_audit(
+                    force_agent=(caller_agent
+                                 if caller_mode == "agent" else None))
                 self._send(200, {"rows": rows})
             elif path.startswith("/runs/"):
                 run_id = path[len("/runs/"):]
                 run = _runs_store.get(run_id)
+                if (run is not None and caller_mode == "agent"
+                        and run.get("meta", {}).get("agent_id")
+                        != caller_agent):
+                    run = None           # do not reveal another agent's run
                 if run is None:
                     self._send(404, {"error": f"unknown run: {run_id}"})
                 else:
@@ -226,12 +306,14 @@ def serve(instance, port: int = 8877, host: str = "0.0.0.0",
             else:
                 self._send(404, {"error": "not found"})
 
-        def _read_audit(self):
+        def _read_audit(self, force_agent=None):
             from urllib.parse import parse_qs
             qs = parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
             want = {k: (v[0] if v else None)
                     for k, v in qs.items()
                     if k in ("run_id", "agent_id", "session_id", "probe")}
+            if force_agent:
+                want["agent_id"] = force_agent
             try:
                 limit = int((qs.get("limit") or ["200"])[0])
             except (TypeError, ValueError):
@@ -264,9 +346,16 @@ def serve(instance, port: int = 8877, host: str = "0.0.0.0",
         def do_POST(self):
             raw_path = self.path.split("?", 1)[0]
             path = raw_path.rstrip("/") or "/"
-            if not self._authorized():
+            _hdr_agent, mode = self._caller(
+                self.headers.get("X-Agent-Id") or None)
+            if mode in ("missing", "bad"):
                 self._send(401, {"error": "unauthorized: pass Authorization: "
                                            "Bearer <token> or X-API-Token"})
+                return
+            if mode == "mismatch":
+                self._send(403, {"error": "forbidden: the token does not "
+                                          "belong to the claimed agent",
+                                 "code": "agent_mismatch"})
                 return
 
             if path.startswith("/v1/confirm/"):
@@ -329,6 +418,20 @@ def serve(instance, port: int = 8877, host: str = "0.0.0.0",
                 return
 
             agent_id, session_id, run_id = self._identity(payload)
+            caller_agent, caller_mode = self._caller(agent_id)
+            if caller_mode in ("missing", "bad"):
+                self._send(401, {"error": "unauthorized: a valid token is "
+                                          "required"})
+                return
+            if caller_mode == "mismatch":
+                self._send(403, {"error": "forbidden: the token does not "
+                                          "belong to the claimed agent",
+                                 "code": "agent_mismatch"})
+                return
+            if caller_mode == "agent":
+                # The token IS the identity; the self-asserted header/body
+                # cannot override it.
+                agent_id = caller_agent
             idem_key = (self.headers.get("Idempotency-Key")
                         or payload.get("idempotency_key"))
             policy = resolve_agent(instance_dir, agent_id)
@@ -337,7 +440,11 @@ def serve(instance, port: int = 8877, host: str = "0.0.0.0",
                                           f"on this instance",
                                  "code": "policy_denied"})
                 return
-            role = self.headers.get("X-NeuralOS-Role") or policy["role"]
+            # An agent token's role is the one in its ACL entry; the header
+            # cannot escalate it. The operator token may still assume a role.
+            role = effective_role(
+                self.headers.get("X-NeuralOS-Role") or None,
+                policy["role"], caller_mode)
             if role and not acl_roles(instance_dir):
                 self._send(403, {"error": "no acl.json — roles are not "
                                           "configured on this instance"})
@@ -416,7 +523,8 @@ def serve(instance, port: int = 8877, host: str = "0.0.0.0",
                 return env
 
             if payload.get("async"):
-                rid = _runs_store.submit(run_ask, meta={"question": q})
+                rid = _runs_store.submit(
+                    run_ask, meta={"question": q, "agent_id": agent_id})
                 _trace(rid, {"tool": "ask", "status": "submitted",
                              "agent_id": agent_id,
                              "session_id": session_id})

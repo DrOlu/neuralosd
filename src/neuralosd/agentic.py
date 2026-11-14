@@ -109,6 +109,47 @@ def load_acl(instance_dir):
     return data if isinstance(data, dict) else {}
 
 
+def hash_token(token: str) -> str:
+    """The only form of an agent token that is stored in acl.json."""
+    return hashlib.sha256(str(token).encode("utf-8")).hexdigest()
+
+
+def agent_tokens(instance_dir):
+    """Map ``sha256(token) -> agent_id`` from acl.json's agents block.
+
+    A token is configured as ``"token_sha256": "<64 hex>"``. The secret
+    itself never lives in the policy file, and an agent cannot claim an
+    identity it does not hold the token for.
+    """
+    acl = load_acl(instance_dir)
+    agents = acl.get("agents")
+    out = {}
+    if not isinstance(agents, dict):
+        return out
+    for name, entry in agents.items():
+        if not isinstance(entry, dict):
+            continue
+        digest = entry.get("token_sha256")
+        if not isinstance(digest, str):
+            continue
+        digest = digest.strip().lower()
+        if len(digest) == 64 and all(c in "0123456789abcdef" for c in digest):
+            out[digest] = str(name)
+    return out
+
+
+def effective_role(header_role, policy_role, caller_mode):
+    """The role a request actually runs as.
+
+    An agent token is bound to the role in its ACL entry; a header cannot
+    escalate it. The operator token (and the no-auth loopback mode) may
+    still select a role explicitly.
+    """
+    if caller_mode == "agent":
+        return policy_role
+    return header_role or policy_role
+
+
 def resolve_agent(instance_dir, agent_id):
     """Resolve an agent's policy from ``acl.json``.
 

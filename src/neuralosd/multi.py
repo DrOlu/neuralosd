@@ -131,6 +131,9 @@ def make_handler(server: MultiInstanceServer, auth_token: str = None):
     from http.server import BaseHTTPRequestHandler
 
     class Handler(BaseHTTPRequestHandler):
+        # slowloris: a stalled connection must not pin a worker thread.
+        timeout = 30
+
         def _authorized(self) -> bool:
             if not auth_token:
                 return True
@@ -264,6 +267,10 @@ def serve_multi(server: MultiInstanceServer, host: str = "127.0.0.1",
     liveness/readiness probes require Authorization: Bearer <token> (or
     X-API-Token) — same contract as service.serve for single instances.
     """
+    if host not in ("127.0.0.1", "localhost", "::1") and not auth_token:
+        raise SystemExit(
+            f"error: refusing to bind {host} without a credential — pass "
+            f"--auth-token (or $NEURALOSD_API_TOKEN) or bind 127.0.0.1")
     handler = make_handler(server, auth_token=auth_token)
     httpd = ThreadingHTTPServer((host, port), handler)
     print(f"neuralosd multi-instance server -> http://{host}:{port} "

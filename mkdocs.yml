@@ -30,6 +30,7 @@ nav:
   - API Reference: reference.md
   - Cookbook: cookbook.md
   - Architecture: architecture.md
+  - Security: security.md
   - Changelog: changelog.md
 
 markdown_extensions:

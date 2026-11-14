@@ -684,12 +684,18 @@ serves an `Instance` or a bare `Router`.
 | `POST /v1/confirm/{token}` | Complete a pending HITL confirmation. |
 
 Identity: `X-Agent-Id`, `X-Session-Id`, `X-Run-Id` (or the same body keys)
-are stamped on the audit row. `X-NeuralOS-Role` selects a role-scoped
-instance. When `acl.json` has an `agents` block it is an allow-list (an
-unknown agent gets 403). Per-agent `pii` and `budget` are honoured; an
-exhausted budget is 429 + `Retry-After`. `Idempotency-Key` (header or body)
-makes a retry return the first result. A refusal is 422 with the `refusal`
-object; an async ask is 202; a HITL pause is 202 with `confirm_token`.
+are stamped on the audit row. With a **global** `--auth-token` the caller is
+an operator: it may claim any agent and select any role.
+With **per-agent tokens** (`acl.json` `agents.<name>.token_sha256`), the
+token binds the agent: a conflicting `X-Agent-Id` is `403 agent_mismatch`,
+the role comes from the ACL entry (a header cannot escalate it), an agent
+sees only its own `/audit` rows and `/runs/{id}`, and an unknown agent is
+denied. Per-agent `pii`, `budget` and `admin` are honoured; an exhausted
+budget is 429 + `Retry-After`. `Idempotency-Key` (header or body) makes a
+retry return the first result. A refusal is 422 with the `refusal` object;
+an async ask is 202; a HITL pause is 202 with `confirm_token`.
+The server binds `127.0.0.1` by default and refuses a non-loopback bind
+without a credential. See [Security](security.md).
 
 ## neuralosd.agentic
 

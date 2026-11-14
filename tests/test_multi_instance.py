@@ -406,23 +406,23 @@ class TestServeCli:
         from neuralosd._cmd.serve import run_multi
         run_multi(_serve_ns(d, 8877, host="0.0.0.0"))
         assert seen["auth"] == "env-token-42"
-        err = capsys.readouterr().err
-        assert "token auth" in err  # loud, not silent
+        assert seen["host"] == "0.0.0.0"
 
-    def test_run_multi_warns_loudly_without_token_on_wide_bind(
-            self, tmp_path, monkeypatch, capsys):
-        """No token + non-loopback bind → the SAME loud warning the
-        single-instance path prints. On v2.9.4 multi mode served every
-        instance's data with no auth AND no warning."""
+    def test_run_multi_refuses_wide_bind_without_token(
+            self, tmp_path, monkeypatch):
+        """No token + non-loopback bind fails closed (3.0.2 policy). Wide
+        binding without a credential is not a warning."""
         from neuralosd import multi
         d = _make_cli_instances(tmp_path)
         monkeypatch.delenv("NEURALOSD_API_TOKEN", raising=False)
+        called = []
         monkeypatch.setattr(multi, "serve_multi",
-                            lambda *a, **k: None)
+                            lambda *a, **k: called.append(1))
         from neuralosd._cmd.serve import run_multi
-        run_multi(_serve_ns(d, 8877, host="0.0.0.0"))
-        err = capsys.readouterr().err
-        assert "WARNING" in err and "NO" in err and "--auth-token" in err
+        with pytest.raises(SystemExit) as exc:
+            run_multi(_serve_ns(d, 8877, host="0.0.0.0"))
+        assert "refusing to bind" in str(exc.value)
+        assert not called
 
 
 # ── F7: the multi door enforces the same request contract as serve ─────────

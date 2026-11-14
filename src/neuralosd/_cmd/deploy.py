@@ -28,6 +28,7 @@ Only after R8 does it print "deployed", and the door is recorded in
 import json
 import os
 import re
+import shlex
 import shutil
 import socket
 import sys
@@ -101,6 +102,30 @@ def _boxlite_channel_ok(backend, name) -> bool:
     stderr, unrecoverable by restart). Detected here by exec'ing a staged
     one-liner; a wedged channel fails the deploy loudly instead of pretending.
     """
+
+def _msb_start_command(vm_dir, vm_port):
+    """The shell line that starts the inner service — LOOPBACK only, and
+    every caller-controlled value shell-quoted. `vm_dir` is a deploy name,
+    so it must never be able to end the command or expand a substitution."""
+    safe = shlex.quote(vm_dir)
+    return (f"cd {safe} && nohup neuralosd serve --instance-dir {safe} "
+            f"--host 127.0.0.1 --port {int(vm_port)} "
+            f"> /var/log/neuralosd-serve.log 2>&1 & sleep 2; echo started")
+
+
+def _boxlite_start_script(box_dir, port):
+    """The Python start file for boxlite. No shell: the directory is a list
+    element and a repr literal, so quotes/`$()`/`;` in a name are data."""
+    return (
+        "import subprocess\n"
+        "subprocess.Popen(['neuralosd', 'serve', '--instance-dir', {d!r},\n"
+        "                  '--host', '127.0.0.1', '--port', {p!r}],\n"
+        "                 cwd={d!r},\n"
+        "                 stdout=open('/var/log/neuralosd-serve.log', 'ab'),\n"
+        "                 stderr=subprocess.STDOUT,\n"
+        "                 start_new_session=True)\n"
+        "print('started')\n").format(d=box_dir, p=int(port))
+
 
 def _spawn_detached_relay(backend_name, sandbox, bind, host_port, vm_port):
     """Start the host-side door relay as a DETACHED process.
@@ -298,11 +323,12 @@ def _deploy_msb(a, backend):
                          "probes.py is not in the sandbox")
 
     # R6 — serve, via the console script (-m does not exist in this package).
-    print(f"  starting neuralosd serve on 0.0.0.0:{vm_port} ...")
-    start = (f"cd {vm_dir} && nohup neuralosd serve --instance-dir {vm_dir} "
-             f"--host 0.0.0.0 --port {vm_port} > /var/log/neuralosd-serve.log "
-             f"2>&1 & sleep 2; echo started")
-    backend.exec(a.name, "sh", ["-c", start])
+    # The inner service binds LOOPBACK: the host door forwards into the VM's
+    # localhost, so there is no reason to expose the unauthenticated service
+    # on the VM's external interface. The directory is shell-quoted because
+    # a deploy name is caller-controlled.
+    print(f"  starting neuralosd serve on 127.0.0.1:{vm_port} ...")
+    backend.exec(a.name, "sh", ["-c", _msb_start_command(vm_dir, vm_port)])
 
     # R7 — self-test INSIDE the VM: a real ask through the inner door.
     print("  self-test inside the sandbox ...")
@@ -488,14 +514,11 @@ def _deploy_boxlite(a, backend):
         # R6 — serve, detached, via the console script. The start command is
         # staged as a FILE: boxlite exec args cannot contain spaces, and a
         # multi-part start line is exactly the kind of argument that breaks.
-        print(f"  starting neuralosd serve on 0.0.0.0:{box_port} ...")
-        start_src = (
-            "import os\n"
-            "os.chdir({box_dir!r})\n"
-            "os.system(\"nohup neuralosd serve --instance-dir {box_dir!r} "
-            "--host 0.0.0.0 --port {port!r} > /var/log/neuralosd-serve.log "
-            "2>&1 < /dev/null &\")\n"
-            "print(\"started\")\n").format(box_dir=box_dir, port=box_port)
+        print(f"  starting neuralosd serve on 127.0.0.1:{box_port} ...")
+        # No shell: the directory is a list element, so a name containing
+        # quotes, $() or ; is data, never code. The inner service binds
+        # loopback; the host relay forwards into the VM's localhost.
+        start_src = _boxlite_start_script(box_dir, box_port)
         import tempfile as _tf
         start_tmp = os.path.join(_tf.gettempdir(), "_nx_start.py")
         with open(start_tmp, "w", encoding="utf-8") as fh:
