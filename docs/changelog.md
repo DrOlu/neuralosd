@@ -1,5 +1,30 @@
 # Changelog
 
+## 3.0.1 — production hardening
+
+A hostile-input pass over the agentic surface, aimed at a commercial
+deployment. Found and fixed:
+
+- **Session ids are sanitised** (`safe_name`): a caller-supplied id is
+  reduced to a safe filename and hash-suffixed, so it cannot traverse out of
+  `.agentic/memory` or collide with another id. Session files are now
+  bounded (`max_records`).
+- **HTTP bodies are bounded** at 1 MB (413), with a bounded drain so the
+  client can read the error; `/audit` streams with a safe limit and answers
+  a junk `limit` instead of resetting the connection.
+- **ACL budgets are parsed defensively**; a non-numeric value no longer
+  raises on every request.
+- **Mutating tools require admin** once an `agents` block exists
+  (`build`/`shadow`/`mothball`/`delegate`); an instance with no `agents`
+  block keeps the trusted-operator default.
+- **HITL refuses by name** if the probe disappeared between the token and
+  the confirmation, instead of raising `KeyError`.
+- **Bounds**: trace counters and per-agent budget maps are capped and
+  pruned; the audit query keeps only the newest matches in memory.
+
+Findings H1–H8 are in `docs/audits/findings.md`; the executable contracts
+are in `tests/test_agentic_hardening.py`.
+
 ## 3.0.0 — every state machine explicit
 
 The agentic surface added mutable state the F-series census did not cover.
