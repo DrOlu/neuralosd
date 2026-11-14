@@ -1,5 +1,28 @@
 # Changelog
 
+## 3.0.2 — security review
+
+A security pass over the agentic surface and the deploy path.
+
+- **Identity is bound to a credential.** Per-agent tokens (`acl.json`
+  `agents.<name>.token_sha256`) replace self-asserted `agent_id` over HTTP:
+  a conflicting claim is `403 agent_mismatch`, the role comes from the ACL
+  entry, and an unlisted agent is denied.
+- **Cross-agent access closed.** An agent sees only its own `/audit` rows
+  and `/runs/{id}`; the operator token sees all.
+- **Wide binding fails closed.** `serve()` defaults to `127.0.0.1` and
+  refuses a non-loopback bind without a credential; the multi-instance
+  server refuses too.
+- **Deploy command injection fixed.** The msb start line is shell-quoted and
+  the boxlite start file uses a list-based `Popen`; the inner service binds
+  loopback instead of `0.0.0.0`.
+- **Filename traversal closed** for snapshot labels and schedule names.
+- **Resource bounds:** 64 concurrent HTTP workers and a 30 s socket timeout.
+- **Role escalation closed** for agent tokens.
+
+See `docs/security.md`; findings I1–I9; tests
+`tests/test_security_hardening.py`.
+
 ## 3.0.1 — production hardening
 
 A hostile-input pass over the agentic surface, aimed at a commercial
