@@ -113,9 +113,20 @@ library — you just add the library to the helper.
 YOUR DATA (CSV, DB, API, logs)     THE RUNTIME                THE RESULT
 ──────────────────────           ──────────────            ──────────────
 profile → model → generate  →   @probe + router    →    ask in English,
-                         →   chains + guardrails     get verified
-                         →   serve + monitor         answers, offline
+                         →   chains + guardrails     get answers with
+                         →   serve + monitor         their proof band
 ```
+
+Every answer carries a **verification band**: `execution` (the probe ran and
+the results gate passed), `golden` (the exact question is in the
+human-written bank and its typed value oracle agreed), or `refused`. It is
+a proof of the path, not a promise that the business logic is right — see
+[Security](docs/security.md) and the envelope contract in
+[the reference](docs/reference.md).
+
+Connectors: CSV/TSV, SQLite, Excel, JSON/JSONL, syslog, journald, Windows
+Event Log, REST APIs, browser snapshots, **Plasma EDR** events,
+**mitmproxy HAR** captures, and **rea** evidence bundles.
 
 ## Two sandbox backends
 

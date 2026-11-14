@@ -19,6 +19,7 @@ import uuid
 from contextvars import ContextVar
 from typing import Any, Callable, Dict, List, Optional
 
+from .oracles import check_answer, extract_answer
 from .probe import ProbeMeta
 
 # The ask cache is an OPTIMISATION: exceeding this only costs a
@@ -755,6 +756,44 @@ class Router:
             if self._vocab else frozenset()
         self.menu_version = self._menu_version()
         self._filter_vocab = self._build_filter_vocab()
+        # Verification bands: a golden match (and its typed oracle, when the
+        # item has one) raises the answer above plain execution. Loaded once;
+        # a missing/malformed bank simply leaves every answer at `execution`.
+        self._load_verification_banks(config_dir)
+
+    def _load_verification_banks(self, config_dir):
+        self.golden_index = {}
+        self.oracle_available = set()
+        if not config_dir:
+            return
+        golden_path = os.path.join(config_dir, "golden.json")
+        try:
+            with open(golden_path, encoding="utf-8") as fh:
+                golden = json.load(fh)
+        except (OSError, ValueError):
+            golden = {}
+        for item in (golden.get("items") or []
+                     if isinstance(golden, dict) else []):
+            q = item.get("q") if isinstance(item, dict) else None
+            if not isinstance(q, str):
+                continue
+            try:
+                normalized, _moved = self._normalize(q.strip())
+            except Exception:
+                continue
+            self.golden_index[normalized] = item
+        truth_path = os.path.join(config_dir, "truth.json")
+        try:
+            with open(truth_path, encoding="utf-8") as fh:
+                truth = json.load(fh)
+        except (OSError, ValueError):
+            truth = {}
+        for item in (truth.get("items") or []
+                     if isinstance(truth, dict) else []):
+            if isinstance(item, dict):
+                name = item.get("probe") or item.get("name")
+                if isinstance(name, str):
+                    self.oracle_available.add(name)
 
     def _build_filter_vocab(self):
         """Enum values across the menu that act as FILTERS, not measures."""
@@ -1207,7 +1246,61 @@ class Router:
         out["results"] = _storage_mask(out.get("results"))
         return out
 
+    def _verification(self, env):
+        """The honest proof band for one envelope.
+
+        `execution` means the probe ran and the results gate passed — it does
+        NOT mean the number is the business truth. `golden` means the exact
+        question is in the human-written bank and routed to the expected
+        probe; `golden.oracle` is `passed` only when a typed value oracle
+        agreed. `refused` means no answer was produced.
+        """
+        normalized = env.get("normalized") or ""
+        mode = str(env.get("mode") or "")
+        results = env.get("results")
+        refused = (mode == "refused"
+                   or (results is None and env.get("refusal_reason")))
+        level = ("refused" if refused
+                 else "execution-error" if mode.endswith("-error")
+                 else "execution")
+        out = {"level": level,
+               "executed": bool(env.get("probe")) and not refused,
+               "results_gate": ("passed"
+                                if results not in (None, [], {})
+                                else "refused")}
+        item = self.golden_index.get(normalized) if normalized else None
+        if item and level in ("execution", "golden"):
+            matched = item.get("expect_probe") in (None, env.get("probe"))
+            out["golden"] = {"matched": matched,
+                             "expected_probe": item.get("expect_probe")}
+            if matched:
+                level = "golden"
+            oracle = item.get("oracle")
+            if isinstance(oracle, dict) and oracle.get("value") is not None:
+                # Same rule as the golden run: extract_answer may return a
+                # list of candidate leaves (no explicit path); the answer
+                # passes when ANY candidate satisfies the typed oracle.
+                actual = extract_answer(results, oracle.get("path"))
+                candidates = (actual if isinstance(actual, list) else [actual])
+                ok = any(check_answer(oracle.get("shape") or "count",
+                                      oracle.get("value"), candidate)
+                         for candidate in candidates)
+                out["golden"]["oracle"] = "passed" if ok else "failed"
+                if not ok:
+                    # The bank expected a different value. Do not label this
+                    # answer "golden" — it is execution-verified at best.
+                    level = "execution"
+        if env.get("probe") and env["probe"] in self.oracle_available:
+            out["oracle_available"] = True
+        out["level"] = level
+        return out
+
     def _audit(self, rec):
+        # The verification band travels WITH the envelope the caller sees,
+        # not only in the ledger row. Recomputed on every audit (a cached
+        # payload may predate a golden-bank edit); it is deterministic over
+        # the envelope and the banks, so it cannot leak user/session state.
+        rec["verification"] = self._verification(rec)
         # THE choke point: every row passes through here (refusals, answers,
         # cache hits), so the provenance stamp is applied exactly once. The
         # per-request context wins; the constructor default covers everyone

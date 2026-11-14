@@ -31,6 +31,10 @@ def profile_any(src):
         return _profile_syslog(src)
     if src.startswith("plasma:"):
         return _profile_plasma(src)
+    if src.startswith(("mitm:", "har:")):
+        return _profile_har(src)
+    if src.startswith("rea:"):
+        return _profile_rea(src)
     if src.startswith("browser:"):
         return _profile_browser(src)
     if src.startswith("api:"):
@@ -547,6 +551,83 @@ def _profile_plasma(src):
             "truncated": parsed["truncated"]}
 
 
+def _column(name, kind, rows, **extra):
+    vals = [str(r.get(name)) for r in rows[:500]
+            if isinstance(r, dict) and r.get(name) not in (None, "")]
+    return {"name": name, "type": kind, "card": len(set(vals)), **extra}
+
+
+def _profile_har(src):
+    """Profile a mitmproxy HAR capture: request/response rows."""
+    from ..mitm import har_rows
+    path = src.split(":", 1)[1].strip()
+    cap = 5000
+    parsed = har_rows(path, cap=cap)
+    rows = parsed["rows"]
+    cols = [_column("ts", "date", rows),
+            _column("method", "str", rows),
+            _column("host", "str", rows),
+            _column("path", "str", rows),
+            _column("status", "int", rows),
+            _column("mime", "str", rows),
+            _column("size", "int", rows),
+            _column("time_ms", "float", rows)]
+    dims = [c["name"] for c in cols
+            if c["name"] in ("host", "status", "method", "mime")
+            and c.get("card")]
+    measures = [c["name"] for c in cols
+                if c["name"] in ("time_ms", "size")]
+    if dims:
+        cols[0]["dimensions"] = dims
+    if measures:
+        cols[0]["measures"] = measures
+    return {"kind": "har", "path": path, "columns": cols,
+            "rows": len(rows), "cap": cap,
+            "parse_errors": parsed["parse_errors"],
+            "truncated": parsed["truncated"]}
+
+
+def _profile_rea(src):
+    """Profile one section of a rea evidence bundle."""
+    from ..rea import rea_rows
+    ref = src.split(":", 1)[1].strip()
+    path, _, section = ref.partition("#")
+    cap = 5000
+    parsed = rea_rows(path, section=section or None, cap=cap)
+    rows = parsed["rows"]
+    names, seen = [], set()
+    for r in rows[:500]:
+        for k in r:
+            if k not in seen:
+                seen.add(k)
+                names.append(k)
+    cols = []
+    for k in names:
+        sample = next((r.get(k) for r in rows
+                       if r.get(k) not in (None, "")), None)
+        if isinstance(sample, bool):
+            kind = "bool"
+        elif isinstance(sample, int):
+            kind = "int"
+        elif isinstance(sample, float):
+            kind = "float"
+        elif k in ("ts", "timestamp", "created_at"):
+            kind = "date"
+        else:
+            kind = "str"
+        cols.append(_column(k, kind, rows))
+    dims = [c["name"] for c in cols
+            if c["name"] in ("severity", "kind", "type", "section",
+                             "confidence") and c.get("card")]
+    if cols and dims:
+        cols[0]["dimensions"] = dims
+    return {"kind": "rea", "path": path,
+            "section": parsed["section"], "sections": parsed["sections"],
+            "columns": cols, "rows": len(rows), "cap": cap,
+            "parse_errors": parsed["parse_errors"],
+            "truncated": parsed["truncated"]}
+
+
 def _profile_journal(src):
     from ..logsources import journal_rows, log_cap_default
     unit = src.split(":", 1)[1].strip() or None
@@ -670,6 +751,10 @@ def _xlsx_rows():
 def rows():
     if KIND == "plasma":
         return _plasma_rows()
+    if KIND == "har":
+        return _har_rows()
+    if KIND == "rea":
+        return _rea_rows()
     if KIND == "browser":
         return _browser_snapshot_rows()
     if KIND == "api":
@@ -860,6 +945,10 @@ def breakdown(dimension, measure):
         bridge += _api_bridge_extra(info)
     if info.get("kind") == "browser":
         bridge += _browser_bridge_extra(info)
+    if info.get("kind") == "har":
+        bridge += _har_bridge_extra(info)
+    if info.get("kind") == "rea":
+        bridge += _rea_bridge_extra(info)
     if extras:
         bridge += _multi_source_extra(extras, join_on)
 
@@ -877,6 +966,50 @@ def _plasma_bridge_extra(info):
         "def _plasma_rows():\n"
         "    from neuralosd.plasma import plasma_rows\n"
         "    return plasma_rows(" + repr(path) + ", cap=PLASMA_CAP)\n")
+
+
+def _har_bridge_extra(info):
+    """HAR bridge: reads the mitmproxy capture at ask time via mitm.py."""
+    cap = info.get("cap") or 5000
+    return (
+        "\n\nHAR_CAP = " + repr(int(cap)) + "\n"
+        "\n\n"
+        "def _har_rows():\n"
+        "    from neuralosd.mitm import har_rows\n"
+        "    return har_rows(SOURCE, cap=HAR_CAP)['rows']\n"
+        "\n\n"
+        "def har_by(field):\n"
+        "    counts = {}\n"
+        "    for r in _har_rows():\n"
+        "        k = str(r.get(field) if r.get(field) is not None "
+        "else 'unknown')\n"
+        "        counts[k] = counts.get(k, 0) + 1\n"
+        "    return {('by_' + field): counts}\n"
+        "\n\n"
+        "def har_errors():\n"
+        "    rows = [r for r in _har_rows()\n"
+        "            if (r.get('status') or 0) >= 400 or r.get('error')]\n"
+        "    return {'count': len(rows), 'requests': rows[:20]}\n"
+        "\n\n"
+        "def har_slow(n=10):\n"
+        "    rows = sorted(_har_rows(),\n"
+        "                  key=lambda r: r.get('time_ms') or 0,\n"
+        "                  reverse=True)\n"
+        "    return {'slowest': rows[:n]}\n")
+
+
+def _rea_bridge_extra(info):
+    """rea bridge: reads one evidence-bundle section at ask time."""
+    cap = info.get("cap") or 5000
+    section = info.get("section") or ""
+    return (
+        "\n\nREA_CAP = " + repr(int(cap)) + "\n"
+        "REA_SECTION = " + repr(section) + "\n"
+        "\n\n"
+        "def _rea_rows():\n"
+        "    from neuralosd.rea import rea_rows\n"
+        "    return rea_rows(SOURCE, section=REA_SECTION or None,\n"
+        "                    cap=REA_CAP)['rows']\n")
 
 
 def _api_bridge_extra(info):
@@ -1386,15 +1519,21 @@ def _write_probes(out, name, info, extras=None, join_on=None):
             "                 \"critical\", \"high\"])\n"
             "def critical_alerts():\n"
             "    rows = [r for r in bridge._plasma_rows()\n"
-            "            if r.get(\"severity\") in (\"critical\", \"high\")]\n"
+            "            if str(r.get(\"severity\", \"\")).lower() in "
+            "(\"critical\", \"high\")]\n"
             "    return {\"count\": len(rows), \"rows\": rows[:25],\n"
             "            \"_tool\": \"critical_alerts\"}\n",
             "@probe(description=\"Failed logon events (4625)\",\n"
             "       triggers=[\"failed logons\", \"failed logins\",\n"
             "                 \"logon failures\", \"4625\", \"bad logons\"])\n"
             "def failed_logons():\n"
-            "    rows = [r for r in bridge._plasma_rows()\n"
-            "            if r.get(\"event_type\") == \"logon_fail\"]\n"
+            "    rows = []\n"
+            "    for r in bridge._plasma_rows():\n"
+            "        text = (str(r.get(\"event_type\", \"\")) + \" \" +\n"
+            "                str(r.get(\"message\", \"\"))).lower()\n"
+            "        if ((\"logon\" in text or \"login\" in text) and\n"
+            "                (\"fail\" in text or \"4625\" in text)):\n"
+            "            rows.append(r)\n"
             "    by_account = {}\n"
             "    for r in rows:\n"
             "        acct = r.get(\"account\", \"?\")\n"
@@ -1436,11 +1575,97 @@ def _write_probes(out, name, info, extras=None, join_on=None):
             "key=lambda x: -x[1])]\n"
             "    return {\"rows\": rows, \"count\": len(rows),\n"
             "            \"_tool\": \"events_by_host\"}\n",
+            "@probe(description=\"Event counts grouped by severity\",\n"
+            "       triggers=[\"events by severity\", \"severity breakdown\",\n"
+            "                 \"alerts by severity\", \"count by severity\"])\n"
+            "def events_by_severity():\n"
+            "    counts = {}\n"
+            "    for r in bridge._plasma_rows():\n"
+            "        s = str(r.get(\"severity\") or \"unknown\").lower()\n"
+            "        counts[s] = counts.get(s, 0) + 1\n"
+            "    return {\"by_severity\": counts,\n"
+            "            \"_tool\": \"events_by_severity\"}\n",
+            "@probe(description=\"Event counts grouped by account\",\n"
+            "       triggers=[\"events by account\", \"top accounts\",\n"
+            "                 \"events per user\", \"events by user\"])\n"
+            "def top_accounts():\n"
+            "    counts = {}\n"
+            "    for r in bridge._plasma_rows():\n"
+            "        a = r.get(\"account\", \"?\")\n"
+            "        counts[a] = counts.get(a, 0) + 1\n"
+            "    rows = [{\"account\": k, \"count\": v}\n"
+            "            for k, v in sorted(counts.items(), "
+            "key=lambda x: -x[1])]\n"
+            "    return {\"rows\": rows, \"count\": len(rows),\n"
+            "            \"_tool\": \"top_accounts\"}\n",
+            "@probe(description=\"Network connection and DNS events\",\n"
+            "       triggers=[\"network events\", \"network connections\",\n"
+            "                 \"connections\", \"dns events\"])\n"
+            "def network_events():\n"
+            "    rows = []\n"
+            "    for r in bridge._plasma_rows():\n"
+            "        et = str(r.get(\"event_type\", \"\")).lower()\n"
+            "        if any(k in et for k in\n"
+            "               (\"net\", \"connect\", \"dns\", \"socket\")):\n"
+            "            rows.append(r)\n"
+            "    return {\"count\": len(rows), \"rows\": rows[:25],\n"
+            "            \"_tool\": \"network_events\"}\n",
         ]
         lines += sec
         probe_names += ["critical_alerts", "failed_logons",
                         "new_scheduled_tasks", "events_by_type",
-                        "events_by_host"]
+                        "events_by_host", "events_by_severity",
+                        "top_accounts", "network_events"]
+
+    # mitmproxy HAR capture: request-level questions the generic column
+    # probes cannot express ("failed requests" is a predicate, not a value).
+    if info.get("kind") == "har":
+        lines += [
+            "@probe(description=\"Count HTTP requests in the capture\",\n"
+            "       triggers=[\"how many requests\", \"request count\",\n"
+            "                 \"number of requests\", \"request total\"])\n"
+            "def request_count():\n"
+            "    return bridge.count()\n",
+            "@probe(description=\"Requests by HTTP status\",\n"
+            "       triggers=[\"requests by status\", \"status breakdown\",\n"
+            "                 \"status codes\", \"http status\"])\n"
+            "def requests_by_status():\n"
+            "    return bridge.har_by(\"status\")\n",
+            "@probe(description=\"Failed requests (4xx/5xx or transport error)\",\n"
+            "       triggers=[\"failed requests\", \"request errors\",\n"
+            "                 \"4xx responses\", \"5xx responses\"])\n"
+            "def failed_requests():\n"
+            "    return bridge.har_errors()\n",
+            "@probe(description=\"Slowest requests in the capture\",\n"
+            "       triggers=[\"slowest requests\", \"slow requests\",\n"
+            "                 \"highest latency\"])\n"
+            "def slowest_requests():\n"
+            "    return bridge.har_slow(10)\n",
+            "@probe(description=\"Requests by host\",\n"
+            "       triggers=[\"requests by host\", \"top hosts\",\n"
+            "                 \"which hosts\"])\n"
+            "def requests_by_host():\n"
+            "    return bridge.har_by(\"host\")\n",
+        ]
+        probe_names += ["request_count", "requests_by_status",
+                        "failed_requests", "slowest_requests",
+                        "requests_by_host"]
+
+    # rea evidence bundle: the chosen section's count and listing.
+    if info.get("kind") == "rea":
+        lines += [
+            "@probe(description=\"Count entries in the selected evidence section\",\n"
+            "       triggers=[\"how many findings\", \"how many entries\",\n"
+            "                 \"finding count\", \"entry count\"])\n"
+            "def entry_count():\n"
+            "    return bridge.count()\n",
+            "@probe(description=\"List the entries in the selected section\",\n"
+            "       triggers=[\"list findings\", \"show findings\",\n"
+            "                 \"list entries\", \"show entries\"])\n"
+            "def list_entries():\n"
+            "    return bridge.sample(20)\n",
+        ]
+        probe_names += ["entry_count", "list_entries"]
 
     lines.append("PROBES = [" + ", ".join(probe_names) + "]")
     lines.append("")

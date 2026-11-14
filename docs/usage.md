@@ -336,7 +336,9 @@ profiler step) and scaffolds a working instance. Supported sources:
 | `syslog:<path>` (v2.2.0) | **syslog text file** (RFC3164/RFC5424, stdlib only); normalized to `{ts, host, app, level, message}` events; unparsable lines are counted as `parse_errors` (in the bridge's `LOG_INTEGRITY`), never silently dropped |
 | `journal:[UNIT]` (v2.2.0) | **journald** via `journalctl -o json`, newest-first, bounded by `NEURALOSD_LOG_CAP` (default 10000); systemd units become a filter arg |
 | `wevtutil:<Channel>` (v2.2.0) | **Windows Event Log** channel via `wevtutil qe <Channel> /f:XML` — event_id, provider, level, computer, time (read it on the machine that owns the log) |
-| `plasma:<path>` (v2.9.0) | **Plasma EDR** events.jsonl (WHIDS/Sysmon, krabsetw ETW tap, Event Log identity); normalized to security events with `event_type`, `severity`, `technique`; security probes scaffolded |
+| `plasma:<path>` (v2.9.0) | **Plasma EDR** events.jsonl (WHIDS/Sysmon, krabsetw ETW tap, Event Log identity); normalized to security events with `event_type`, `severity`, `technique`; security probes scaffolded (critical alerts, failed logons, scheduled tasks, severity/account/host/type breakdowns, network events) |
+| `mitm:<path>` / `har:<path>` (v3.1.0) | **mitmproxy HAR** capture (Export → HAR, or `mitmdump --save-har`); request rows with method/host/path/status/mime/size/time; probes for request count, status breakdown, failed requests, slowest requests and hosts |
+| `rea:<path>[#section]` (v3.1.0) | **rea evidence bundle** (`DrOlu`/`morluto` reverse-engineering export); one section (`findings`, `functions`, `imports`, `strings`, `artifacts`, or a plain list) becomes rows; count/list/distinct probes over it |
 | anything else | a contract template the user fills in |
 
 ```bash

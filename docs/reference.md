@@ -250,8 +250,23 @@ Execute the full pipeline for one question.
     "cached": bool,          # True if served from cache
     "results": Any,          # probe output (list, dict, or value)
     "error": str,            # only present on failure
+    "verification": {        # the proof band, not a correctness guarantee
+        "level": str,        # "golden" | "execution" | "execution-error" | "refused"
+        "executed": bool,
+        "results_gate": str, # "passed" | "refused"
+        "golden": {"matched": bool, "expected_probe": str, "oracle": str},
+        "oracle_available": bool,   # a truth.json entry exists for the probe
+    },
 }
 ```
+
+`verification.level` is deliberately conservative: `execution` means the
+probe ran and the results gate passed; `golden` means the exact question is
+in the human-written `golden.json` bank and routed to the expected probe;
+`golden.oracle` is `passed` only when the item's typed value oracle agreed
+(a mismatch downgrades the answer to `execution` and reports `failed`).
+`oracle_available` means an independent `truth.json` check exists for the
+probe, not that it ran for this ask.
 
 **Raises:** `NoResults` if nothing was produced.
 
@@ -926,6 +941,35 @@ WHIDS/krabsetw/identity sensors on Windows nodes.
 | `parse_plasma_event(line)` | one PlasmaEvent JSONL row → validated event dict or None |
 | `parse_plasma_events(path, cap)` | read the store; returns {rows, parse_errors, truncated} |
 | `plasma_rows(path, cap)` | convenience: just the rows (for probe functions) |
+
+## neuralosd.mitm
+
+mitmproxy HAR connector — read an HTTP capture offline (`File → Export →
+HAR`, or `mitmdump --save-har`). Rows are flattened requests; a malformed
+entry is counted, never fatal.
+
+| | |
+|---|---|
+| `har_rows(path, cap=5000)` | returns `{rows, parse_errors, truncated}`; each row has `ts`, `method`, `url`, `host`, `path`, `status`, `mime`, `size`, `time_ms`, `error` |
+
+Scaffold one with `neuralosd init --source mitm:capture.har --name api`;
+the generated instance includes `request_count`, `requests_by_status`,
+`failed_requests`, `slowest_requests` and `requests_by_host`.
+
+## neuralosd.rea
+
+rea evidence-bundle connector — read one section of a reverse-engineering
+export offline (`findings`, `functions`, `imports`, `strings`, `artifacts`,
+or a plain list). Unknown shapes read as `items`.
+
+| | |
+|---|---|
+| `rea_rows(path, section=None, cap=5000)` | returns `{section, rows, sections, parse_errors, truncated}` |
+
+Scaffold one with `neuralosd init --source rea:bundle.json#findings`; the
+section is part of the reference and the first known non-empty section is
+used when omitted. The generated instance includes `entry_count`,
+`list_entries` and the generic distinct/aggregate probes over the section.
 
 ## neuralosd.actuate
 
