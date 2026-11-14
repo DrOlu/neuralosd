@@ -1236,7 +1236,18 @@ class Router:
         action must not be a second, weaker execution channel.
         """
         t0 = time.time()
-        fn = self.by_name[meta.name]
+        fn = self.by_name.get(meta.name)
+        if fn is None:
+            # The menu changed while the token was pending (a build/reload).
+            # Refuse by name instead of raising KeyError into the surface.
+            env = {"ask_id": ask_id, "ts": time.time(), "question": question,
+                   "normalized": normalized, "probe": None,
+                   "menu_version": self.menu_version, "mode": "refused",
+                   "error": (f"probe {meta.name!r} is no longer in the menu; "
+                             f"the confirmation cannot be applied"),
+                   "results": None, "refusal_reason": "no_probe_matches"}
+            self._audit(env)
+            return env
         try:
             r = fn(**kwargs)
             if isinstance(r, dict):

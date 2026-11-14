@@ -162,6 +162,24 @@ def _int(value, default, lo, hi):
     return max(lo, min(hi, n))
 
 
+def _num(value, default, lo, hi):
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, n))
+
+
+def _admin(inst, agent_id, action):
+    """Mutating tools are opt-in for a configured agent deployment."""
+    policy = _policy(inst, agent_id)
+    if not policy.get("admin"):
+        raise PolicyDenied(
+            f"agent {agent_id!r} may not {action} "
+            f"(set \"admin\": true in acl.json)")
+    return policy
+
+
 def _tools():
     """The fixed agent surface. Probes are reached through ask/search/describe
     rather than dumped into the context: a 200-probe menu is a window killer."""
@@ -689,6 +707,7 @@ def _call(inst, name, arguments):
         question = arguments.get("question")
         if not peer_id or not isinstance(question, str) or not question.strip():
             raise ValueError("delegate: 'peer' and 'question' are required")
+        _admin(inst, _text(arguments.get("agent_id")), "delegate")
         from .synapse import delegate_to_peer, discover_peers
         transport = _mesh_transport(_text(arguments.get("gateway")))
         peers = discover_peers(transport, question)
@@ -716,7 +735,7 @@ def _call(inst, name, arguments):
         description = arguments.get("description")
         if not isinstance(description, str) or not description.strip():
             raise ValueError("build: 'description' is required")
-        _policy(inst, _text(arguments.get("agent_id")))
+        _admin(inst, _text(arguments.get("agent_id")), "build")
         timeout = _int(arguments.get("timeout"), 900, 30, 3600)
         report = _build_capability(
             description.strip()[:4000], inst.state_dir,
@@ -735,15 +754,18 @@ def _call(inst, name, arguments):
         metric = _text(arguments.get("name"))
         if not metric:
             raise ValueError("shadow: 'name' is required for evaluate/promote")
+        _admin(inst, _text(arguments.get("agent_id")), "shadow")
         try:
             if op == "evaluate":
                 return loop.shadow_evaluate(inst.state_dir, metric), False, None
             if op == "promote":
                 promoted = loop.shadow_promote(
                     inst.state_dir, metric,
-                    min_agreement=float(arguments.get("min_agreement", 0.9)),
+                    min_agreement=_num(arguments.get("min_agreement"),
+                                       0.9, 0.0, 1.0),
                     min_runs=_int(arguments.get("min_runs"), 3, 1, 1000),
-                    max_age_days=float(arguments.get("max_age_days", 14)))
+                    max_age_days=_num(arguments.get("max_age_days"),
+                                      14.0, 0.0, 36500.0))
                 return {"promoted": promoted, "name": metric}, False, None
         except SystemExit as exc:
             raise ValueError(str(exc))
@@ -751,7 +773,8 @@ def _call(inst, name, arguments):
 
     if name == "mothball":
         from . import loop
-        age_days = float(arguments.get("age_days", 180) or 180)
+        _admin(inst, _text(arguments.get("agent_id")), "mothball")
+        age_days = _num(arguments.get("age_days"), 180.0, 0.0, 36500.0)
         apply = bool(arguments.get("apply", False))
         try:
             return loop.mothball(inst.state_dir, age_days=age_days,

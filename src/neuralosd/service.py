@@ -35,6 +35,7 @@ authenticated too.
 """
 import hmac
 import json
+import collections
 import os
 import socketserver
 import time
@@ -178,8 +179,8 @@ def serve(instance, port: int = 8877, host: str = "0.0.0.0",
         def _identity(self, payload=None):
             payload = payload if isinstance(payload, dict) else {}
 
-            def clean(value):
-                return (value.strip() if isinstance(value, str)
+            def clean(value, limit=200):
+                return (value.strip()[:limit] if isinstance(value, str)
                         and value.strip() else None)
 
             return (clean(self.headers.get("X-Agent-Id")
@@ -231,12 +232,18 @@ def serve(instance, port: int = 8877, host: str = "0.0.0.0",
             want = {k: (v[0] if v else None)
                     for k, v in qs.items()
                     if k in ("run_id", "agent_id", "session_id", "probe")}
-            limit = int((qs.get("limit") or ["200"])[0])
+            try:
+                limit = int((qs.get("limit") or ["200"])[0])
+            except (TypeError, ValueError):
+                limit = 200
+            limit = max(1, min(limit, 1000))
             # A bare Router may write somewhere other than the default name
             # (the tests do); read the ledger it actually uses.
             path = (getattr(_router_of(inst), "audit_file", None)
                     or os.path.join(instance_dir, "ask_audit.jsonl"))
-            rows = []
+            # Stream the ledger, keeping only the newest `limit` matches: a
+            # multi-GB audit must not be loaded into memory to answer one query.
+            rows = collections.deque(maxlen=limit)
             try:
                 with open(path, encoding="utf-8") as fh:
                     for line in fh:
@@ -247,11 +254,12 @@ def serve(instance, port: int = 8877, host: str = "0.0.0.0",
                             row = json.loads(line)
                         except ValueError:
                             continue
-                        if all(row.get(k) == v for k, v in want.items()):
+                        if isinstance(row, dict) and all(
+                                row.get(k) == v for k, v in want.items()):
                             rows.append(row)
             except OSError:
                 return []
-            return rows[-max(1, min(limit, 1000)):]
+            return list(rows)
 
         def do_POST(self):
             raw_path = self.path.split("?", 1)[0]
@@ -278,6 +286,27 @@ def serve(instance, port: int = 8877, host: str = "0.0.0.0",
                 return
             try:
                 n = int(self.headers.get("Content-Length") or 0)
+            except (TypeError, ValueError):
+                self._send(400, {"error": "bad request: invalid Content-Length"})
+                return
+            if n < 0:
+                self._send(400, {"error": "bad request: invalid Content-Length"})
+                return
+            if n > 1_000_000:
+                # `read(-1)` would read the whole body; bound it by the
+                # declared length so one request cannot exhaust memory.
+                # Drain a bounded prefix first so the client can read this
+                # 413 instead of seeing a connection reset mid-upload.
+                remaining = min(n, 8_000_000)
+                while remaining > 0:
+                    chunk = self.rfile.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                self.close_connection = True
+                self._send(413, {"error": "payload too large (max 1 MB)"})
+                return
+            try:
                 raw = self.rfile.read(n) or b"{}"
                 payload = json.loads(raw)
             except (ValueError, TypeError) as exc:

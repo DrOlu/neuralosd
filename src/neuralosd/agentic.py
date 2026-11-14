@@ -23,7 +23,7 @@ import threading
 import time
 import uuid
 
-from .memory import MemoryStore, lexical_embed
+from .memory import MemoryStore, lexical_embed, safe_name
 
 
 # ── refusals ──────────────────────────────────────────────────────────────
@@ -117,29 +117,40 @@ def resolve_agent(instance_dir, agent_id):
     an unlisted agent is denied (fail closed), because an ACL that silently
     admits unknown agents is not an ACL.
 
-    Returns ``{"allowed", "role", "pii", "budget"}`` where ``budget`` is
-    ``{"calls": int, "window": seconds}`` or ``{}`` for unlimited.
+    Returns ``{"allowed", "role", "pii", "admin", "budget"}``.
+    ``admin`` gates the mutating tools (build/shadow/mothball): an
+    unconfigured instance keeps today's trusted-operator behaviour, but once
+    an ``agents`` block exists an agent must opt in with ``"admin": true``.
     """
     acl = load_acl(instance_dir)
     agents = acl.get("agents")
-    default = {"allowed": True, "role": None, "pii": True,
+    default = {"allowed": True, "role": None, "pii": True, "admin": True,
                "budget": {"calls": 0, "window": 3600}}
     if not isinstance(agents, dict):
         return default
-    if not agent_id:
-        return {**default, "allowed": False}
+    if not isinstance(agent_id, str) or not agent_id:
+        return {**default, "allowed": False, "admin": False}
     entry = agents.get(agent_id)
     if not isinstance(entry, dict):
-        return {**default, "allowed": False}
+        return {**default, "allowed": False, "admin": False}
     budget = entry.get("budget")
     if not isinstance(budget, dict):
         budget = {}
+
+    def _nonneg(value, fallback=0):
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return fallback
+
+    calls = _nonneg(budget.get("calls"), 0)
+    window = _nonneg(budget.get("window"), 3600) or 3600
     return {
         "allowed": True,
         "role": entry.get("role"),
         "pii": bool(entry.get("pii", True)),
-        "budget": {"calls": int(budget.get("calls", 0) or 0),
-                   "window": int(budget.get("window", 3600) or 3600)},
+        "admin": bool(entry.get("admin", False)),
+        "budget": {"calls": calls, "window": window},
     }
 
 
@@ -172,11 +183,26 @@ class IdempotencyStore:
 # ── budgets ───────────────────────────────────────────────────────────────
 
 class BudgetStore:
-    """Sliding-window call budgets, per agent, in memory."""
+    """Sliding-window call budgets, per agent, in memory.
 
-    def __init__(self):
+    Bounded: an agent id is caller-supplied, so the map is pruned of idle
+    agents and capped, or a hostile caller could grow it without bound.
+    """
+
+    def __init__(self, max_agents=10000):
         self._hits = collections.defaultdict(collections.deque)
+        self._max_agents = max_agents
         self._lock = threading.Lock()
+
+    def _prune_locked(self, now):
+        for agent in [a for a, q in self._hits.items()
+                      if not q or now - q[-1] > 86400]:
+            del self._hits[agent]
+        while len(self._hits) > self._max_agents:
+            oldest = min(self._hits,
+                         key=lambda a: self._hits[a][-1]
+                         if self._hits[a] else 0)
+            del self._hits[oldest]
 
     def check(self, agent_id, calls, window):
         """Return None when allowed, else seconds until the window frees."""
@@ -189,8 +215,13 @@ class BudgetStore:
                 hits.popleft()
             if len(hits) < calls:
                 hits.append(now)
-                return None
-            return max(1, int(window - (now - hits[0])))
+                result = None
+            else:
+                result = max(1, int(window - (now - hits[0])))
+            # Cap AFTER the append: the current agent now has a hit, so the
+            # eviction cannot remove the record this call just made.
+            self._prune_locked(now)
+            return result
 
 
 # ── sessions ──────────────────────────────────────────────────────────────
@@ -211,25 +242,12 @@ class SessionStore:
         return self._memory.recall(session_id, query, k=k)
 
     def last(self, session_id):
-        path = os.path.join(self._memory.dir, f"{session_id}.jsonl")
-        try:
-            last = None
-            with open(path, encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if line:
-                        last = line
-            return json.loads(last) if last else None
-        except (OSError, ValueError):
-            return None
+        path = self._memory.path(session_id)
+        rows = self._memory._read_rows(path)
+        return rows[-1] if rows else None
 
     def turns(self, session_id):
-        path = os.path.join(self._memory.dir, f"{session_id}.jsonl")
-        try:
-            with open(path, encoding="utf-8") as fh:
-                return sum(1 for line in fh if line.strip())
-        except OSError:
-            return 0
+        return self._memory._count(self._memory.path(session_id))
 
 
 # ── tracing ───────────────────────────────────────────────────────────────
@@ -269,6 +287,8 @@ class TraceStore:
         path = self._path(run_id)
         with self._lock:
             try:
+                if len(self._counts) > 5000:
+                    self._counts.clear()   # rebuilt lazily from the files
                 count = self._counts.get(path)
                 if count is None:
                     count = len(self._rows(path))

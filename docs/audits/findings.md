@@ -49,6 +49,31 @@ Tests: `tests/test_agentic_state_machines.py` (G1–G3, G6),
 
 ---
 
+## H-series — 3.0.1 production hardening
+
+The commercial-readiness pass attacked the surface with hostile inputs.
+Each finding is reproduced in `tests/test_agentic_hardening.py`.
+
+| id | sev | area | one line |
+|---|---|---|---|
+| H1 | P0 | sessions | a caller-supplied `session_id` became a filename verbatim — `../../etc/passwd` escaped `.agentic/memory`, and a deeper id could escape the instance directory |
+| H2 | P1 | HTTP | no body limit: one request could make the server allocate unbounded RAM (`read(n)` with an enormous `Content-Length`) |
+| H3 | P2 | HTTP | `/audit?limit=abc` raised inside the handler and reset the connection instead of answering |
+| H4 | P2 | policy | a non-numeric ACL budget (`calls: "many"`) raised `ValueError` on every request |
+| H5 | P1 | MCP | any allowed agent could call the mutating tools (`build`/`shadow`/`mothball`/`delegate`) |
+| H6 | P2 | HITL | a probe removed between the pending token and the confirmation raised `KeyError` into the surface |
+| H7 | P3 | memory | `MemoryStore` had no bound; a long-lived session grew its JSONL forever |
+| H8 | P3 | maps | `TraceStore._counts`, `BudgetStore._hits` and `MemoryStore._counts` grew per caller-supplied id |
+
+Fixes: session ids are sanitised and hash-suffixed (`safe_name`); HTTP
+bodies are capped at 1 MB with a bounded drain before the 413; the audit
+query streams with a safe limit; ACL numbers are parsed defensively;
+mutating tools require `"admin": true` once an `agents` block exists;
+`_execute_confirmed` refuses by name when the probe is gone; memory rows and
+the id maps are bounded and pruned.
+
+---
+
 ## F1 — the one-shot guard was order-insensitive (P1)
 
 **Reproduction** (library): dry-run `p`; apply `p`; undo `p`; apply `p`;

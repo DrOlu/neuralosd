@@ -67,6 +67,7 @@ class ConfirmStore:
     def confirm(self, token: str) -> Dict:
         now = time.time()
         with self._lock:
+            self._prune(now)
             entry = self._pending.get(token)
             if entry is None:
                 used = self._used.get(token)
