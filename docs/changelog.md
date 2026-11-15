@@ -1,5 +1,24 @@
 # Changelog
 
+## 3.1.1 — bug check
+
+- **Verification:** only a positive golden item whose `expect_probe` names
+  the answering probe can raise an answer to `golden`. Traps
+  (`expect_refusal`) and items with no expected probe no longer qualify —
+  the "verified" overclaim, fixed at the source. A probe error now reports
+  `results_gate: error`.
+- **Async runs:** cancelling before the worker acquires the lock no longer
+  makes the worker attempt the illegal `cancelled → cancelled` transition.
+- **mitmproxy HAR:** `user:pass@` userinfo is redacted from stored URLs.
+- **rea:** an explicitly requested missing section is an init error instead
+  of silently reading another section; provenance uses `_section` and no
+  longer overwrites a record's own `section` field.
+- **Scheduler:** names loaded from `schedules.json` are re-validated, so a
+  tampered entry cannot write outside `scheduled/`.
+
+Tests: `tests/test_verification_levels.py`, `tests/test_agentic_state_machines.py`,
+`tests/test_integrations.py`, `tests/test_scheduler_state.py`; findings K1–K5.
+
 ## 3.1.0 — proof bands and three connectors
 
 **Every answer now says which proof it carries.** The envelope gains
