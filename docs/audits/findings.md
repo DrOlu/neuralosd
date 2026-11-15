@@ -98,6 +98,26 @@ Tests: `tests/test_security_hardening.py`.
 
 ---
 
+## K-series — 3.1.1 bug check
+
+| id | sev | area | one line |
+|---|---|---|---|
+| K1 | P2 | verification | a trap (`expect_refusal`) or an item with no `expect_probe` was labelled **golden** on a positive answer — the "verified" overclaim again |
+| K2 | P1 | async runs | cancelling a run before its worker got the lock made the worker attempt `cancelled → cancelled`, raising `IllegalRunTransition` in the thread |
+| K3 | P2 | HAR | `user:pass@` in a captured URL was persisted into the instance's data layer |
+| K4 | P2 | rea | an explicitly requested missing section silently read a different one; a record's own `section` field was overwritten by the provenance |
+| K5 | P2 | scheduler | a hand-edited `schedules.json` name (`../`) was trusted and could write outside `scheduled/` |
+
+Fixes: golden requires a **string** `expect_probe` that matches the answering
+probe (traps and empty items never qualify); the run worker exits when it
+finds a terminal state; HAR URLs are redacted; a missing rea section is an
+init error and provenance uses `_section`; schedule names are re-validated
+on load. Tests: `tests/test_verification_levels.py`,
+`tests/test_agentic_state_machines.py`, `tests/test_integrations.py`,
+`tests/test_scheduler_state.py`.
+
+---
+
 ## F1 — the one-shot guard was order-insensitive (P1)
 
 **Reproduction** (library): dry-run `p`; apply `p`; undo `p`; apply `p`;

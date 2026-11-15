@@ -421,6 +421,12 @@ class RunStore:
 
         def _work():
             with self._lock:
+                # Cancelled before the worker got the lock: the transition
+                # already happened in cancel(). Do not try cancelled →
+                # cancelled (that is an illegal edge and raised in the thread).
+                if run["status"] == "cancelled":
+                    run["finished"] = time.time()
+                    return
                 if run["cancel"]:
                     self._transition(run, "cancelled")
                     run["finished"] = time.time()

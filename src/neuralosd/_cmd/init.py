@@ -594,6 +594,11 @@ def _profile_rea(src):
     path, _, section = ref.partition("#")
     cap = 5000
     parsed = rea_rows(path, section=section or None, cap=cap)
+    if parsed.get("missing_section"):
+        available = ", ".join(sorted(parsed["sections"])) or "(none)"
+        raise SystemExit(
+            f"error: rea bundle has no section {section!r}; "
+            f"available: {available}")
     rows = parsed["rows"]
     names, seen = [], set()
     for r in rows[:500]:
@@ -617,8 +622,8 @@ def _profile_rea(src):
             kind = "str"
         cols.append(_column(k, kind, rows))
     dims = [c["name"] for c in cols
-            if c["name"] in ("severity", "kind", "type", "section",
-                             "confidence") and c.get("card")]
+            if c["name"] in ("severity", "kind", "type", "confidence")
+            and c.get("card")]
     if cols and dims:
         cols[0]["dimensions"] = dims
     return {"kind": "rea", "path": path,

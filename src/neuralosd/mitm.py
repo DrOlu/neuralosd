@@ -72,11 +72,17 @@ def har_rows(path, cap: int = 5000):
         content = content if isinstance(content, dict) else {}
         url = req.get("url") if isinstance(req.get("url"), str) else ""
         parts = urlsplit(url)
+        host = parts.netloc
+        if "@" in host:
+            # A capture URL often carries user:pass@. Do not persist
+            # credentials into the instance's data layer.
+            host = host.rsplit("@", 1)[1]
+            url = url.replace(parts.netloc, host, 1)
         rows.append({
             "ts": _epoch(entry.get("startedDateTime")),
             "method": (req.get("method") or "")[:16],
             "url": url[:2000],
-            "host": parts.netloc[:200],
+            "host": host[:200],
             "path": (parts.path or "/")[:1000],
             "status": _int(resp.get("status")),
             "mime": (content.get("mimeType") or "")[:100],

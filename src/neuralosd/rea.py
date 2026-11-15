@@ -48,21 +48,26 @@ def rea_rows(path, section: str = None, cap: int = 5000):
                 "parse_errors": 1, "truncated": False}
     sections = _sections(data)
     counts = {k: len(v) for k, v in sections.items()}
+    missing = bool(section) and section not in sections
     chosen = section if section in sections else None
-    if chosen is None:
+    if chosen is None and not missing:
         for name in KNOWN_SECTIONS:
             if sections.get(name):
                 chosen = name
                 break
-    if chosen is None:
+    if chosen is None and not missing:
         chosen = next((k for k, v in sections.items() if v), "items")
-    records = sections.get(chosen, [])
+    records = sections.get(chosen, []) if chosen else []
     errors = 0
     rows = []
     for item in records[:cap]:
+        # `_section` not `section`: a record may carry its own `section`
+        # field, and the provenance must not overwrite it.
         if isinstance(item, dict):
-            rows.append({**item, "section": chosen})
+            rows.append({**item, "_section": chosen})
         else:
-            rows.append({"value": item, "section": chosen})
-    return {"section": chosen, "rows": rows, "sections": counts,
-            "parse_errors": errors, "truncated": len(records) > cap}
+            rows.append({"value": item, "_section": chosen})
+    return {"section": chosen or (section or ""), "rows": rows,
+            "sections": counts, "parse_errors": errors,
+            "truncated": len(records) > cap,
+            "missing_section": missing}

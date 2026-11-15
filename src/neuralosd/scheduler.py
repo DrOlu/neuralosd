@@ -6,8 +6,17 @@ to state/schedules.json across restarts. (cron expressions: M3+)
 """
 import json
 import os
+import sys
 import threading
 import time
+
+
+def _valid_name(name):
+    """A schedule name becomes `scheduled/<name>.json`; keep it a filename."""
+    return (isinstance(name, str) and name and len(name) <= 80
+            and name not in (".", "..")
+            and not any(c in name for c in "/\\")
+            and not any(ord(c) < 32 for c in name))
 
 
 class Scheduler:
@@ -27,9 +36,22 @@ class Scheduler:
     def _load(self):
         try:
             with open(self.schedules_file, encoding="utf-8") as fh:
-                self.entries = json.load(fh)
+                entries = json.load(fh)
         except Exception:
             self.entries = []
+            return
+        if not isinstance(entries, list):
+            self.entries = []
+            return
+        # The file is on disk and hand-editable: re-validate the names, or a
+        # tampered entry could write a result outside scheduled/.
+        kept = [e for e in entries
+                if isinstance(e, dict) and _valid_name(e.get("name"))]
+        dropped = len(entries) - len(kept)
+        if dropped:
+            print(f"[scheduler] dropped {dropped} invalid schedule "
+                  f"entr{'y' if dropped == 1 else 'ies'}", file=sys.stderr)
+        self.entries = kept
 
     def _save(self):
         with self._lock:
@@ -43,10 +65,7 @@ class Scheduler:
 
     def add(self, name: str, every_s: int, instance: str, question: str):
         # The name is a filename component (`scheduled/<name>.json`).
-        if (not isinstance(name, str) or not name or len(name) > 80
-                or name in (".", "..")
-                or any(c in name for c in "/\\")
-                or any(ord(c) < 32 for c in name)):
+        if not _valid_name(name):
             raise ValueError(f"invalid schedule name {name!r}")
         try:
             every_s = max(1, int(every_s))

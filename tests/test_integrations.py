@@ -70,6 +70,19 @@ def test_har_corrupt_file_is_a_parse_error_not_a_crash(tmp_path):
     assert out["parse_errors"] == 1
 
 
+def test_har_redacts_url_userinfo(tmp_path):
+    har = {"log": {"entries": [{
+        "startedDateTime": "2026-01-01T10:00:00Z",
+        "request": {"method": "GET",
+                    "url": "https://user:secret@api.example.com/x"},
+        "response": {"status": 200, "content": {}}}]}}
+    path = tmp_path / "auth.har"
+    path.write_text(json.dumps(har), encoding="utf-8")
+    row = har_rows(str(path))["rows"][0]
+    assert "secret" not in row["url"]
+    assert row["host"] == "api.example.com"
+
+
 def test_har_instance_answers_request_questions(tmp_path):
     path = tmp_path / "cap.har"
     path.write_text(json.dumps(HAR), encoding="utf-8")
@@ -110,6 +123,33 @@ def test_rea_rows_choose_the_reference_section(tmp_path):
     explicit = rea_rows(str(path), section="functions")
     assert explicit["section"] == "functions"
     assert explicit["rows"][0]["name"] == "parse_packet"
+
+
+def test_rea_missing_section_is_visible_and_preserves_a_record_field(tmp_path):
+    path = tmp_path / "bundle.json"
+    path.write_text(json.dumps(REA), encoding="utf-8")
+    missing = rea_rows(str(path), section="nope")
+    assert missing["missing_section"] is True
+    assert missing["rows"] == []
+
+    custom = {"findings": [{"section": "custom", "severity": "high"}]}
+    path2 = tmp_path / "custom.json"
+    path2.write_text(json.dumps(custom), encoding="utf-8")
+    row = rea_rows(str(path2))["rows"][0]
+    assert row["section"] == "custom"          # the record's own field
+    assert row["_section"] == "findings"       # our provenance, not a clobber
+
+
+def test_rea_init_rejects_a_missing_section(tmp_path):
+    path = tmp_path / "bundle.json"
+    path.write_text(json.dumps(REA), encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "neuralosd", "init",
+         "--source", f"rea:{path}#nope", "--name", "bad",
+         "--out", str(tmp_path / "bad")],
+        capture_output=True, text=True, timeout=120)
+    assert proc.returncode != 0
+    assert "no section" in (proc.stderr + proc.stdout)
 
 
 def test_rea_instance_answers_finding_questions(tmp_path):

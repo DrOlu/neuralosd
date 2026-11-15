@@ -220,7 +220,7 @@ A save of `undo` from `APPLIED` is legal; a second `undo` from `UNDONE` is not.
 | **Illegal** | `running→running`; any move out of a terminal state; publishing a result after a cancellation; `cancel` of a finished run reporting success |
 | **Trace** | in-memory run dict (`status`, times, `result`/`error`, `cancel`); `GET /runs/{id}` |
 | **Anchors** | `src/neuralosd/agentic.py:278` (`RUN_STATES`), `:282` (`RUN_LEGAL_TRANSITIONS`), `:292` (`_transition`), `:309` (`submit`), `:373` (`cancel`) |
-| **Verdict** | Enforced. Fixed: a cancellation observed during the probe was overwritten by the late `done`, and terminal states were mutable. `tests/test_agentic_state_machines.py`. |
+| **Verdict** | Enforced. Fixed: a cancellation observed during the probe was overwritten by the late `done`; terminal states were mutable; and a cancel that won the race before the worker started raised `cancelled→cancelled` in the thread (the worker now sees the terminal state and exits). `tests/test_agentic_state_machines.py`. |
 
 ---
 
@@ -245,12 +245,12 @@ A save of `undo` from `APPLIED` is legal; a second `undo` from `UNDONE` is not.
 |---|---|
 | **States** | per entry `scheduled → due → running → scheduled` (by `next_due`); outcome `last_status` = `ok`/`error` |
 | **Events** | `add`, `remove`, interval tick, run success/failure |
-| **Guards** | `RLock` (`remove` holds the lock and calls `_save`); atomic `schedules.json`; atomic result file; a failure records `last_error` |
+| **Guards** | `RLock` (`remove` holds the lock and calls `_save`); atomic `schedules.json`; atomic result file; a failure records `last_error`; names are re-validated on load |
 | **Actions** | `ask_fn`; write `state/scheduled/<name>.json` |
-| **Illegal** | a lost schedule from a truncated JSON; a leaked file handle; a silent failure |
+| **Illegal** | a lost schedule from a truncated JSON; a leaked file handle; a silent failure; a hand-edited `../` name escaping `scheduled/` |
 | **Trace** | `schedules.json` (`next_due`, `runs`, `last_run`, `last_status`, `last_error`); `scheduled/<name>.json` |
 | **Anchors** | `src/neuralosd/scheduler.py:35` (`_save`), `:50` (`add`), `:72` (`_loop`), `:86` (`_run`) |
-| **Verdict** | Enforced. Fixed: `remove()` deadlocked on a non-reentrant lock; both writes were non-atomic; a failure left no state. `tests/test_scheduler_state.py`. |
+| **Verdict** | Enforced. Fixed: `remove()` deadlocked on a non-reentrant lock; both writes were non-atomic; a failure left no state; a tampered on-disk name was trusted and could write outside `scheduled/` (invalid entries are now dropped on load). `tests/test_scheduler_state.py`. |
 
 ---
 
@@ -311,6 +311,21 @@ window. They are listed so "stateful" is not mistaken for "FSM".
 | **Trace** | process memory; `health`/`catalog` menu versions |
 | **Anchors** | `src/neuralosd/mcp.py:73` (`_instance`), `:110` (`_role_instance`) |
 | **Verdict** | Enforced by invalidation; `absent→loaded` is the only edge. |
+
+---
+
+## 20. Capture readers (HAR, rea) — **stateless projections**
+
+| | |
+|---|---|
+| **States** | none — the capture file is an immutable input, re-read at ask time |
+| **Events** | scaffold (`init`), every ask |
+| **Guards** | caps (5000 rows), malformed entries counted not fatal, HAR `user:pass@` is redacted, an explicitly requested missing rea section is an error (not a silent switch) |
+| **Actions** | flatten rows; probes run over them; nothing is written back |
+| **Illegal** | treating a missing section as another section; persisting URL credentials into the data layer; an unbounded read |
+| **Trace** | the capture file; `parse_errors`, `truncated`, `missing_section`; rows |
+| **Anchors** | `src/neuralosd/mitm.py:har_rows`, `src/neuralosd/rea.py:rea_rows`, `src/neuralosd/_cmd/init.py` (`_profile_har`/`_profile_rea`) |
+| **Verdict** | Not an FSM — a projection. There are no transitions to enforce; the bounds and the redaction are the contract. `tests/test_integrations.py`. |
 
 ---
 

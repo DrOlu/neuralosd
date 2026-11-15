@@ -87,6 +87,29 @@ def test_cancel_unknown_run_is_false():
     assert RunStore().cancel("nope") is False
 
 
+def test_cancel_before_the_worker_starts_is_not_an_illegal_transition(
+        monkeypatch):
+    import neuralosd.agentic as agentic
+
+    captured = {}
+
+    class FakeThread:
+        def __init__(self, target, **kwargs):
+            captured["target"] = target
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(agentic.threading, "Thread", FakeThread)
+    store = agentic.RunStore()
+    run_id = store.submit(lambda: {"ok": True})
+    assert store.cancel(run_id) is True          # queued -> cancelled
+    captured["target"]()                         # worker starts late
+    run = store.get(run_id)
+    assert run["status"] == "cancelled"
+    assert run["result"] is None
+
+
 def test_terminal_run_transitions_are_refused_by_name():
     store = RunStore()
     run = {"run_id": "r", "status": "done"}

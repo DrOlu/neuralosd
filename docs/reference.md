@@ -253,7 +253,7 @@ Execute the full pipeline for one question.
     "verification": {        # the proof band, not a correctness guarantee
         "level": str,        # "golden" | "execution" | "execution-error" | "refused"
         "executed": bool,
-        "results_gate": str, # "passed" | "refused"
+        "results_gate": str, # "passed" | "refused" | "error"
         "golden": {"matched": bool, "expected_probe": str, "oracle": str},
         "oracle_available": bool,   # a truth.json entry exists for the probe
     },

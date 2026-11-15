@@ -1263,20 +1263,27 @@ class Router:
         level = ("refused" if refused
                  else "execution-error" if mode.endswith("-error")
                  else "execution")
+        gate = ("error" if mode.endswith("-error")
+                else "passed" if results not in (None, [], {})
+                else "refused")
         out = {"level": level,
                "executed": bool(env.get("probe")) and not refused,
-               "results_gate": ("passed"
-                                if results not in (None, [], {})
-                                else "refused")}
+               "results_gate": gate}
         item = self.golden_index.get(normalized) if normalized else None
         if item and level in ("execution", "golden"):
-            matched = item.get("expect_probe") in (None, env.get("probe"))
+            expected = item.get("expect_probe")
+            # Only a POSITIVE bank item with a named expected probe can make
+            # an answer "golden". A trap (expect_refusal) or a malformed item
+            # with no expect_probe asserts nothing about a positive answer —
+            # treating `None` as a wildcard labelled traps "golden".
+            matched = isinstance(expected, str) and expected == env.get("probe")
             out["golden"] = {"matched": matched,
-                             "expected_probe": item.get("expect_probe")}
+                             "expected_probe": expected}
             if matched:
                 level = "golden"
             oracle = item.get("oracle")
-            if isinstance(oracle, dict) and oracle.get("value") is not None:
+            if matched and isinstance(oracle, dict) \
+                    and oracle.get("value") is not None:
                 # Same rule as the golden run: extract_answer may return a
                 # list of candidate leaves (no explicit path); the answer
                 # passes when ANY candidate satisfies the typed oracle.

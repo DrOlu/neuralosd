@@ -96,3 +96,34 @@ def test_mcp_carries_the_verification_band(tmp_path):
                                 "arguments": {"question": "how many rows"}}},
                     str(tmp_path / "inst"))["result"]
     assert result["structuredContent"]["verification"]["level"] == "golden"
+
+
+def test_a_trap_is_never_called_golden(tmp_path):
+    # A trap asserts a REFUSAL. If the router answers anyway, that is a
+    # regression — but it must not be labelled "golden" on the way out.
+    inst = _instance(tmp_path, [{"q": "how many rows",
+                                 "expect_refusal": True}])
+    v = inst.ask("how many rows")["verification"]
+    assert v["level"] == "execution"
+    assert v["golden"]["matched"] is False
+
+
+def test_an_item_without_an_expected_probe_is_not_golden(tmp_path):
+    inst = _instance(tmp_path, [{"q": "how many rows"}])
+    v = inst.ask("how many rows")["verification"]
+    assert v["level"] == "execution"
+    assert v["golden"]["matched"] is False
+
+
+def test_a_probe_error_reports_results_gate_error(tmp_path):
+    d = tmp_path / "err"
+    d.mkdir()
+    (d / "probes.py").write_text(
+        'from neuralosd import probe\n\n'
+        '@probe(description="boom", triggers=["boom"])\n'
+        'def boom():\n'
+        '    raise RuntimeError("kaboom")\n', encoding="utf-8")
+    inst = load_instance(str(d))
+    v = inst.ask("boom")["verification"]
+    assert v["level"] == "execution-error"
+    assert v["results_gate"] == "error"

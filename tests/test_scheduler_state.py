@@ -44,6 +44,16 @@ def test_corrupt_schedules_file_loads_empty(tmp_path):
     assert scheduler.list() == []
 
 
+def test_tampered_schedule_name_is_dropped_on_load(tmp_path):
+    (tmp_path / "schedules.json").write_text(json.dumps([
+        {"name": "../escape", "every_s": 60, "instance": "i",
+         "question": "q"},
+        {"name": "ok", "every_s": 60, "instance": "i", "question": "q"},
+    ]), encoding="utf-8")
+    scheduler = Scheduler(str(tmp_path), lambda _i, _q: {})
+    assert [e["name"] for e in scheduler.list()] == ["ok"]
+
+
 def test_run_records_success(tmp_path):
     scheduler = Scheduler(str(tmp_path), lambda _i, _q: {"ok": True})
     entry = scheduler.add("a", 60, "inst", "how many rows")
