@@ -341,11 +341,10 @@ class Handler(BaseHTTPRequestHandler):
             payload.setdefault("request_id", request_id)
             payload.pop("_audit", None)
         extra = {}
-        self._send(status, payload, request_id,
-                   content_type=meta.get("content_type", "application/json"),
-                   extra=extra)
-        # The audit row is written after the response so a logging failure
-        # cannot turn an answer into an error.
+        # Audit BEFORE the response: the row must be durable by the time the
+        # caller has the answer (a consumer may read the ledger immediately).
+        # The block is exception-safe, so a logging failure cannot turn an
+        # answer into an error.
         try:
             instance = meta.get("instance")
             if instance is None and isinstance(payload, dict):
@@ -372,6 +371,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._audit_append(state, row)
         except Exception:
             pass
+        self._send(status, payload, request_id,
+                   content_type=meta.get("content_type", "application/json"),
+                   extra=extra)
 
     def _audit_append(self, state, row):
         with state.audit_lock:
