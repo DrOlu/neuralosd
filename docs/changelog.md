@@ -1,5 +1,24 @@
 # Changelog
 
+## 3.3.0 — maintenance and operator endpoints
+
+The HTTP API now exposes a **fixed allowlist** of maintenance and operator
+operations, each typed — never a generic shell:
+
+- **Reads:** `lint`, `gaps` (clustered refusals/partial answers),
+  `shadow` report, `synonyms` proposals, `catalog`, the probe-level
+  `openapi`, `slo`, `snapshots`, `/v1/system/backends`, `/v1/system/doors`.
+- **Mutations:** `golden/run` (self-test ledger), `shadow/{name}/evaluate`
+  and `/promote`, `mothball`, `synonyms/apply`, `calibrate` (fits
+  `router.json` and reloads), `snapshot`. `--read-only` refuses the mutating
+  set; dry-runs remain.
+- **Mesh:** `mesh/discover`, `mesh/preflight` (signed local dry-run) and
+  `mesh/delegate`, all **off by default** behind `--allow-mesh`; delegation
+  keeps the trust policy, hop and loop limits.
+- `deploy` and `door` remain CLI-only (different blast radius).
+
+Docs: `docs/api.md`; tests: `tests/test_api.py` (29).
+
 ## 3.2.2 — legacy `/ask` compatibility
 
 The first-class API moved the authenticated surface to `/v1`, which broke
