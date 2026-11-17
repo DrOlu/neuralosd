@@ -98,13 +98,13 @@ Every authenticated request appends a row to `<instance>/audit.jsonl`:
 | POST | `/v1/instances/{instance}/ask` | Ask a question |
 | POST | `/v1/instances/{instance}/confirm/{token}` | Complete a HITL confirmation |
 | POST | `/v1/instances/{instance}/probes/{probe}/run` | Typed probe execution |
-| GET | `/v1/instances/{instance}/requests/{id}` | Retrieve a prior result |
-| GET | `/v1/instances/{instance}/requests/{id}/envelope` | Retrieve its envelope |
+| GET | `/v1/instances/{instance}/requests/{request_id}` | Retrieve a prior result |
+| GET | `/v1/instances/{instance}/requests/{request_id}/envelope` | Retrieve its envelope |
 | GET | `/v1/instances/{instance}/plans` | List plans |
-| GET | `/v1/instances/{instance}/plans/{id}` | One plan |
-| POST | `/v1/instances/{instance}/plans/{id}/apply` | Apply a proposed plan |
-| POST | `/v1/instances/{instance}/plans/{id}/undo` | Undo an applied plan |
-| GET | `/v1/instances/{instance}/plans/{id}/events` | Plan lifecycle |
+| GET | `/v1/instances/{instance}/plans/{plan_id}` | One plan |
+| POST | `/v1/instances/{instance}/plans/{plan_id}/apply` | Apply a proposed plan |
+| POST | `/v1/instances/{instance}/plans/{plan_id}/undo` | Undo an applied plan |
+| GET | `/v1/instances/{instance}/plans/{plan_id}/events` | Plan lifecycle |
 | GET | `/v1/instances/{instance}/audit` | Audit rows |
 | GET | `/v1/instances/{instance}/audit/verify` | Verify the chain |
 | GET | `/v1/instances/{instance}/audit/{event_id}` | One audit row |
