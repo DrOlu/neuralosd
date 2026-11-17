@@ -96,8 +96,10 @@ def _instance(tmp_path):
 
 
 def _start(tmp_path, read_only=False, plan_ttl=86400, plan_ts=None,
-           make_plan=True):
+           make_plan=True, mutate=None):
     d, inst = _instance(tmp_path)
+    if mutate:
+        mutate(inst)
     plan_id = None
     if make_plan:
         report = actuate("block_ip", "1.2.3.4", "reviewed", "ops", str(d),
@@ -198,6 +200,50 @@ def test_discovery_endpoints(tmp_path):
     code, model = _req(base, "GET", "/v1/instances/fake/model")
     assert model["params"] == 121_000_000
     assert model["loaded"] is False
+
+
+def test_golden_endpoint_tolerates_an_instance_without_a_bank(tmp_path):
+    # Real instances exist without golden.json (mtn-build); discovery must
+    # report an empty bank, not 500 (seen on the real instance).
+    def delete_bank(inst):
+        (tmp_path / "fake" / "golden.json").unlink()
+
+    base, _d, _p, _s = _start(tmp_path, mutate=delete_bank)
+    code, body = _req(base, "GET", "/v1/instances/fake/golden")
+    assert code == 200, body
+    assert body["count"] == 0
+    assert body["cases"] == []
+
+
+def test_health_is_ready_when_the_gate_refuses(tmp_path):
+    # A first trigger that needs arguments refuses (args_not_extractable).
+    # That is the gate working, not the instance being down: readiness must
+    # stay 200, or every instance whose first trigger takes an argument
+    # reports 503 (seen on the real chinook instance).
+    def first_trigger_unanswerable(inst):
+        inst.router.metas[0].triggers = ["quantum entanglement statistics"]
+
+    base, _d, _p, _s = _start(tmp_path, mutate=first_trigger_unanswerable)
+    code, body = _req(base, "GET", "/v1/instances/fake/health")
+    assert code == 200, body
+    assert body["ready"] is True
+    assert body["probes"] == 8
+
+
+def test_health_is_degraded_not_down_when_the_source_is_slow(tmp_path):
+    # A cloud source on a cold start can outlive the readiness budget. The
+    # runtime is loaded and cached answers still work, so health reports
+    # degraded rather than 503 (seen on the real aws and cloudflare
+    # instances).
+    def slow_source(inst):
+        inst.ask = lambda *a, **k: time.sleep(2)
+
+    base, _d, _p, _s = _start(tmp_path, mutate=slow_source)
+    code, body = _req(base, "GET",
+                      "/v1/instances/fake/health?timeout_s=1")
+    assert code == 200, body
+    assert body["ready"] is True
+    assert body["degraded"] is True
 
 
 # ── ask / refusals ───────────────────────────────────────────────────────
@@ -485,6 +531,11 @@ def test_read_only_refuses_maintenance_mutations(tmp_path):
                 {"age_days": 0, "apply": True})[0] == 403
     assert _req(base, "POST", "/v1/instances/fake/calibrate", {})[0] == 403
     assert _req(base, "POST", "/v1/instances/fake/synonyms/apply", {})[0] == 403
+    # golden/run writes the self-test ledger: a mutation, refused read-only
+    assert _req(base, "POST", "/v1/instances/fake/golden/run", {})[0] == 403
+    # mothball without apply is a dry-run and stays allowed
+    assert _req(base, "POST", "/v1/instances/fake/mothball",
+                {"age_days": 0})[0] == 200
 
 
 class _FakeMesh:

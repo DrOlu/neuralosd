@@ -114,6 +114,13 @@ Every authenticated request appends a row to `<instance>/audit.jsonl`:
 | GET | `/openapi.json` | OpenAPI 3.1 document (no auth) |
 | GET | `/docs` | HTML reference (no auth) |
 
+`/v1/instances/{instance}/health` runs the instance's first trigger inside the
+readiness budget, `?timeout_s=` (default 10, clamped to 1–120). A gate refusal
+counts as ready — the runtime refused, it is not down. When a live backend is
+slower than the budget (a cloud API on a cold start), health answers `200`
+with `"degraded": true` instead of 503: the menu, gate and model are loaded
+and cached answers still work.
+
 ## Ask
 
 ```bash

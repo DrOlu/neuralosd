@@ -529,18 +529,34 @@ class Handler(BaseHTTPRequestHandler):
     def _h_health(self, params, body, query, rid):
         s = self.api.state(params["instance"])
         router = getattr(s.inst, "router", s.inst)
-        ready, error = False, None
+        ready, error, degraded = False, None, False
+        budget = _num((query.get("timeout_s") or ["10"])[0], 10, 1, 120)
         try:
             menu = router.menu()
             if menu and menu[0].get("triggers"):
                 with audit_source("watchdog"):
-                    self._call(lambda: s.inst.ask(menu[0]["triggers"][0],
-                                                  use_cache=True), 5)
+                    try:
+                        self._call(lambda: s.inst.ask(menu[0]["triggers"][0],
+                                                      use_cache=True), budget)
+                    except NoResults:
+                        # The gate answered with a refusal. That is the
+                        # runtime working, not the instance being down: a
+                        # first trigger that needs arguments must not turn
+                        # a healthy instance into a 503.
+                        pass
+                    except _HttpError as exc:
+                        # A slow live source (cloud APIs on a cold start) is
+                        # degraded, not down: the menu, gate and model are
+                        # loaded and cached answers still work.
+                        if exc.status != 504:
+                            raise
+                        degraded, error = True, "call timed out"
             ready = True
         except Exception as exc:
             error = str(exc)[:200]
         status = 200 if ready else 503
-        return status, {"ok": ready, "ready": ready, "instance": s.name,
+        return status, {"ok": ready, "ready": ready, "degraded": degraded,
+                        "instance": s.name,
                         "probes": len(getattr(router, "metas", [])),
                         **({"error": error} if error else {})}, {}
 
@@ -600,7 +616,7 @@ class Handler(BaseHTTPRequestHandler):
                 bank = json.load(fh)
         except (OSError, ValueError):
             bank = {}
-        items = bank.get("items") if isinstance(bank, dict) else []
+        items = (bank.get("items") or []) if isinstance(bank, dict) else []
         cases = [{"q": it.get("q"), "expect_probe": it.get("expect_probe"),
                   "expect_refusal": bool(it.get("expect_refusal"))}
                  for it in items if isinstance(it, dict)][:1000]
@@ -1186,6 +1202,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _h_golden_run(self, params, body, query, rid):
         from .instance import selftest_ledger
+        self._require_mutable()
         s = self.api.state(params["instance"])
         path = os.path.join(s.path, "golden.json")
         try:
