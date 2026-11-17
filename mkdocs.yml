@@ -28,6 +28,7 @@ nav:
   - CLI Reference: cli.md
   - SDK: sdk.md
   - API Reference: reference.md
+  - HTTP API: api.md
   - Cookbook: cookbook.md
   - Architecture: architecture.md
   - Security: security.md

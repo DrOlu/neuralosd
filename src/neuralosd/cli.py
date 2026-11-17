@@ -149,24 +149,45 @@ def build_parser():
     p_ask.add_argument("question", nargs="+")
 
     # serve
-    p_serve = sub.add_parser("serve", help="Start the HTTP service")
-    p_serve.add_argument("--instance-dir", default=None,
-                         help="single instance directory")
+    p_serve = sub.add_parser("serve",
+                             help="Start the authenticated HTTP API")
+    p_serve.add_argument("--instance-dir", action="append", default=None,
+                         help="instance directory (repeatable; the directory "
+                              "basename is the instance name)")
     p_serve.add_argument("--instances-dir", default=None,
-                         help="directory containing MULTIPLE instance dirs; "
-                              "each is served at /{name}/ask")
-    p_serve.add_argument("--port", type=int, default=8877)
+                         help="legacy multi-instance directory; each instance "
+                              "is served at /{name}/ask")
+    p_serve.add_argument("--port", type=int, default=9998)
     p_serve.add_argument("--model", action="store_true",
                          help="Load the on-device model as a fallback")
     p_serve.add_argument("--strict", action="store_true",
                          help="Refuse answers that would drop a filter")
-    p_serve.add_argument("--auth-token",
-                         help="require Authorization: Bearer <token> on every "
-                              "endpoint except /healthz and /ready (or set "
-                              "$NEURALOSD_API_TOKEN)")
+    p_serve.add_argument("--api-key",
+                         help="API key (default lab key 'neuralosd'; "
+                              "override in production)")
+    p_serve.add_argument("--api-key-file",
+                         help="file of API keys, one per line")
+    p_serve.add_argument("--auth-token", default=None,
+                         help="alias for --api-key (legacy)")
+    p_serve.add_argument("--read-only", action="store_true",
+                         help="refuse apply/undo/reload and any mutation")
+    p_serve.add_argument("--tls-cert", help="TLS certificate (PEM)")
+    p_serve.add_argument("--tls-key", help="TLS private key (PEM)")
+    p_serve.add_argument("--timeout", type=int, default=300,
+                         help="per-call timeout in seconds")
+    p_serve.add_argument("--max-body", type=int, default=1 << 20,
+                         help="request body cap in bytes")
+    p_serve.add_argument("--max-output", type=int, default=8 << 20,
+                         help="response output cap in bytes")
+    p_serve.add_argument("--audit", action=argparse.BooleanOptionalAction,
+                         default=True,
+                         help="append API audit rows (default on)")
+    p_serve.add_argument("--plan-ttl", type=int, default=86400,
+                         help="seconds a proposed plan stays applicable")
+    p_serve.add_argument("--quiet", action="store_true")
     p_serve.add_argument("--host", default="127.0.0.1",
-                         help="Bind address (default 127.0.0.1; use 0.0.0.0 "
-                              "to expose — there is NO authentication)")
+                         help="Bind address (default 127.0.0.1). A "
+                              "non-loopback bind requires a non-default key.")
 
     # lint
     p_lint = sub.add_parser("lint", help="Trigger collision linter")

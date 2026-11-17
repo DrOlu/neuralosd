@@ -332,8 +332,8 @@ def test_components_declared_in_pyproject_are_watched():
         for pkg in re.findall(r'"([A-Za-z0-9_.-]+)', rhs):
             declared.add(pkg.lower())
     unwatched = {p for p in declared if p not in cv.COMPONENTS}
-    # pytest/pytest-asyncio are dev-only tooling, not integrated components
-    unwatched -= {"pytest", "pytest-asyncio"}
+    # dev-only tooling, not integrated components
+    unwatched -= {"pytest", "pytest-asyncio", "openapi-spec-validator"}
     assert not unwatched, f"unwatched extras: {sorted(unwatched)}"
 
 

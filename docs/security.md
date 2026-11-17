@@ -76,6 +76,13 @@ default: any authenticated caller may claim an agent id, admin is on, and
 role selection is trusted. That is the laptop/single-operator mode. A
 commercial multi-agent deployment must configure `agents`.
 
+The first-class HTTP API (`neuralosd serve`) uses API keys
+(`--api-key`/`--api-key-file`, default lab key `neuralosd`); a non-loopback
+bind is refused while the default key is in use. Its audit rows store the
+key-id (a SHA-256 prefix) and a SHA-256 of the question — never the key and
+never the raw question — in a hash-chained ledger. `--read-only` refuses
+every mutation.
+
 ## Data protection
 
 - PII is masked in responses by default (key-name hints plus value shapes:

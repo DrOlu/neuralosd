@@ -210,6 +210,21 @@ pending = store.create(probe_fn, args, reason="low confidence")
 result = store.confirm(pending["confirm_token"])
 ```
 
+## HTTP API (`neuralosd serve`)
+
+```bash
+neuralosd serve --instance-dir ./my-instance --port 9998 --api-key "$KEY"
+# OpenAPI 3.1: http://127.0.0.1:9998/openapi.json
+# HTML reference: http://127.0.0.1:9998/docs
+```
+
+Authenticated `/v1` API over the same engine: discovery, ask, typed probe
+execution, the plan lifecycle with idempotency and a per-instance lock, an
+append-only hash-chained audit log, reload and metrics. `--read-only` refuses
+every mutation; `--tls-cert/--tls-key` wrap the listener; the default bind is
+loopback and a non-loopback bind requires a non-default key. See the
+[HTTP API guide](docs/api.md).
+
 ## MCP server (a guarded surface for AI agents)
 
 ```bash

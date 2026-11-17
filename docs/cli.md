@@ -112,22 +112,29 @@ neuralosd ask --strict --instance-dir ./fin "net margin per quarter"
 
 **Exit `0`** with populated `results`, or **exit `2`** with `results: null` and a typed `refusal_reason` (`no_probe_matches`, `dropped_filter`, `arg_type_mismatch`, …). A refusal is an answer, not an error — every refusal is journaled to `ask_audit.jsonl` and can become a roadmap item via `gaps`. See [usage §6](usage.md#6-ask-questions).
 
-### `serve` — start the HTTP service
+### `serve` — start the authenticated HTTP API
 
 ```sh
-neuralosd serve --instance-dir ./global-sales --port 8420
-neuralosd serve --instances-dir ~/instances --port 8420 --auth-token "$TOKEN"
+neuralosd serve --instance-dir ./global-sales --port 9998 --api-key "$KEY"
+neuralosd serve --instance-dir ./a --instance-dir ./b --port 9998 \
+    --read-only --tls-cert server.crt --tls-key server.key
 ```
 
 | Flag | Purpose |
 |---|---|
-| `--instance-dir` | Serve one instance |
-| `--instances-dir` | Serve every instance under a directory (multi-instance mode, one door each) |
-| `--auth-token` | Require `Authorization: Bearer …` on every request |
-| `--host` / `--port` | Bind address (default `127.0.0.1:8420`) |
+| `--instance-dir` | Instance directory (repeatable; directory name = instance name) |
+| `--instances-dir` | Legacy multi-instance door (kept for compatibility) |
+| `--api-key` / `--api-key-file` | API key(s); default lab key `neuralosd` |
+| `--read-only` | Refuse apply/undo/reload (reads and dry-runs remain) |
+| `--tls-cert` / `--tls-key` | Wrap the listener in TLS (both required) |
+| `--timeout`, `--max-body`, `--max-output`, `--plan-ttl` | Limits |
+| `--audit/--no-audit` | API audit chain (default on) |
+| `--host` / `--port` | Bind address (default `127.0.0.1:9998`) |
 | `--model` / `--strict` | Same semantics as `ask` |
 
-Endpoints: `/ask`, `/probe/{id}`, `/triage`, `/health`, `/openapi.json`, plus the MCP manifest. Every answer is a **signed envelope** (`menu_version` + `gate_version` + hmac) so downstream systems can pin what they trusted.
+The `/v1` surface, auth, OpenAPI 3.1 at `/openapi.json`, `/docs`, plans,
+audit and deployment notes are in the [HTTP API guide](api.md). A
+non-loopback bind is refused unless a non-default key is configured.
 
 ### `reason` — escalate to a reasoning model, then extend the menu
 

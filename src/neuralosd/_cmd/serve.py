@@ -6,31 +6,41 @@ LOOPBACK = ("127.0.0.1", "localhost", "::1")
 
 
 def run(a):
-    from ._common import load_instance
-    from ..service import serve
+    from ..api import serve_api
 
-    inst = load_instance(a.instance_dir, with_model=getattr(a, "model", False))
-    if getattr(a, "strict", False):
-        inst.router.strict_discards = True
+    raw_dirs = getattr(a, "instance_dir", None)
+    dirs = ([raw_dirs] if isinstance(raw_dirs, str)
+            else list(raw_dirs or []))
+    if not dirs:
+        if getattr(a, "instances_dir", None):
+            return run_multi(a)
+        raise SystemExit("error: --instance-dir is required")
+    if getattr(a, "instances_dir", None):
+        raise SystemExit("error: use --instance-dir or --instances-dir, "
+                         "not both")
 
-    auth_token = (getattr(a, "auth_token", None)
-                  or os.environ.get("NEURALOSD_API_TOKEN") or None)
-    instance_dir = os.path.abspath(a.instance_dir)
-
-    host = getattr(a, "host", "127.0.0.1") or "127.0.0.1"
-    print(f"serving instance '{inst.name}' with {len(inst.probes)} probes "
-          f"on http://{host}:{a.port}", file=sys.stderr)
-    if host not in LOOPBACK:
-        # Fail closed. /ask exposes every probe's data; binding wide without
-        # a credential is not a default we will let an operator inherit.
-        from ..agentic import agent_tokens
-        if not auth_token and not agent_tokens(instance_dir):
-            raise SystemExit(
-                f"error: refusing to bind {host} without a credential — pass "
-                f"--auth-token (or $NEURALOSD_API_TOKEN), configure per-agent "
-                f"tokens in acl.json, or bind 127.0.0.1")
-    serve(inst, port=a.port, host=host, auth_token=auth_token,
-          instance_dir=instance_dir)
+    env_key = (os.environ.get("NEURALOSD_SERVE_API_KEY")
+               or os.environ.get("NEURALOSD_API_TOKEN"))
+    keys = [k for k in (getattr(a, "api_key", None),
+                        getattr(a, "auth_token", None), env_key) if k]
+    serve_api(
+        dirs,
+        host=getattr(a, "host", "127.0.0.1") or "127.0.0.1",
+        port=getattr(a, "port", 9998),
+        api_keys=keys or None,
+        api_key_file=getattr(a, "api_key_file", None),
+        read_only=bool(getattr(a, "read_only", False)),
+        tls_cert=getattr(a, "tls_cert", None),
+        tls_key=getattr(a, "tls_key", None),
+        timeout=getattr(a, "timeout", 300),
+        max_body=getattr(a, "max_body", 1 << 20),
+        max_output=getattr(a, "max_output", 8 << 20),
+        audit=bool(getattr(a, "audit", True)),
+        plan_ttl=getattr(a, "plan_ttl", 86400),
+        quiet=bool(getattr(a, "quiet", False)),
+        with_model=bool(getattr(a, "model", False)),
+        strict=bool(getattr(a, "strict", False)),
+    )
 
 
 def run_multi(a):
