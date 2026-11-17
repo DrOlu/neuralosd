@@ -1,5 +1,23 @@
 # Changelog
 
+## 3.3.1 — real-instance readiness and discovery fixes
+
+Found by driving the API against the host's 21 live instances:
+
+- `/v1/instances/{instance}/health` returned 503 for healthy instances
+  whose first trigger needs arguments (`chinook`: `args_not_extractable`)
+  or whose live backend exceeds the probe budget (`aws`, `cloudflare` on a
+  cold start). A gate refusal now counts as ready; a slow source answers
+  `200` with `"degraded": true`; the budget is `?timeout_s=` (1–120,
+  default 10). Readiness no longer reports a working instance as down.
+- `/v1/instances/{instance}/golden` raised `TypeError` and returned 500 for
+  an instance without `golden.json` (`mtn-build`); it now reports an empty
+  bank.
+- `POST /v1/instances/{instance}/golden/run` writes the self-test ledger
+  but ignored `--read-only`; it is now refused like the other mutations.
+
+Tests: `tests/test_api.py` (32); suite 1517 passed, 3 skipped.
+
 ## 3.3.0 — maintenance and operator endpoints
 
 The HTTP API now exposes a **fixed allowlist** of maintenance and operator
