@@ -129,6 +129,7 @@ neuralosd serve --instance-dir ./a --instance-dir ./b --port 9998 \
 | `--tls-cert` / `--tls-key` | Wrap the listener in TLS (both required) |
 | `--timeout`, `--max-body`, `--max-output`, `--plan-ttl` | Limits |
 | `--audit/--no-audit` | API audit chain (default on) |
+| `--allow-mesh` | Enable the mesh discover/preflight/delegate endpoints (off by default) |
 | `--host` / `--port` | Bind address (default `127.0.0.1:9998`) |
 | `--model` / `--strict` | Same semantics as `ask` |
 

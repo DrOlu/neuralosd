@@ -414,6 +414,123 @@ def test_timeout_is_504(tmp_path):
     assert body["code"] == "timeout"
 
 
+# ── maintenance allowlist ───────────────────────────────────────────────
+
+def test_maintenance_reads(tmp_path):
+    base, _d, _p, _s = _start(tmp_path)
+    for path in ("/v1/instances/fake/lint",
+                 "/v1/instances/fake/gaps",
+                 "/v1/instances/fake/shadow",
+                 "/v1/instances/fake/catalog",
+                 "/v1/instances/fake/openapi",
+                 "/v1/instances/fake/slo",
+                 "/v1/instances/fake/snapshots",
+                 "/v1/system/backends",
+                 "/v1/system/doors"):
+        code, body = _req(base, "GET", path)
+        assert code == 200, (path, body)
+    code, body = _req(base, "GET", "/v1/system/backends")
+    assert {b["name"] for b in body["backends"]} == {"boxlite",
+                                                     "microsandbox"}
+    code, body = _req(base, "GET", "/v1/instances/fake/catalog")
+    assert "count_rows" in body["catalog"]
+
+
+def test_golden_run_and_gaps(tmp_path):
+    base, _d, _p, _s = _start(tmp_path)
+    code, body = _req(base, "POST", "/v1/instances/fake/golden/run", {})
+    assert code == 200, body
+    assert body["summary"]["wrong"] == 0
+    assert body["summary"]["skipped"] == 0
+
+    _req(base, "POST", "/v1/instances/fake/ask",
+         {"question": "quantum entanglement statistics"})
+    code, gaps = _req(base, "GET", "/v1/instances/fake/gaps")
+    assert code == 200 and gaps["count"] >= 1
+    assert gaps["gaps"][0]["reason"] == "no_probe_matches"
+
+
+def test_shadow_and_mothball(tmp_path):
+    base, _d, _p, _s = _start(tmp_path)
+    code, body = _req(base, "GET", "/v1/instances/fake/shadow")
+    assert code == 200 and body["shadow"]["shadowed"] == []
+
+    code, body = _req(base, "POST", "/v1/instances/fake/mothball",
+                      {"age_days": 0, "apply": False})
+    assert code == 200
+    assert "candidates" in body["mothball"]
+
+
+def test_synonyms_snapshot_and_calibrate(tmp_path):
+    base, d, _p, _s = _start(tmp_path)
+    code, body = _req(base, "GET", "/v1/instances/fake/synonyms")
+    assert code == 200
+    code, body = _req(base, "POST", "/v1/instances/fake/snapshot",
+                      {"label": "q1"})
+    assert code == 200, body
+    code, body = _req(base, "GET", "/v1/instances/fake/snapshots")
+    assert any(s["label"] == "q1" for s in body["snapshots"])
+
+    code, body = _req(base, "POST", "/v1/instances/fake/calibrate",
+                      {"allow_no_traps": True})
+    assert code == 200, body
+    assert (d / "router.json").exists()
+
+
+def test_read_only_refuses_maintenance_mutations(tmp_path):
+    base, _d, plan_id, _s = _start(tmp_path, read_only=True)
+    assert _req(base, "POST", "/v1/instances/fake/snapshot",
+                {"label": "q1"})[0] == 403
+    assert _req(base, "POST", "/v1/instances/fake/mothball",
+                {"age_days": 0, "apply": True})[0] == 403
+    assert _req(base, "POST", "/v1/instances/fake/calibrate", {})[0] == 403
+    assert _req(base, "POST", "/v1/instances/fake/synonyms/apply", {})[0] == 403
+
+
+class _FakeMesh:
+    def discover(self, skill=""):
+        return [{"agent_id": "peer-a", "skills": ["count_rows"],
+                 "capabilities": [{"name": "count_rows",
+                                   "description": "row counts",
+                                   "triggers": ["how many rows"]}]}]
+
+
+def test_mesh_is_gated_and_discover_works(tmp_path):
+    base, _d, _p, _s = _start(tmp_path)
+    assert _req(base, "POST", "/v1/instances/fake/mesh/discover",
+                {"question": "how many rows"})[0] == 403
+
+    mesh_root = tmp_path / "mesh"
+    mesh_root.mkdir()
+    d, inst = _instance(mesh_root)
+    state = ApiState("mesh", str(d), inst)
+    port = _free_port()
+    threading.Thread(
+        target=serve_api,
+        kwargs={"instance_dirs": [str(d)], "states": [state],
+                "host": "127.0.0.1", "port": port,
+                "api_keys": ["testkey"], "allow_mesh": True,
+                "mesh_transport": _FakeMesh(), "quiet": True},
+        daemon=True).start()
+    base = f"http://127.0.0.1:{port}"
+    for _ in range(120):
+        try:
+            urllib.request.urlopen(base + "/healthz", timeout=1).read()
+            break
+        except Exception:
+            time.sleep(0.05)
+    code, body = _req(base, "POST", "/v1/instances/mesh/mesh/discover",
+                      {"question": "how many rows"})
+    assert code == 200
+    assert body["peers"][0]["agent_id"] == "peer-a"
+    code, body = _req(base, "POST", "/v1/instances/mesh/mesh/preflight",
+                      {"question": "how many rows"})
+    assert code == 200 and body["preflight"]["would_answer"] is True
+    code, _ = _req(base, "POST", "/v1/instances/mesh/mesh/delegate",
+                   {"peer": "ghost", "question": "how many rows"})
+    assert code == 404
+
+
 # ── OpenAPI ──────────────────────────────────────────────────────────────
 
 def test_openapi_paths_match_routes_and_validate(tmp_path):

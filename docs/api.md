@@ -168,6 +168,42 @@ curl -s -X POST -H "Authorization: Bearer $KEY" \
 `dry_run: true` returns `would_apply`/`would_undo` without a transition and
 is allowed in read-only mode.
 
+## Maintenance and operator endpoints
+
+A **fixed allowlist** of typed operations — never a generic shell. Reads are
+allowed in `--read-only`; the mutating ones (`shadow/{name}/promote`,
+`mothball` with `apply=true`, `synonyms/apply`, `calibrate`, `snapshot`) are
+refused with `403`.
+
+| Method | Path | Function |
+|---|---|---|
+| GET | `/v1/instances/{instance}/lint` | Trigger-collision lint (`?top=8`) |
+| GET | `/v1/instances/{instance}/gaps` | Mine refused/partial questions from the ask ledger, clustered |
+| POST | `/v1/instances/{instance}/golden/run` | Replay the golden bank in the self-test ledger |
+| GET | `/v1/instances/{instance}/shadow` | Shadowed-metric report |
+| POST | `/v1/instances/{instance}/shadow/{name}/evaluate` | Evaluate one shadowed metric against its oracle |
+| POST | `/v1/instances/{instance}/shadow/{name}/promote` | Promote after agreement (`min_agreement`, `min_runs`, `max_age_days`) |
+| POST | `/v1/instances/{instance}/mothball` | Demote stale probes; `{"age_days":180,"apply":false}` |
+| GET | `/v1/instances/{instance}/synonyms` | Propose synonym triggers from refusals |
+| POST | `/v1/instances/{instance}/synonyms/apply` | Apply approved proposals (`{"proposals":[…]}` or the saved proposal file) |
+| POST | `/v1/instances/{instance}/calibrate` | Fit refusal thresholds from the golden/trap banks; reloads the instance |
+| GET | `/v1/instances/{instance}/catalog` | `CATALOG.md` (or generated Markdown) |
+| GET | `/v1/instances/{instance}/openapi` | The probe-level OpenAPI document |
+| GET | `/v1/instances/{instance}/slo` | Refusal SLO (`window_hours`, `max_refusal_rate`, `min_asks`) |
+| GET | `/v1/instances/{instance}/snapshots` | Pinned observation snapshots |
+| POST | `/v1/instances/{instance}/snapshot` | Pin a snapshot (`{"label":"q3"}`) |
+| GET | `/v1/system/backends` | BoxLite/Microsandbox availability |
+| GET | `/v1/system/doors` | Registered sandbox doors |
+| POST | `/v1/instances/{instance}/mesh/discover` | Discover mesh peers matching a question |
+| POST | `/v1/instances/{instance}/mesh/preflight` | Signed local would-you-answer preflight |
+| POST | `/v1/instances/{instance}/mesh/delegate` | Delegate a question to a named peer |
+
+Mesh endpoints are **off by default**: start with `--allow-mesh` to enable
+them, and configure the gateway through `REACTORPRO_GATEWAY_URL` or the
+request's `gateway`. Delegation respects the mesh trust policy and loop/hop
+limits. `deploy` and `door` remain CLI-only: publishing ports and creating
+sandboxes from a web API is a different blast-radius class.
+
 ## Errors
 
 ```json

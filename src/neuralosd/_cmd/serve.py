@@ -40,6 +40,7 @@ def run(a):
         quiet=bool(getattr(a, "quiet", False)),
         with_model=bool(getattr(a, "model", False)),
         strict=bool(getattr(a, "strict", False)),
+        allow_mesh=bool(getattr(a, "allow_mesh", False)),
     )
 
 

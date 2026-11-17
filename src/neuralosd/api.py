@@ -10,14 +10,18 @@ in one and not the other.
 """
 import collections
 import concurrent.futures
+import contextlib
 import hashlib
 import hmac
+import io
 import json
 import os
 import re
 import ssl
+import tempfile
 import threading
 import time
+import types
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
@@ -82,6 +86,14 @@ def _match(template, path):
 def _int(value, default, lo, hi):
     try:
         n = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, n))
+
+
+def _num(value, default, lo, hi):
+    try:
+        n = float(value)
     except (TypeError, ValueError):
         return default
     return max(lo, min(hi, n))
@@ -164,10 +176,12 @@ class Api:
     def __init__(self, states, api_keys, read_only=False, timeout=300,
                  max_body=MAX_BODY, max_output=MAX_OUTPUT, audit=True,
                  plan_ttl=86400, quiet=False, host="127.0.0.1", port=9998,
-                 legacy_open=False):
+                 legacy_open=False, allow_mesh=False, mesh_transport=None):
         self.states = {s.name: s for s in states}
         self.api_keys = list(dict.fromkeys(k for k in api_keys if k))
         self.legacy_open = bool(legacy_open)
+        self.allow_mesh = bool(allow_mesh)
+        self.mesh_transport = mesh_transport
         self.read_only = read_only
         self.timeout = max(1, int(timeout))
         self.max_body = max(1, int(max_body))
@@ -439,6 +453,26 @@ class Handler(BaseHTTPRequestHandler):
             ("GET", "/v1/instances/{instance}/refusals"): self._h_refusals,
             ("POST", "/v1/instances/{instance}/reload"): self._h_reload,
             ("GET", "/v1/instances/{instance}/metrics"): self._h_metrics,
+            ("GET", "/v1/instances/{instance}/lint"): self._h_lint,
+            ("GET", "/v1/instances/{instance}/gaps"): self._h_gaps,
+            ("POST", "/v1/instances/{instance}/golden/run"): self._h_golden_run,
+            ("GET", "/v1/instances/{instance}/shadow"): self._h_shadow,
+            ("POST", "/v1/instances/{instance}/shadow/{name}/evaluate"): self._h_shadow_eval,
+            ("POST", "/v1/instances/{instance}/shadow/{name}/promote"): self._h_shadow_promote,
+            ("POST", "/v1/instances/{instance}/mothball"): self._h_mothball,
+            ("GET", "/v1/instances/{instance}/synonyms"): self._h_synonyms,
+            ("POST", "/v1/instances/{instance}/synonyms/apply"): self._h_synonyms_apply,
+            ("POST", "/v1/instances/{instance}/calibrate"): self._h_calibrate,
+            ("GET", "/v1/instances/{instance}/catalog"): self._h_catalog,
+            ("GET", "/v1/instances/{instance}/openapi"): self._h_openapi_probe,
+            ("GET", "/v1/instances/{instance}/slo"): self._h_slo,
+            ("GET", "/v1/instances/{instance}/snapshots"): self._h_snapshots,
+            ("POST", "/v1/instances/{instance}/snapshot"): self._h_snapshot,
+            ("GET", "/v1/system/backends"): self._h_backends,
+            ("GET", "/v1/system/doors"): self._h_doors,
+            ("POST", "/v1/instances/{instance}/mesh/discover"): self._h_mesh_discover,
+            ("POST", "/v1/instances/{instance}/mesh/preflight"): self._h_mesh_preflight,
+            ("POST", "/v1/instances/{instance}/mesh/delegate"): self._h_mesh_delegate,
         }
 
     # -- discovery ------------------------------------------------------
@@ -1099,6 +1133,319 @@ class Handler(BaseHTTPRequestHandler):
         return 200, "\n".join(lines) + "\n", {
             "content_type": "text/plain; version=0.0.4"}
 
+    # -- maintenance allowlist (typed; never a shell) --------------------
+    def _h_lint(self, params, body, query, rid):
+        s = self.api.state(params["instance"])
+        top = _int((query.get("top") or ["8"])[0], 8, 1, 50)
+        return 200, {"ok": True, "lint": s.inst.lint(top=top)}, {}
+
+    def _h_gaps(self, params, body, query, rid):
+        from . import loop
+        s = self.api.state(params["instance"])
+        router = getattr(s.inst, "router", s.inst)
+        limit = _int((query.get("limit") or ["2000"])[0], 2000, 1, 10000)
+        rows = []
+        try:
+            with open(router.audit_file, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(row, dict):
+                        rows.append(row)
+        except OSError:
+            rows = []
+        gaps, seen = [], set()
+        for row in rows[-limit:]:
+            question = row.get("question") or ""
+            key = question.lower()
+            if not key or key in seen:
+                continue
+            reason = row.get("refusal_reason")
+            refused = (row.get("results") in (None, [], {})
+                       and (reason or row.get("error")))
+            discarded = row.get("discarded") or {}
+            fuzzy = bool(discarded.get("terms") or discarded.get("filters"))
+            if refused:
+                seen.add(key)
+                gaps.append({"question": question,
+                             "probe": row.get("probe"),
+                             "reason": reason or "refused"})
+            elif fuzzy:
+                seen.add(key)
+                gaps.append({"question": question,
+                             "probe": row.get("probe"),
+                             "reason": "partial_answer",
+                             "discarded": discarded})
+        return 200, {"ok": True, "count": len(gaps), "gaps": gaps,
+                     "clusters": loop.cluster_gaps(gaps)}, {}
+
+    def _h_golden_run(self, params, body, query, rid):
+        from .instance import selftest_ledger
+        s = self.api.state(params["instance"])
+        path = os.path.join(s.path, "golden.json")
+        try:
+            with open(path, encoding="utf-8") as fh:
+                bank = json.load(fh)
+        except (OSError, ValueError) as exc:
+            raise _HttpError(400, "invalid_request",
+                             f"no readable golden.json: {exc}")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), selftest_ledger(s.inst):
+            summary = s.inst.golden_run(bank)
+        return 200, {"ok": True, "summary": summary}, {"instance": s.name}
+
+    def _h_shadow(self, params, body, query, rid):
+        from . import loop
+        s = self.api.state(params["instance"])
+        return 200, {"ok": True, "shadow": loop.shadow_report(s.path)}, {}
+
+    def _h_shadow_eval(self, params, body, query, rid):
+        from . import loop
+        s = self.api.state(params["instance"])
+        try:
+            result = loop.shadow_evaluate(s.path, params["name"])
+        except SystemExit as exc:
+            raise _HttpError(404, "not_found", str(exc))
+        return 200, {"ok": True, "result": result}, {}
+
+    def _h_shadow_promote(self, params, body, query, rid):
+        from . import loop
+        self._require_mutable()
+        s = self.api.state(params["instance"])
+        promoted = loop.shadow_promote(
+            s.path, params["name"],
+            min_agreement=_num(body.get("min_agreement"), 0.9, 0.0, 1.0),
+            min_runs=_int(body.get("min_runs"), 3, 1, 1000),
+            max_age_days=_num(body.get("max_age_days"), 14.0, 0.0, 36500.0))
+        return 200, {"ok": True, "promoted": bool(promoted),
+                     "name": params["name"]}, {}
+
+    def _h_mothball(self, params, body, query, rid):
+        from . import loop
+        apply = bool(body.get("apply", False))
+        if apply:
+            self._require_mutable()
+        s = self.api.state(params["instance"])
+        report = loop.mothball(
+            s.path,
+            age_days=_num(body.get("age_days"), 180.0, 0.0, 36500.0),
+            apply=apply)
+        return 200, {"ok": True, "mothball": report}, {}
+
+    def _h_synonyms(self, params, body, query, rid):
+        from . import loop
+        s = self.api.state(params["instance"])
+        router = getattr(s.inst, "router", s.inst)
+        blob = loop.propose_synonyms(s.path, audit_path=router.audit_file)
+        return 200, {"ok": True, "proposals": blob.get("proposals", []),
+                     "count": len(blob.get("proposals", []))}, {}
+
+    def _h_synonyms_apply(self, params, body, query, rid):
+        from . import loop
+        self._require_mutable()
+        s = self.api.state(params["instance"])
+        path = os.path.join(s.path, "synonym_proposals.json")
+        if isinstance(body.get("proposals"), list):
+            path = os.path.join(s.path, ".synonym_api.json")
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump({"instance": s.path, "proposals":
+                           body["proposals"]}, fh)
+        try:
+            summary = loop.apply_synonyms(s.path, path)
+        except (OSError, ValueError) as exc:
+            raise _HttpError(400, "invalid_request", str(exc))
+        finally:
+            if path.endswith(".synonym_api.json"):
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+        return 200, {"ok": True, **summary}, {}
+
+    def _h_calibrate(self, params, body, query, rid):
+        from ._cmd import calibrate
+        self._require_mutable()
+        s = self.api.state(params["instance"])
+        ns = types.SimpleNamespace(
+            instance_dir=s.path,
+            golden=os.path.join(s.path, "golden.json"),
+            traps=os.path.join(s.path, "traps.json"),
+            allow_no_traps=bool(body.get("allow_no_traps", False)),
+            base=None)
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                calibrate.run(ns)
+        except SystemExit as exc:
+            raise _HttpError(400, "invalid_request", str(exc))
+        self._reload_state(s)
+        return 200, {"ok": True, "output": out.getvalue()[-4000:]}, {
+            "instance": s.name}
+
+    def _h_catalog(self, params, body, query, rid):
+        s = self.api.state(params["instance"])
+        path = os.path.join(s.path, "CATALOG.md")
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError:
+            lines = [f"# {s.name}", ""]
+            for meta in s.inst.router.metas:
+                lines.append(f"- **{meta.name}** — {meta.description}")
+                if meta.triggers:
+                    lines.append(f"  - e.g. {meta.triggers[0]!r}")
+            text = "\n".join(lines) + "\n"
+        return 200, {"ok": True, "catalog": text}, {}
+
+    def _h_openapi_probe(self, params, body, query, rid):
+        s = self.api.state(params["instance"])
+        return 200, {"ok": True, "openapi": s.inst.openapi()}, {"no_request_id": True}
+
+    def _h_slo(self, params, body, query, rid):
+        from . import loop
+        s = self.api.state(params["instance"])
+        stats = loop.refusal_rate(
+            s.path,
+            window_hours=_int((query.get("window_hours") or ["24"])[0],
+                              24, 1, 24 * 365),
+            max_refusal_rate=_num(
+                (query.get("max_refusal_rate") or ["0.4"])[0], 0.4, 0.0, 1.0),
+            min_asks=_int((query.get("min_asks") or ["10"])[0], 10, 0, 10**6))
+        return 200, {"ok": True, "slo": stats}, {}
+
+    def _h_snapshots(self, params, body, query, rid):
+        s = self.api.state(params["instance"])
+        directory = os.path.join(s.path, "snapshots")
+        out = []
+        try:
+            names = sorted(os.listdir(directory))
+        except OSError:
+            names = []
+        for name in names:
+            if not name.endswith(".json"):
+                continue
+            path = os.path.join(directory, name)
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    blob = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            out.append({"label": blob.get("label"),
+                        "file": name, "ts": blob.get("ts"),
+                        "hash": blob.get("hash")})
+        return 200, {"ok": True, "snapshots": out}, {}
+
+    def _h_snapshot(self, params, body, query, rid):
+        from . import loop
+        self._require_mutable()
+        s = self.api.state(params["instance"])
+        label = body.get("label")
+        if not isinstance(label, str) or not label.strip():
+            raise _HttpError(400, "invalid_request", "label is required")
+        try:
+            report = loop.pin_snapshot(s.path, label.strip())
+        except SystemExit as exc:
+            raise _HttpError(400, "invalid_request", str(exc))
+        return 200, {"ok": True, **report}, {}
+
+    def _h_backends(self, params, body, query, rid):
+        backends = []
+        for name in ("boxlite", "microsandbox"):
+            try:
+                mod = __import__(name)
+                backends.append({"name": name, "available": True,
+                                 "version": getattr(mod, "__version__", None)})
+            except Exception:
+                backends.append({"name": name, "available": False,
+                                 "version": None})
+        return 200, {"ok": True, "backends": backends}, {}
+
+    def _h_doors(self, params, body, query, rid):
+        path = os.path.join(os.path.expanduser("~/.neuralosd"), "doors.json")
+        try:
+            with open(path, encoding="utf-8") as fh:
+                doors = json.load(fh)
+        except (OSError, ValueError):
+            doors = {}
+        return 200, {"ok": True, "doors": doors}, {}
+
+    def _mesh(self, body):
+        if not self.api.allow_mesh:
+            raise _HttpError(403, "forbidden",
+                             "mesh endpoints are disabled; start with "
+                             "--allow-mesh")
+        transport = self.api.mesh_transport or _mesh_transport(
+            body.get("gateway"))
+        return transport
+
+    def _h_mesh_discover(self, params, body, query, rid):
+        from .synapse import discover_peers
+        s = self.api.state(params["instance"])
+        transport = self._mesh(body)
+        question = body.get("question")
+        if not isinstance(question, str) or not question.strip():
+            raise _HttpError(400, "invalid_request", "question is required")
+        peers = discover_peers(
+            transport, question, s.name,
+            limit=_int(body.get("limit"), 5, 1, 20),
+            preflight=bool(body.get("preflight", False)))
+        return 200, {"ok": True, "peers": peers}, {}
+
+    def _h_mesh_preflight(self, params, body, query, rid):
+        from .synapse import MeshAgent
+        s = self.api.state(params["instance"])
+        transport = self._mesh(body)
+        question = body.get("question")
+        if not isinstance(question, str) or not question.strip():
+            raise _HttpError(400, "invalid_request", "question is required")
+        agent = MeshAgent(instance_name=s.name, router=s.inst.router,
+                          transport=transport)
+        report = agent.preflight(question)
+        return 200, {"ok": True, "preflight": report}, {}
+
+    def _h_mesh_delegate(self, params, body, query, rid):
+        from .synapse import delegate_to_peer, discover_peers
+        s = self.api.state(params["instance"])
+        transport = self._mesh(body)
+        peer_id = body.get("peer")
+        question = body.get("question")
+        if not peer_id or not isinstance(question, str) or not question.strip():
+            raise _HttpError(400, "invalid_request",
+                             "peer and question are required")
+        peers = discover_peers(transport, question, s.name)
+        peer = next((p for p in peers if p.get("agent_id") == peer_id), None)
+        if peer is None:
+            raise _HttpError(404, "not_found",
+                             f"peer not found or does not match: {peer_id}")
+        result = delegate_to_peer(
+            transport, peer, question,
+            trust=body.get("trust") or "known")
+        if result is None:
+            raise _HttpError(500, "internal", "delegation returned no result")
+        return 200, {"ok": True, "delegation": result}, {}
+
+    def _reload_state(self, state):
+        from ._cmd._common import load_instance
+        old = getattr(state.inst, "router", state.inst)
+        inst = load_instance(
+            state.path,
+            with_model=getattr(old, "model_fallback", None) is not None)
+        router = getattr(inst, "router", inst)
+        router.confirm_store = state.confirm
+        state.inst = inst
+
+
+def _mesh_transport(gateway=None):
+    from .synapse import SynapseHTTP
+    gw = gateway or os.environ.get("REACTORPRO_GATEWAY_URL",
+                                   "http://127.0.0.1:3000")
+    return SynapseHTTP(gateway=gw)
+
 
 def _docs_html():
     rows = "".join(
@@ -1139,7 +1486,8 @@ def serve_api(instance_dirs, host="127.0.0.1", port=9998, api_keys=None,
               api_key_file=None, read_only=False, tls_cert=None, tls_key=None,
               timeout=300, max_body=MAX_BODY, max_output=MAX_OUTPUT,
               audit=True, plan_ttl=86400, quiet=False, with_model=False,
-              strict=False, states=None):
+              strict=False, allow_mesh=False, mesh_transport=None,
+              states=None):
     """Load the instances and serve the API. Blocks."""
     from ._cmd._common import load_instance
 
@@ -1179,7 +1527,8 @@ def serve_api(instance_dirs, host="127.0.0.1", port=9998, api_keys=None,
     api = Api(states, keys, read_only=read_only, timeout=timeout,
               max_body=max_body, max_output=max_output, audit=audit,
               plan_ttl=plan_ttl, quiet=quiet, host=host, port=port,
-              legacy_open=not explicit_key)
+              legacy_open=not explicit_key, allow_mesh=allow_mesh,
+              mesh_transport=mesh_transport)
     context = None
     if tls_cert:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)

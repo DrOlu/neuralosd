@@ -184,6 +184,9 @@ def build_parser():
                          help="append API audit rows (default on)")
     p_serve.add_argument("--plan-ttl", type=int, default=86400,
                          help="seconds a proposed plan stays applicable")
+    p_serve.add_argument("--allow-mesh", action="store_true",
+                         help="enable the mesh discover/preflight/delegate "
+                              "endpoints (outward network; off by default)")
     p_serve.add_argument("--quiet", action="store_true")
     p_serve.add_argument("--host", default="127.0.0.1",
                          help="Bind address (default 127.0.0.1). A "
