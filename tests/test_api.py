@@ -472,6 +472,41 @@ def test_docs_and_generated_client_smoke(tmp_path):
     assert "get_v1_instances" in operations
 
 
+# ── legacy /ask compatibility ───────────────────────────────────────────
+
+def test_legacy_ask_requires_auth_when_a_key_is_configured(tmp_path):
+    base, _d, _p, _s = _start(tmp_path)      # explicit key: "testkey"
+    code, body = _req(base, "POST", "/ask", {"question": "how many rows"})
+    assert code == 200
+    assert body["probe"] == "count_rows"    # raw envelope, no wrapper
+    assert _req(base, "POST", "/ask", {"question": "how many rows"},
+                key=None)[0] == 401
+
+
+def test_legacy_ask_stays_open_on_loopback_with_no_configured_key(tmp_path):
+    d, inst = _instance(tmp_path)
+    state = ApiState("fake", str(d), inst)
+    port = _free_port()
+    threading.Thread(
+        target=serve_api,
+        kwargs={"instance_dirs": [str(d)], "states": [state],
+                "host": "127.0.0.1", "port": port, "api_keys": None,
+                "quiet": True},
+        daemon=True).start()
+    base = f"http://127.0.0.1:{port}"
+    for _ in range(120):
+        try:
+            urllib.request.urlopen(base + "/healthz", timeout=1).read()
+            break
+        except Exception:
+            time.sleep(0.05)
+    code, body = _req(base, "POST", "/ask", {"question": "how many rows"},
+                      key=None)
+    assert code == 200 and body["probe"] == "count_rows"
+    # the /v1 surface still requires the default lab key
+    assert _req(base, "GET", "/v1/instances", key=None)[0] == 401
+
+
 # ── multi-instance ──────────────────────────────────────────────────────
 
 def test_multi_instance_routing(tmp_path):

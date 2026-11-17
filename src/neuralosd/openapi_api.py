@@ -61,6 +61,11 @@ ROUTES = [
      "Reload menu/model/config (mutating)"),
     ("GET", "/v1/instances/{instance}/metrics", "admin",
      "Prometheus-style metrics"),
+    # Legacy raw-envelope route, kept for the existing HTTP clients/smoke
+    # suite. On a loopback server with no explicitly configured key it stays
+    # open, matching the pre-3.2 contract; the /v1 surface is always
+    # authenticated.
+    ("POST", "/ask", "ask", "Legacy raw-envelope ask"),
     ("GET", "/openapi.json", "discovery", "This document (no auth)"),
     ("GET", "/docs", "discovery", "Self-contained HTML reference (no auth)"),
 ]
@@ -193,6 +198,8 @@ def _params(path):
 
 
 def _ok_schema(path):
+    if path == "/ask":
+        return "Envelope"
     if path.endswith("/ask") or "/probes/" in path:
         return "AskResponse"
     if path.endswith("/plans") or path.endswith("/plans/{plan_id}"):

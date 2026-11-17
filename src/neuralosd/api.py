@@ -163,9 +163,11 @@ class _Server(ThreadingHTTPServer):
 class Api:
     def __init__(self, states, api_keys, read_only=False, timeout=300,
                  max_body=MAX_BODY, max_output=MAX_OUTPUT, audit=True,
-                 plan_ttl=86400, quiet=False, host="127.0.0.1", port=9998):
+                 plan_ttl=86400, quiet=False, host="127.0.0.1", port=9998,
+                 legacy_open=False):
         self.states = {s.name: s for s in states}
         self.api_keys = list(dict.fromkeys(k for k in api_keys if k))
+        self.legacy_open = bool(legacy_open)
         self.read_only = read_only
         self.timeout = max(1, int(timeout))
         self.max_body = max(1, int(max_body))
@@ -318,6 +320,10 @@ class Handler(BaseHTTPRequestHandler):
             if template is None:
                 raise _HttpError(404, "not_found", "not found")
             open_paths = {"/healthz", "/openapi.json", "/docs"}
+            if self.api.legacy_open:
+                # Pre-3.2 compatibility: a loopback server with no explicit
+                # key kept /ask open. The /v1 surface is always authenticated.
+                open_paths.add("/ask")
             if template not in open_paths:
                 self._authenticate()
                 opened["key_id"] = self.key_id
@@ -404,6 +410,7 @@ class Handler(BaseHTTPRequestHandler):
             ("GET", "/healthz"): self._h_healthz,
             ("GET", "/openapi.json"): self._h_openapi,
             ("GET", "/docs"): self._h_docs,
+            ("POST", "/ask"): self._h_ask_legacy,
             ("GET", "/v1/version"): self._h_version,
             ("GET", "/v1/instances"): self._h_instances,
             ("GET", "/v1/instances/{instance}"): self._h_instance,
@@ -599,6 +606,27 @@ class Handler(BaseHTTPRequestHandler):
             return 0
 
     # -- ask / probes ---------------------------------------------------
+    def _h_ask_legacy(self, params, body, query, rid):
+        """The pre-3.2 raw-envelope `/ask`, kept for existing clients."""
+        s = self.api.primary()
+        question = body.get("question")
+        if not isinstance(question, str) or not question.strip():
+            raise _HttpError(400, "invalid_request",
+                             "question must be a non-empty string")
+        qsha = hashlib.sha256(question.encode()).hexdigest()
+        with audit_source("serve"):
+            try:
+                env = self._call(lambda: s.inst.ask(question),
+                                 float(self.api.timeout))
+            except NoResults as exc:
+                env = dict(exc.envelope)
+                env["mode"] = "refused"
+                return 422, env, {"instance": s.name,
+                                  "refusal_reason": env.get("refusal_reason"),
+                                  "question_sha256": qsha}
+        return 200, env, {"instance": s.name, "probe": env.get("probe"),
+                          "question_sha256": qsha}
+
     def _h_ask(self, params, body, query, rid):
         s = self.api.state(params["instance"])
         question = body.get("question")
@@ -1131,7 +1159,9 @@ def serve_api(instance_dirs, host="127.0.0.1", port=9998, api_keys=None,
                 inst.router.strict_discards = True
             states.append(ApiState(name, path, inst))
     keys = list(api_keys or [])
+    explicit_key = bool(keys)
     if api_key_file:
+        explicit_key = True
         try:
             with open(api_key_file, encoding="utf-8") as fh:
                 keys.extend(line.strip() for line in fh if line.strip())
@@ -1148,7 +1178,8 @@ def serve_api(instance_dirs, host="127.0.0.1", port=9998, api_keys=None,
 
     api = Api(states, keys, read_only=read_only, timeout=timeout,
               max_body=max_body, max_output=max_output, audit=audit,
-              plan_ttl=plan_ttl, quiet=quiet, host=host, port=port)
+              plan_ttl=plan_ttl, quiet=quiet, host=host, port=port,
+              legacy_open=not explicit_key)
     context = None
     if tls_cert:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
