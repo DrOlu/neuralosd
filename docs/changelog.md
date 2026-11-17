@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.2.2 — legacy `/ask` compatibility
+
+The first-class API moved the authenticated surface to `/v1`, which broke
+existing HTTP smoke clients that post to `/ask`. The pre-3.2 raw-envelope
+`POST /ask` is kept: on a loopback server with **no** explicitly configured
+key it stays open (matching the old contract); when a key is configured it
+requires auth; the `/v1` surface is always authenticated. No other change.
+
 ## 3.2.1 — audit durability
 
 The API audit row was appended **after** the response was sent, so a caller
