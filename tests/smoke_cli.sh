@@ -345,25 +345,44 @@ cleanup_serve
 
 echo
 # ── auth: serve with a token, prove the door locks ─────────────────────────
-AUTH_PORT=8871
-"$NS" serve --instance-dir ./inst --port "$AUTH_PORT" --auth-token sdk-secret \
-    >auth_serve.log 2>&1 &
-AUTH_PID=$!
-for i in 1 2 3 4 5; do
-  sleep 1
-  curl -s --max-time 1 "http://127.0.0.1:$AUTH_PORT/healthz" >/dev/null 2>&1 && break
+AUTH_BASE=$(( 21000 + ($$ % 1500) ))
+AUTH_PORT=""
+AUTH_PID=""
+AUTH_UP=0
+for i in 0 1 2 3 4 5 6 7; do
+  PORT_TRY=$(( AUTH_BASE + i ))
+  "$NS" serve --instance-dir ./inst --port "$PORT_TRY" --auth-token sdk-secret \
+      >auth_serve.log 2>&1 &
+  AUTH_PID=$!
+  for _ in $(seq 1 20); do
+    sleep 1
+    if curl -s --max-time 1 "http://127.0.0.1:$PORT_TRY/healthz" >/dev/null 2>&1; then
+      AUTH_UP=1; AUTH_PORT=$PORT_TRY; break
+    fi
+    kill -0 "$AUTH_PID" 2>/dev/null || break   # server died (e.g. port in use)
+  done
+  [ "$AUTH_UP" = "1" ] && break
+  kill "$AUTH_PID" 2>/dev/null; wait "$AUTH_PID" 2>/dev/null
+  AUTH_PID=""
 done
-CODE_NO=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-  -H 'Content-Type: application/json' \
-  -d '{"question":"how many rows"}' "http://127.0.0.1:$AUTH_PORT/ask")
-CODE_OK=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-  -H 'Content-Type: application/json' -H 'Authorization: Bearer sdk-secret' \
-  -d '{"question":"how many rows"}' "http://127.0.0.1:$AUTH_PORT/ask")
-CODE_HZ=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$AUTH_PORT/healthz")
-kill "$AUTH_PID" 2>/dev/null; wait "$AUTH_PID" 2>/dev/null
+CODE_NO="000"; CODE_OK="000"; CODE_HZ="000"
+if [ "$AUTH_UP" = "1" ]; then
+  CODE_NO=$(curl -s --max-time 20 -o /dev/null -w "%{http_code}" -X POST \
+    -H 'Content-Type: application/json' \
+    -d '{"question":"how many rows"}' "http://127.0.0.1:$AUTH_PORT/ask")
+  CODE_OK=$(curl -s --max-time 20 -o /dev/null -w "%{http_code}" -X POST \
+    -H 'Content-Type: application/json' -H 'Authorization: Bearer sdk-secret' \
+    -d '{"question":"how many rows"}' "http://127.0.0.1:$AUTH_PORT/ask")
+  CODE_HZ=$(curl -s --max-time 20 -o /dev/null -w "%{http_code}" "http://127.0.0.1:$AUTH_PORT/healthz")
+fi
+[ -n "$AUTH_PID" ] && { kill "$AUTH_PID" 2>/dev/null; wait "$AUTH_PID" 2>/dev/null; }
 if [ "$CODE_NO" = "401" ]; then echo "  ✓ auth: no token -> 401"; pass=$((pass+1)); else echo "  ✗ auth: no token -> $CODE_NO (want 401)"; fail=$((fail+1)); fi
 if [ "$CODE_OK" = "200" ]; then echo "  ✓ auth: correct token -> 200"; pass=$((pass+1)); else echo "  ✗ auth: correct token -> $CODE_OK (want 200)"; fail=$((fail+1)); fi
 if [ "$CODE_HZ" = "200" ]; then echo "  ✓ auth: /healthz stays open"; pass=$((pass+1)); else echo "  ✗ auth: /healthz -> $CODE_HZ (want 200)"; fail=$((fail+1)); fi
+if [ "$AUTH_UP" != "1" ]; then
+  echo "  ✗ auth: serve failed to start"; echo "----- auth_serve.log -----"; cat auth_serve.log 2>/dev/null; echo "--------------------------"
+  fail=$((fail+1))
+fi
 
 echo "smoke: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
