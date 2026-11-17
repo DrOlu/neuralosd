@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.2.1 — audit durability
+
+The API audit row was appended **after** the response was sent, so a caller
+that read `<instance>/audit.jsonl` immediately after an ask could see no row
+(the CI test caught the race; it passed locally by timing). The row is now
+written before the response. The write remains exception-safe, so a logging
+failure still cannot turn an answer into an error. No API surface change.
+
 ## 3.2.0 — the first-class HTTP API
 
 `neuralosd serve` is now an authenticated `/v1` API over the same engine,
