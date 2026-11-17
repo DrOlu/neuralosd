@@ -1,5 +1,34 @@
 # Changelog
 
+## 3.2.0 — the first-class HTTP API
+
+`neuralosd serve` is now an authenticated `/v1` API over the same engine,
+with a complete OpenAPI 3.1 document at `/openapi.json` and a
+self-contained reference at `/docs`. One `ROUTES` table drives both the
+server dispatch and the spec, so a path cannot exist in one and not the
+other.
+
+- **Auth and safety:** bearer or `X-API-Key`, constant-time compare, key-id
+  (SHA-256 prefix) in the audit row, never the key. `--read-only` refuses
+  apply/undo/reload (dry-runs remain), `--tls-cert/--tls-key` wrap the
+  listener, and a non-loopback bind is refused while the default lab key is
+  in use.
+- **Surface:** version/instances/health/capabilities/menu/probe/gate/model/
+  golden/config/stats discovery; `ask`; typed `probes/{probe}/run`; request
+  replay and envelope; plans (`proposed → applied → undone`, 409/410,
+  idempotency, per-instance lock); audit rows with a hash chain and
+  `audit/verify`; refusals; reload; Prometheus-style metrics.
+- **Limits:** 1 MiB body (413), 8 MiB output, per-call timeout (504),
+  64 concurrent requests (503), request IDs on every response.
+- **Audit privacy:** rows carry `question_sha256`, never the raw question.
+- **Multi-instance:** `--instance-dir` is repeatable; the directory basename
+  is the instance name.
+
+The HTTP service moved from the unprefixed legacy paths to `/v1`;
+`service.serve` remains available for library users and the CLI commands
+(`ask`, `audit`, `gate`, …) are unchanged. Legacy `--instances-dir` mode is
+still supported. Docs: `docs/api.md`; tests: `tests/test_api.py` (21).
+
 ## 3.1.1 — bug check
 
 - **Verification:** only a positive golden item whose `expect_probe` names
