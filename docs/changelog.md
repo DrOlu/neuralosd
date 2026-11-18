@@ -1,5 +1,62 @@
 # Changelog
 
+## 3.5.1 — holistic review fixes
+
+A full review of the CLI, runtime, HTTP surface, integrations and packaging.
+Every item below was reproduced before it was fixed.
+
+**Security**
+- `--read-only` refused `apply`/maintenance but **not HITL confirmation**;
+  `POST /confirm/{token}` now requires a mutable server.
+- A chunked or length-less POST body was silently read as `{}`, so
+  `apply {"dry_run": true}` became a real apply. Chunked bodies now get
+  `411 Length Required` (both `/v1` and the legacy service).
+- `serve --instances-dir` ignored `--api-key` and started with **no auth**.
+- `DELETE /runs/{id}` could cancel another agent's run; ownership is checked.
+- Gateway error bodies were reflected through the 500 envelope (an internal
+  service data leak on a caller-supplied URL); gateway URLs are now validated
+  and error bodies are not echoed. Mesh routes honour the API call timeout.
+- Secret masking missed non-string scalars (`bytes`, `Decimal`, `UUID`),
+  PII used as a mapping key, and matched hints by substring (`"pin"` masked
+  `shipping`). Cache hits replayed storage-masked answers; PII-bearing
+  answers are no longer cached at all.
+- `SystemExit` from instance loading escaped as a dropped connection; it is
+  now a JSON error (and audited).
+
+**Runtime correctness**
+- A probe with several integer args received the same number for each
+  (`uid=5, limit=5` for "top 5 orders for user 42"). Multi-int extraction now
+  requires an explicit name pairing, else refuses `args_not_extractable`.
+- Enum values bounded by non-word characters (`.NET`, `C++`, `50%`) never
+  matched; an optional enum was then silently set to the FIRST value.
+- Numeric enum values crashed normalisation (`TypeError: len(int)`).
+- The multi-word qualifier `on hold` could never be satisfied.
+- Golden/trap replays diverted concurrent USER audit rows into the self-test
+  ledger; the redirect is now request-scoped (ContextVar).
+- A crash during birth-trap proof was recorded as a proven refusal.
+- Snapshot labels reject Windows-invalid characters; gossip skips valid JSON
+  that is not an object.
+- The boxlite **door proxy called an undefined helper**: every proxied
+  request returned 502. It now buffers headers/body with an 8 MiB cap.
+
+**Self-update, CLI and docs**
+- `update` offers the HIGHEST release, not the newest creation date (a
+  backfilled tag no longer regresses the install); PEP 440 `3.5`,
+  `.postN` and `.devN` parse; a read-only executable in a writable directory
+  updates again.
+- `neuralosd help` examples are now **parse-tested**: the suite runs
+  argparse over every shipped example, and all mismatched flags, positionals,
+  mesh subcommands and docs examples were corrected.
+- The SDK version carrier (stuck at 2.9.10) is synced and pinned by a test;
+  the npm package is MIT (was Apache-2.0) and ships the licence; the npm
+  launcher now executes the installed binary instead of printing usage and
+  exiting 0.
+- Docs: removed the nonexistent SignPath/Authenticode claim, corrected mesh
+  trust/Ed25519 and gateway-default claims, the deploy quick-start, the
+  `--model` flag and the smoke/test counts.
+
+Tests: 1,581 passed, 8 skipped.
+
 ## 3.5.0 — comprehensive help, built for agents
 
 `-h/--help` is now a real manual, not a flag list.

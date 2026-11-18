@@ -1,8 +1,8 @@
 {
   "name": "neuralosd",
-  "version": "3.5.0",
+  "version": "3.5.1",
   "description": "neuralOSd CLI — installer for the verified agent-runtime binaries (gateway/runtime for neuralOS instances).",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "author": "Hyperspace Technologies <agent@superagent.ng>",
   "homepage": "https://drolu.github.io/neuralosd/",
   "repository": {
@@ -26,7 +26,8 @@
   },
   "files": [
     "bin/",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=18"
