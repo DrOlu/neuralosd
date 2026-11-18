@@ -113,9 +113,20 @@ def install_via():
 
 
 def is_editable():
+    if install_kind() == "frozen":
+        return False
     try:
+        from pathlib import Path
         dist = importlib.metadata.distribution("neuralosd")
-        raw = dist.read_text("direct_url.json", encoding="utf-8")
+        # setuptools develop / old-style editable installs have no wheel.
+        meta = str(getattr(dist, "_path", "") or "")
+        if meta.endswith((".egg-info", ".egg-link")):
+            return True
+        entry = next((f for f in (dist.files or [])
+                      if f.name == "direct_url.json"), None)
+        if entry is None:
+            return False
+        raw = Path(dist.locate_file(entry)).read_text(encoding="utf-8")
     except Exception:
         return False
     try:

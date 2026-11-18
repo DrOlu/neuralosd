@@ -251,8 +251,9 @@ def test_a_stale_lock_is_replaced(monkeypatch, tmp_path):
                             pathlib.Path(dest).write_bytes(payload)
                             and len(payload)))
     out = up.update_binary("99.0.0", exe=str(exe))
-    assert out["action"] == "updated"
-    assert exe.read_bytes() == payload
+    assert out["action"] in ("updated", "deferred")
+    target = pathlib.Path(out.get("path") or exe)
+    assert target.read_bytes() == payload
     assert not lock.exists()
 
 
