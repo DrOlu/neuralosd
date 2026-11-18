@@ -1,6 +1,6 @@
 # CLI reference — every subcommand
 
-`neuralosd` ships **40 top-level subcommands**, a `mesh` group with **20 subcommands**, and a `door` group with **3 subcommands**. This page is the complete reference: one entry per command, its key flags, and a runnable example. For guided tutorials see [usage](usage.md); for the Python/HTTP API see [reference](reference.md); for end-to-end recipes see the [cookbook](cookbook.md).
+`neuralosd` ships **41 top-level subcommands**, a `mesh` group with **20 subcommands**, and a `door` group with **3 subcommands**. This page is the complete reference: one entry per command, its key flags, and a runnable example. For guided tutorials see [usage](usage.md); for the Python/HTTP API see [reference](reference.md); for end-to-end recipes see the [cookbook](cookbook.md).
 
 Conventions used everywhere below:
 
@@ -18,7 +18,7 @@ Conventions used everywhere below:
 | **Verify & observe** | `golden` · `truth` · `invariants` · `calibrate` · `lint` · `openapi` · `diff` · `slo` · `fleet` · `badge` · `doctor` · `audit` |
 | **Act & watch** | `actuate` · `watch` · `roles` · `scrub` |
 | **Mesh (Synapse)** | `mesh serve` · `register` · `discover` · `agents` · `ask` · `delegate` · `send` · `task-create/status/cancel/retry` · `mailbox` · `trust` · `setup` · `gossip-push` · `gossip-pull` · `preflight` · `gaps` · `verify` · `health` |
-| **Meta** | `docs` · `version` · `update` |
+| **Meta** | `docs` · `version` · `update` · `help` |
 
 ---
 
@@ -534,6 +534,22 @@ A scheduler can run the check daily and only alert on a new version:
 ```sh
 neuralosd update --check --json | grep -q '"update_available": true' && echo "update available"
 ```
+
+### `help` — the full help catalogue
+
+```sh
+neuralosd help                    # every command, grouped, with a one-line purpose
+neuralosd help ask                # the same page as `neuralosd ask --help`
+neuralosd help mesh.serve         # nested commands too
+neuralosd help --json             # machine-readable catalogue
+```
+
+Every command's `-h/--help` is written for someone who has never seen the
+repository: a full description, the usage line, runnable examples, exit
+codes, safety notes (does it mutate state?), and related commands. The JSON
+catalogue additionally exposes every flag with its dest, default, choices
+and required marker, so an orchestrating agent can discover the CLI without
+parsing prose.
 
 ---
 

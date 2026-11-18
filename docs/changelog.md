@@ -1,5 +1,27 @@
 # Changelog
 
+## 3.5.0 — comprehensive help, built for agents
+
+`-h/--help` is now a real manual, not a flag list.
+
+- Every top-level command (41) and every nested `mesh` (20) and `door` (3)
+  command has a full description, its usage line, runnable examples, exit
+  codes, a safety note (does it mutate state?) and related commands.
+- `neuralosd help` lists the whole surface; `neuralosd help <command>` (or
+  `mesh.serve`) prints one page; `neuralosd help --json` emits the complete
+  catalogue — descriptions, examples, exit codes and every flag with dest,
+  default, choices and required marker — so an orchestrating agent can
+  discover and drive the CLI without parsing prose.
+- The root help states the refusal contract and its reasons, so an agent
+  learns the answer-or-refuse rule before it sends a question.
+
+Also carries the Windows portability fix that prevented the 3.4.0 binary
+release: the update tests no longer assume the POSIX atomic-swap outcome,
+and editable installs are detected through old-style develop metadata as
+well as PEP 660 `direct_url.json`.
+
+Tests: `tests/test_help.py` (8); full suite 1549 passed, 8 skipped.
+
 ## 3.4.0 — self-update, verified
 
 `neuralosd update` and `neuralosd version` (plus `neuralosd --version`).

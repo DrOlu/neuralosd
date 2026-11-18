@@ -81,9 +81,12 @@ def build_parser():
     """The full argparse tree. Factored out of main() so tests (and the
     E5-class dest-contract test) can inspect what dests the parser sets
     without executing the dispatch."""
+    from . import help as _help
     ap = argparse.ArgumentParser(
         prog="neuralosd",
-        description="Deterministic-first agentic runtime for neuralOS")
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=_help.main_description(),
+        epilog=_help.main_epilog())
     from . import __version__
     ap.add_argument("--version", action="version",
                     version=f"%(prog)s {__version__}")
@@ -746,6 +749,15 @@ def build_parser():
     p_ver = sub.add_parser("version", help="Print the installed version")
     p_ver.add_argument("--json", action="store_true", help="machine-readable")
 
+    # help — detailed catalogue, per command or machine-readable
+    p_help = sub.add_parser(
+        "help", help="Detailed help for every command, with examples")
+    p_help.add_argument("topic", nargs="?", default=None,
+                        help="command name, e.g. ask (or mesh.serve)")
+    p_help.add_argument("--json", action="store_true",
+                        help="machine-readable catalogue with flags/defaults")
+
+    _help.install(sub)
     return ap
 
 
@@ -904,6 +916,9 @@ def main():
     elif a.command == "update":
         from ._cmd import update
         raise SystemExit(update.run(a))
+    elif a.command == "help":
+        from . import help as _help
+        raise SystemExit(_help.run(a))
     elif a.command == "backends":
         from .backends import available_backends
         av = available_backends()

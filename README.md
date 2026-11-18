@@ -20,6 +20,11 @@ Keep an install current with `neuralosd update --check` (or `neuralosd update
 standalone binaries verify the release's sha256 before an atomic swap. There
 is no silent background updater.
 
+Every command documents itself: `neuralosd help` lists the surface,
+`neuralosd help <command>` (or `<command> --help`) prints a full page with
+examples, exit codes and safety notes, and `neuralosd help --json` emits the
+machine-readable catalogue for orchestrating agents.
+
 ## Single-file binaries (no Python required)
 
 Every [release](https://github.com/DrOlu/neuralosd/releases) ships standalone
