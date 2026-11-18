@@ -84,6 +84,9 @@ def build_parser():
     ap = argparse.ArgumentParser(
         prog="neuralosd",
         description="Deterministic-first agentic runtime for neuralOS")
+    from . import __version__
+    ap.add_argument("--version", action="version",
+                    version=f"%(prog)s {__version__}")
     sub = ap.add_subparsers(dest="command")
 
     # init
@@ -724,6 +727,25 @@ def build_parser():
     p_sc.add_argument("--python", default="3.12")
     p_sc.add_argument("--force", action="store_true", help="rebuild from scratch")
 
+    # update — explicit, verified, never silent
+    p_up = sub.add_parser(
+        "update", help="Check for or apply a newer neuralosd release")
+    p_up.add_argument("--check", action="store_true",
+                      help="report current and latest; change nothing")
+    p_up.add_argument("--yes", "-y", action="store_true",
+                      help="apply without the interactive prompt")
+    p_up.add_argument("--force", action="store_true",
+                      help="apply even when the published version is not newer")
+    p_up.add_argument("--channel", choices=["stable", "pre"], default="stable",
+                      help="release channel (default: stable)")
+    p_up.add_argument("--json", action="store_true", help="machine-readable")
+    p_up.add_argument("--timeout", type=int, default=15,
+                      help="network timeout in seconds (default 15)")
+
+    # version
+    p_ver = sub.add_parser("version", help="Print the installed version")
+    p_ver.add_argument("--json", action="store_true", help="machine-readable")
+
     return ap
 
 
@@ -870,6 +892,18 @@ def main():
             + (["--status"] if a.status else [])
             + ["--with", a.packages, "--python", a.python]
             + (["--force"] if a.force else [])))
+    elif a.command == "version":
+        import neuralosd
+
+        from .update import install_kind
+        if getattr(a, "json", False):
+            print(json.dumps({"version": neuralosd.__version__,
+                              "install": install_kind()}, indent=2))
+        else:
+            print(neuralosd.__version__)
+    elif a.command == "update":
+        from ._cmd import update
+        raise SystemExit(update.run(a))
     elif a.command == "backends":
         from .backends import available_backends
         av = available_backends()

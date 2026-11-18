@@ -15,6 +15,11 @@ uv tool install neuralosd                      # global CLI
 uvx neuralosd ask --instance-dir . "how many rows"   # no install at all
 ```
 
+Keep an install current with `neuralosd update --check` (or `neuralosd update
+--yes`): pip/uv/pipx installs upgrade through their package manager; the
+standalone binaries verify the release's sha256 before an atomic swap. There
+is no silent background updater.
+
 ## Single-file binaries (no Python required)
 
 Every [release](https://github.com/DrOlu/neuralosd/releases) ships standalone

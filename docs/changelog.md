@@ -1,5 +1,27 @@
 # Changelog
 
+## 3.4.0 — self-update, verified
+
+`neuralosd update` and `neuralosd version` (plus `neuralosd --version`).
+
+- `update --check` reports current → latest and the exact command that
+  would be used; `--json` makes it scheduler-friendly. `update` asks before
+  applying; `--yes` is the non-interactive form; `--channel pre` includes
+  pre-releases.
+- **pip / uv / pipx / uv tool**: the running interpreter's package manager
+  performs the upgrade. Editable checkouts are refused with a `git pull`
+  hint instead of being half-upgraded.
+- **Standalone binaries**: the platform asset is downloaded from the GitHub
+  release, its **sha256 from the release metadata is verified**, the old
+  binary is kept as `.bak`, and the verified file replaces it atomically.
+  Digest-less assets are refused. A lock prevents concurrent updates; stale
+  locks are reclaimed. Windows writes the verified file as `.new` and prints
+  the exact next step (a running exe cannot be replaced).
+- There is **no silent background updater**: no network on import and none
+  on ask, preserving the offline, deterministic contract.
+
+Tests: `tests/test_update.py` (20); suite 1538 passed.
+
 ## 3.3.1 — real-instance readiness and discovery fixes
 
 Found by driving the API against the host's 21 live instances:

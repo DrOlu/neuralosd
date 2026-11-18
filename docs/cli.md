@@ -1,6 +1,6 @@
 # CLI reference — every subcommand
 
-`neuralosd` ships **37 top-level subcommands**, a `mesh` group with **20 subcommands**, and a `door` group with **3 subcommands**. This page is the complete reference: one entry per command, its key flags, and a runnable example. For guided tutorials see [usage](usage.md); for the Python/HTTP API see [reference](reference.md); for end-to-end recipes see the [cookbook](cookbook.md).
+`neuralosd` ships **40 top-level subcommands**, a `mesh` group with **20 subcommands**, and a `door` group with **3 subcommands**. This page is the complete reference: one entry per command, its key flags, and a runnable example. For guided tutorials see [usage](usage.md); for the Python/HTTP API see [reference](reference.md); for end-to-end recipes see the [cookbook](cookbook.md).
 
 Conventions used everywhere below:
 
@@ -18,7 +18,7 @@ Conventions used everywhere below:
 | **Verify & observe** | `golden` · `truth` · `invariants` · `calibrate` · `lint` · `openapi` · `diff` · `slo` · `fleet` · `badge` · `doctor` · `audit` |
 | **Act & watch** | `actuate` · `watch` · `roles` · `scrub` |
 | **Mesh (Synapse)** | `mesh serve` · `register` · `discover` · `agents` · `ask` · `delegate` · `send` · `task-create/status/cancel/retry` · `mailbox` · `trust` · `setup` · `gossip-push` · `gossip-pull` · `preflight` · `gaps` · `verify` · `health` |
-| **Meta** | `docs` |
+| **Meta** | `docs` · `version` · `update` |
 
 ---
 
@@ -489,6 +489,51 @@ neuralosd docs mesh
 ```
 
 The same docs shipped inside the binary — readable on an air-gapped host with no internet.
+
+### `version` — what is installed
+
+```sh
+neuralosd version
+neuralosd version --json          # {"version": "...", "install": "pip|frozen"}
+neuralosd --version               # same, one line
+```
+
+### `update` — check for, or apply, a newer release
+
+```sh
+neuralosd update --check          # current → latest; changes nothing
+neuralosd update --check --json   # suitable for a scheduler
+neuralosd update                  # asks, then applies
+neuralosd update --yes            # non-interactive
+neuralosd update --channel pre    # include pre-releases
+```
+
+There is **no silent background updater**. A deterministic, offline-first
+runtime must not call the network on import or on every ask, so the check
+runs only when you run it.
+
+How the update is applied depends on how neuralosd was installed:
+
+- **pip / uv / pipx / uv tool** — the running interpreter's package manager
+  upgrades the package (`pip install --upgrade neuralosd==<latest>`,
+  `pipx upgrade neuralosd`, or `uv tool upgrade neuralosd`). An editable
+  development checkout is refused: use `git pull` instead. Restart
+  long-running services after the update.
+- **Standalone binary** (the release assets and the npm launcher's download)
+  — the matching asset for this platform is downloaded from the GitHub
+  release, its **sha256 digest from the release metadata is verified**, the
+  previous binary is kept as `<name>.bak`, and the verified file is swapped
+  in atomically. A digest-less asset is refused. On Windows a running
+  executable cannot be replaced, so the verified file is written as
+  `<name>.new` and the next step is printed.
+- **npm launcher** (`npm i -g neuralosd`) — update the launcher with
+  `npm install -g neuralosd@latest`; the binary it downloads follows.
+
+A scheduler can run the check daily and only alert on a new version:
+
+```sh
+neuralosd update --check --json | grep -q '"update_available": true' && echo "update available"
+```
 
 ---
 
