@@ -1453,7 +1453,10 @@ def _write_probes(out, name, info, extras=None, join_on=None):
             "       triggers=" + repr(sorted(set(ftrig))) + ",",
             '       args={"sheet": {"type": "enum", "values": '
             + repr(sheet_names) + ', "required": False}})',
-            "def formula_scan(sheet):",
+            # Optional in the menu MUST be optional in Python: the router no
+            # longer injects the first enum value when the question omits it,
+            # so a bare `sheet` raised TypeError and the answer lost its body.
+            "def formula_scan(sheet=None):",
             "    return bridge.formula_scan(sheet)",
             "",
         ]
