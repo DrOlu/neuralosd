@@ -49,10 +49,16 @@ def run_multi(a):
     from ..multi import MultiInstanceServer, serve_multi
 
     # same auth resolution as run(): --auth-token wins, then the env var.
-    # v2.9.4 resolved nothing here and serve_multi() had no auth parameter,
-    # so --auth-token was silently ignored in multi mode.
+    # v2.9.4 resolved nothing here; the first fix wired only --auth-token, so
+    # `serve --instances-dir X --api-key K` still started with NO AUTH.
     auth_token = (getattr(a, "auth_token", None)
+                  or getattr(a, "api_key", None)
+                  or os.environ.get("NEURALOSD_SERVE_API_KEY")
                   or os.environ.get("NEURALOSD_API_TOKEN") or None)
+    if getattr(a, "api_key_file", None):
+        raise SystemExit(
+            "error: --api-key-file is not supported with --instances-dir; "
+            "pass --api-key (or --auth-token) instead")
 
     d = os.path.abspath(a.instances_dir)
     if not os.path.isdir(d):

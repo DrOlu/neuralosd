@@ -1635,7 +1635,7 @@ instance = selector.route("how many open incidents")
 
 **Yes, for the right use cases.** The verified-answer core (closed-list
 routing, typed refusals, accounting, oracle checks) is hardened and
-battle-tested — 999 unit tests, 56 smoke checks, CI on 5 platforms
+battle-tested — 1,500+ unit tests, 60+ smoke checks, CI on 5 platforms
 including Windows. The self-improving loop is complete and live-verified
 on real instances. What follows is an honest picture of what is solid
 and what is young.

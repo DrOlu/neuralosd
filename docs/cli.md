@@ -49,8 +49,8 @@ What lands in the instance dir: a **profile** of the data, **Pydantic models**, 
 
 ```sh
 neuralosd deploy --instance-dir ./global-sales --backend boxlite --name sales-prod --port 8501
-neuralosd deploy --instance-dir ./global-sales --backend msb --from-template sales-gold
-neuralosd deploy --instance-dir ./global-sales --save-template sales-gold --force
+neuralosd deploy --instance-dir ./global-sales --name sales-2 --backend msb --from-template sales-gold
+neuralosd deploy --instance-dir ./global-sales --name sales-gold --save-template sales-gold --force
 ```
 
 | Flag | Purpose |
@@ -67,7 +67,7 @@ neuralosd deploy --instance-dir ./global-sales --save-template sales-gold --forc
 ```sh
 neuralosd door list --json
 neuralosd door stop sales-prod
-neuralosd door proxy sales-prod --port 8501 --target 8420 --host 0.0.0.0
+neuralosd door proxy --name sales-prod --port 8501 --target 8420 --host 0.0.0.0
 ```
 
 - **`door list`** — every registered door with its backend, ports and health (`--json` for machine-readable).
@@ -104,7 +104,7 @@ neuralosd ask --strict --instance-dir ./fin "net margin per quarter"
 
 | Flag | Purpose |
 |---|---|
-| `--model MODEL` | Override the engine model for this question |
+| `--model` | Load the on-device model as a routing fallback |
 | `--strict` | Reject answers that fall back to partial menus |
 | `--explain` | Dry run: show the probe, arguments and gate decision without executing or auditing |
 | `--as-of ISO` | Point temporal questions at a specific date |
@@ -149,10 +149,10 @@ Runs the multi-step reasoning loop when no probe can answer: proposes derived me
 ### `browser` — drive a named agent-browser session
 
 ```sh
-neuralosd browser open https://status.internal.example
+neuralosd browser open --url https://status.internal.example --session ops
 neuralosd browser snapshot --session ops
-neuralosd browser click --ref e12 --session ops
-neuralosd browser fill --ref e7 --text "acme" --session ops
+neuralosd browser click --target e12 --session ops
+neuralosd browser fill --target e7 --text "acme" --session ops
 ```
 
 Subcommands: `open`, `snapshot`, `click`, `fill`, `type`, `network`, `text`, `setup`. Lets a probe read data that only exists behind a login or a JS-rendered page.
@@ -198,8 +198,8 @@ For teams standardised on Temporal: runs the self-test/loop as durable workflow 
 
 ```sh
 neuralosd gaps ./global-sales/ask_audit.jsonl --menu ./global-sales/needle_menu.json
-neuralosd gaps ./global-sales/ask_audit.jsonl --export-fingerprints --out fps.json
-neuralosd gaps peers.json --ingest-fingerprints                   # mesh gossip import
+neuralosd gaps ./global-sales/ask_audit.jsonl --export-fingerprints ./fps.json
+neuralosd gaps ./global-sales/ask_audit.jsonl --ingest-fingerprints ./peers.json   # mesh gossip import
 ```
 
 Clusters every refusal and near-miss into **trigger proposals**: missing synonyms (Type A) and genuinely new probes (Type B). `--export-fingerprints`/`--ingest-fingerprints` feed the mesh gossip loop.
@@ -285,7 +285,7 @@ Every golden question must route to its probe and return the recorded value; `--
 ### `truth` — run the truth oracle
 
 ```sh
-neuralosd truth --dir ./global-sales --audit
+neuralosd truth --dir ./global-sales --audit ./global-sales/ask_audit.selftest.jsonl
 ```
 
 Recomputes every probe's expected values from the source of truth — the oracle that makes "banks stay byte-identical" enforceable. Non-zero exit on any mismatch.
@@ -301,8 +301,8 @@ Property-based checks that must hold for every observation (non-negative totals,
 ### `calibrate` — learn per-probe confidence gates
 
 ```sh
-neuralosd calibrate --dir ./global-sales --traps ./traps.json
-neuralosd calibrate --dir ./global-sales --traps ./traps.json --base 0.5 --allow-no-traps
+neuralosd calibrate --golden ./global-sales/golden.json --traps ./global-sales/traps.json
+neuralosd calibrate --golden ./global-sales/golden.json --allow-no-traps
 ```
 
 Fits the per-probe confidence thresholds from golden passes and trap refusals, so the gate admits answers and rejects near-misses at the right per-probe sensitivity.
@@ -318,7 +318,7 @@ Finds trigger phrases that would route to the wrong probe (collisions between me
 ### `openapi` — generate OpenAPI + MCP manifest
 
 ```sh
-neuralosd openapi ./global-sales/needle_menu.json --agent ./mcp-agent.json
+neuralosd openapi ./global-sales/needle_menu.json --agent global-sales
 ```
 
 Emits an OpenAPI spec of the probe surface and an MCP manifest so any MCP client can call the instance's probes as typed tools.
@@ -350,7 +350,7 @@ One table across many instance dirs: menu/probe counts, refusal SLOs, bank healt
 ### `badge` — golden-bank health badge + GitHub Actions snippet
 
 ```sh
-neuralosd badge --dir ./global-sales --actions-out .github/workflows/golden-badge.yml
+neuralosd badge --instance-dir ./global-sales --actions-out .github/workflows/golden-badge.yml
 ```
 
 Generates a shields-style JSON badge endpoint + the workflow snippet to keep it fresh on every push.
@@ -402,8 +402,8 @@ Sources: `syslog:/path`, `journal` (repeatable). Rules match against the bounded
 
 ```sh
 neuralosd roles --instance-dir ./fin --op list
-neuralosd roles --instance-dir ./fin --op set --role analyst --allow revenue_by_region --allow margin_by_quarter
-neuralosd roles --instance-dir ./fin --op set --role analyst --row-filter "region == 'EMEA'"
+neuralosd roles --instance-dir ./fin --op set --role analyst --allow revenue_by_region,margin_by_quarter
+neuralosd roles --instance-dir ./fin --op set --role analyst --row-filter 'region=in:EMEA'
 neuralosd roles --instance-dir ./fin --op remove --role intern
 ```
 
@@ -422,7 +422,7 @@ PII/secret hygiene after the fact: rewrites audit records against current scrubb
 
 ## Mesh — Synapse integration
 
-All `mesh` subcommands accept `--gateway URL` (default: `$REACTORPRO_GATEWAY_URL` or `$NEURALOSD_SYNAPSE_URL` or `http://127.0.0.1:3000`) and `--timeout`. Identity is Ed25519; every envelope is signed. Protocol version `1`.
+Most `mesh` subcommands accept `--gateway URL` (default: `$REACTORPRO_GATEWAY_URL` or `$NEURALOSD_SYNAPSE_URL` or `http://127.0.0.1:3000`) and `--timeout`. Gateways are pinned by identity/fingerprint (HMAC-SHA256 envelopes). Protocol version `1`.
 
 ```sh
 # This edge answers mesh questions
@@ -437,21 +437,21 @@ neuralosd mesh delegate "q3 margin split by product line" --max-hops 2 --deadlin
 neuralosd mesh ask --instance-dir ./global-sales --delegate --preflight "…" 
 
 # Durable async work + mailbox
-neuralosd mesh task-create --target reporting-edge --skill "nightly_report"
-neuralosd mesh task-status --task-id T-91 --refresh
-neuralosd mesh task-retry --task-id T-91
-neuralosd mesh mailbox --target finance-edge "board pack is ready"
+neuralosd mesh task-create --target reporting-edge "build the nightly report"
+neuralosd mesh task-status T-91 --refresh
+neuralosd mesh task-retry T-91
+neuralosd mesh mailbox --target finance-edge --skill report
 
 # Trust + hygiene
-neuralosd mesh trust --peers finance-edge,syslog-edge --fingerprints fp1,fp2
+neuralosd mesh trust                        # list the gateway's trust records
 neuralosd mesh verify --file envelope.json
-neuralosd mesh setup --token "$TOKEN"          # token + reachability check
+neuralosd mesh setup --token-path $HOME/.config/reactorpro/gateway.env   # credential + reachability check
 neuralosd mesh health
 
 # The gap loop, mesh-wide
 neuralosd mesh register --instance-dir ./global-sales --publish --json
-neuralosd mesh gossip-push --instance-dir ./global-sales    # publish my gap fingerprints
-neuralosd mesh gossip-pull --instance-dir ./global-sales    # collect peers' fingerprints
+neuralosd mesh gossip-push --peers finance-edge --audit ./global-sales/ask_audit.jsonl   # publish my gap fingerprints
+neuralosd mesh gossip-pull --inbox ./global-sales/gossip_inbox                            # collect peers' fingerprints
 neuralosd mesh gaps --instance-dir ./global-sales           # cluster (mine + gossip) into proposals
 neuralosd mesh preflight "…" --instance-dir ./global-sales  # would the gate answer? (no probe runs)
 ```
@@ -467,7 +467,7 @@ neuralosd mesh preflight "…" --instance-dir ./global-sales  # would the gate a
 | `send` | Synchronous ask to one peer (dispatch/invoke) |
 | `task-create/status/cancel/retry` | Durable async tasks on a peer — idempotent create, refreshable status, same-id retry |
 | `mailbox` | Durable fire-and-forget message to a peer |
-| `trust` | Pin peer Ed25519 identities (TOFU + explicit pins) |
+| `trust` | List the gateway's peer trust records (identities + fingerprints) |
 | `verify` | Verify any signed envelope offline (stdin or `--file`) |
 | `setup` | Check gateway token + reachability |
 | `health` | Gateway liveness |
@@ -484,8 +484,8 @@ Trust classes (from `mesh trust` + gateway policy) keep strangers to **argument-
 ### `docs` — read the bundled documentation
 
 ```sh
-neuralosd docs getting-started
-neuralosd docs mesh
+neuralosd docs usage
+neuralosd docs reference
 ```
 
 The same docs shipped inside the binary — readable on an air-gapped host with no internet.

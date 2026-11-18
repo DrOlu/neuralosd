@@ -60,7 +60,9 @@ TLS context. Terminate at a proxy if you prefer.
 
 ## Audit
 
-Every authenticated request appends a row to `<instance>/audit.jsonl`:
+Every authenticated request that names a loaded instance — successes and
+failures alike, except rejected authentication — appends a row to
+`<instance>/audit.jsonl`:
 
 ```json
 {"event_id": "evt_...", "ts": 1790000000.0, "request_id": "req_...",
@@ -178,9 +180,11 @@ is allowed in read-only mode.
 ## Maintenance and operator endpoints
 
 A **fixed allowlist** of typed operations — never a generic shell. Reads are
-allowed in `--read-only`; the mutating ones (`shadow/{name}/promote`,
-`mothball` with `apply=true`, `synonyms/apply`, `calibrate`, `snapshot`) are
-refused with `403`.
+allowed in `--read-only`; anything that writes (`golden/run`,
+`shadow/{name}/evaluate`, `shadow/{name}/promote`, `mothball` with
+`apply=true`, `GET synonyms` — it writes its proposal file, `synonyms/apply`,
+`calibrate`, `snapshot`, `reload`) is refused with `403`. Dry-runs (plan
+`apply` with `dry_run=true`, `mothball` without `apply`) remain allowed.
 
 | Method | Path | Function |
 |---|---|---|

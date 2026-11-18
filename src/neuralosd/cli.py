@@ -389,10 +389,12 @@ def build_parser():
         "actuate",
         help="Named, journaled, reversible action (dry-run -> apply)")
     p_act.add_argument("--instance-dir", required=True)
-    p_act.add_argument("--action", required=True,
+    p_act.add_argument("--action",
                        help="block_ip | isolate_host | disable_user | "
-                            "rotate_credential | quarantine_file")
-    p_act.add_argument("--target", required=True)
+                            "rotate_credential | quarantine_file "
+                            "(required unless --undo)")
+    p_act.add_argument("--target",
+                       help="the action's target (required unless --undo)")
     p_act.add_argument("--reason", default=None,
                        help="WHY — required")
     p_act.add_argument("--operator", default=None,
@@ -505,7 +507,7 @@ def build_parser():
     mesh_sub = p_mesh.add_subparsers(dest="mesh_cmd")
     p_ms = mesh_sub.add_parser("serve", help="Serve this instance on the mesh")
     p_ms.add_argument("--instance-dir", required=True)
-    p_ms.add_argument("--gateway", default="http://127.0.0.1:8090")
+    p_ms.add_argument("--gateway", default=None, help="Synapse gateway URL (default: $REACTORPRO_GATEWAY_URL, $NEURALOSD_SYNAPSE_URL, or http://127.0.0.1:3000)")
     p_ms.add_argument("--timeout", type=float, default=30)
     p_ms.add_argument("--publish", action="store_true",
                       help="publish the registration to the gateway and "
@@ -591,7 +593,7 @@ def build_parser():
             sub_p.add_argument("--gateway", default=None)
     p_mr = mesh_sub.add_parser("register", help="Register this instance on the mesh")
     p_mr.add_argument("--instance-dir", required=True)
-    p_mr.add_argument("--gateway", default="http://127.0.0.1:8090")
+    p_mr.add_argument("--gateway", default=None, help="Synapse gateway URL (default: $REACTORPRO_GATEWAY_URL, $NEURALOSD_SYNAPSE_URL, or http://127.0.0.1:3000)")
     p_mr.add_argument("--publish", action="store_true",
                       help="POST the registration blob to the gateway "
                            "(default: dry report)")
@@ -630,7 +632,7 @@ def build_parser():
                         help="HMAC key (default $NEURALOSD_MESH_KEY)")
     p_ma = mesh_sub.add_parser("ask", help="Ask a question (through the local router)")
     p_ma.add_argument("--instance-dir", required=True)
-    p_ma.add_argument("--gateway", default="http://127.0.0.1:8090")
+    p_ma.add_argument("--gateway", default=None, help="Synapse gateway URL (default: $REACTORPRO_GATEWAY_URL, $NEURALOSD_SYNAPSE_URL, or http://127.0.0.1:3000)")
     p_ma.add_argument("--delegate", action="store_true",
                       help="if the local gate refuses, discover peers and "
                            "delegate to the best one (the reply arrives "
@@ -644,7 +646,7 @@ def build_parser():
                       choices=["self", "trusted", "known", "untrusted"])
     p_ma.add_argument("question", nargs="+")
     p_mh = mesh_sub.add_parser("health", help="Check the Synapse gateway")
-    p_mh.add_argument("--gateway", default="http://127.0.0.1:8090")
+    p_mh.add_argument("--gateway", default=None, help="Synapse gateway URL (default: $REACTORPRO_GATEWAY_URL, $NEURALOSD_SYNAPSE_URL, or http://127.0.0.1:3000)")
 
     # reason
     p_rs = sub.add_parser(

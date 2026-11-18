@@ -355,3 +355,25 @@ def test_pyproject_and_init_versions_agree():
     assert m.group(1) == m2.group(1), (
         f"pyproject={m.group(1)} but __init__={m2.group(1)} — the build "
         f"would publish {m.group(1)} while the code claims {m2.group(1)}")
+
+
+def test_every_version_carrier_agrees():
+    """Four files ship a version: pyproject, the runtime, the SDK and npm.
+
+    The bump script supports all four, but nothing checked the SDK and npm,
+    so the 3.5.0 wheel shipped an SDK reporting 2.9.10.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    want = cv.current_version()
+    runtime = open(os.path.join(root, "src", "neuralosd", "__init__.py"),
+                   encoding="utf-8").read()
+    sdk = open(os.path.join(root, "src", "neuralosd_sdk", "__init__.py"),
+               encoding="utf-8").read()
+    npm = json.loads(open(os.path.join(root, "npm", "neuralosd",
+                                       "package.json"),
+                          encoding="utf-8").read())
+    runtime_v = re.search(r'__version__\s*=\s*"([^"]+)"', runtime).group(1)
+    sdk_v = re.search(r'__version__\s*=\s*"([^"]+)"', sdk).group(1)
+    assert {want, runtime_v, sdk_v, npm["version"]} == {want}, (
+        f"version carriers disagree: pyproject={want} runtime={runtime_v} "
+        f"sdk={sdk_v} npm={npm['version']}")

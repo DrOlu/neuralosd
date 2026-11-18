@@ -131,9 +131,12 @@ def _leaky_router(tmp_path, **kw):
 def test_cache_on_disk_never_holds_a_secret(tmp_path):
     r = _leaky_router(tmp_path)
     r.ask("show the leak")
-    blob = open(r.cache_file, encoding="utf-8").read()
-    assert JWT not in blob
-    assert "ada@example.com" not in blob
+    # An answer whose replay would differ from the live one (because storage
+    # masking changed it) is not cached at all — privacy over cache hits.
+    if os.path.exists(r.cache_file):
+        blob = open(r.cache_file, encoding="utf-8").read()
+        assert JWT not in blob
+        assert "ada@example.com" not in blob
 
 
 def test_audit_on_disk_never_holds_a_secret(tmp_path):

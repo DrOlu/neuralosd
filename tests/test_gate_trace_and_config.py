@@ -76,13 +76,14 @@ class TestRouterJsonLivesWithTheInstance:
         monkeypatch.chdir(tmp_path)          # cwd is the PARENT
         r = _router(tmp_path, [USERS], config_dir=str(inst))
         assert r.floor == 15.0
-        # "list users" scores ~12 < 15 → refused, exactly the reported
-        # wheel behaviour, now INDEPENDENT of the process cwd
+        # "users" alone scores ~11 < 15 → refused below_floor, exactly the
+        # reported wheel behaviour, now INDEPENDENT of the process cwd.
+        # (The full question names its enum value and is legitimately above
+        # the floor; it is no longer a test of the floor.)
         with pytest.raises(Exception) as e:
-            r.ask("list users in the wallet tier", use_cache=False)
+            r.ask("users", use_cache=False)
         env = e.value.envelope
-        assert env.get("refusal_reason") in ("below_floor", "no_probe_matches",
-                                             "low_coverage")
+        assert env.get("refusal_reason") == "below_floor"
 
     def test_cwd_fallback_still_works(self, tmp_path, monkeypatch):
         # legacy layout: operator runs from a directory holding

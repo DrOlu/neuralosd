@@ -7,7 +7,8 @@ from contextlib import contextmanager
 from typing import Any, Callable, Dict, List, Optional
 
 from .probe import ProbeMeta
-from .router import Router, NoResults, extract_args, audit_source
+from .router import (Router, NoResults, audit_ledger, audit_source,
+                     extract_args)
 
 # Default ledger for SELF-TEST traffic (golden/trap replays). The user
 # refusal SLO reads `ask_audit.jsonl`; a fleet that replays its bank through
@@ -43,12 +44,10 @@ def selftest_ledger(inst, audit_file: Optional[str] = None):
     parent = os.path.dirname(target)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    user_ledger = inst.router.audit_file
-    inst.router.audit_file = target
-    try:
+    # ContextVar, not `inst.router.audit_file = ...`: one process serves
+    # many threads, and a golden run must not capture a concurrent user row.
+    with audit_ledger(target):
         yield target
-    finally:
-        inst.router.audit_file = user_ledger
 
 
 

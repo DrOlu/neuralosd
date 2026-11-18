@@ -137,8 +137,9 @@ def _json(schema):
 
 def _responses(ok="Answer", ok_schema="AskResponse", codes=(200, 400, 401,
                                                           403, 404, 409,
-                                                          410, 413, 504,
-                                                          500)):
+                                                          410, 411, 413,
+                                                          422, 500, 503,
+                                                          504)):
     out = {}
     for code in codes:
         if code == 200:
@@ -147,12 +148,19 @@ def _responses(ok="Answer", ok_schema="AskResponse", codes=(200, 400, 401,
         else:
             out[str(code)] = {
                 "description": {
-                    400: "Invalid request", 401: "Unauthorized",
-                    403: "Forbidden (read-only mode)",
+                    400: "Invalid request",
+                    401: "Unauthorized",
+                    403: "Forbidden (read-only mode or unsafe install)",
                     404: "Instance/probe/plan/request not found",
-                    409: "Illegal plan transition or concurrent apply",
-                    410: "Plan expired", 413: "Request body too large",
-                    504: "Call timed out", 500: "Internal error",
+                    409: "Illegal plan transition, concurrent apply, or "
+                         "HITL confirmation required",
+                    410: "Plan expired",
+                    411: "Chunked body sent without a Content-Length",
+                    413: "Request body too large",
+                    422: "Refused by the gate (refusal_reason in the body)",
+                    500: "Internal error",
+                    503: "Instance not ready / worker capacity exhausted",
+                    504: "Call timed out",
                 }[code],
                 "content": _json("Error"),
             }
@@ -192,8 +200,9 @@ def build_spec(host: str = "127.0.0.1", port: int = 9998) -> dict:
             "examples": _examples(),
         },
         "paths": {},
-        "x-neuralosd-gate-version": "{gate_version}",
-        "x-neuralosd-menu-version": "{menu_version}",
+        "x-neuralosd-gate-version": 1,
+        "x-neuralosd-menu-version":
+            "per instance: GET /v1/instances/{instance}/menu",
     }
     for method, path, tag, summary in ROUTES:
         operation = {
@@ -202,6 +211,13 @@ def build_spec(host: str = "127.0.0.1", port: int = 9998) -> dict:
             "operationId": f"{method.lower()}_{path.strip('/').replace('/', '_').replace('{', '').replace('}', '')}",
             "responses": _responses(ok_schema=_ok_schema(path)),
         }
+        # Content types match what the handler actually serves.
+        if path.endswith("/metrics"):
+            operation["responses"]["200"]["content"] = {
+                "text/plain": {"schema": {"type": "string"}}}
+        elif path.endswith("/docs"):
+            operation["responses"]["200"]["content"] = {
+                "text/html": {"schema": {"type": "string"}}}
         if "{" in path:
             operation["parameters"] = [
                 {"name": name, "in": "path", "required": True,
@@ -224,6 +240,14 @@ def build_spec(host: str = "127.0.0.1", port: int = 9998) -> dict:
             operation["security"] = [{"bearerAuth": []}, {"apiKeyAuth": []}]
         else:
             operation["security"] = []
+        if path == "/ask":
+            # Legacy: open ONLY on a loopback server with no configured key.
+            operation["security"] = [{}, {"bearerAuth": []},
+                                     {"apiKeyAuth": []}]
+            operation["description"] = (
+                "Pre-3.2 raw-envelope ask. Open on a loopback server with no "
+                "explicitly configured key; requires auth on any other "
+                "server.")
         spec["paths"].setdefault(path, {})[method.lower()] = operation
     return spec
 

@@ -197,6 +197,60 @@ def _rest_forward(rest_url: str, sandbox: str, vm_port: int,
 
 
 
+_MAX_RELAY_REQUEST = 8 << 20          # 8 MiB, matching the HTTP API cap
+
+
+def _read_http_request(conn, limit: int = _MAX_RELAY_REQUEST,
+                       timeout: float = 30.0) -> bytes:
+    """Buffer one HTTP/1.x request from ``conn``.
+
+    The boxlite door path replays a COMPLETE request through a short-lived
+    exec, so the proxy must read headers and body before forwarding. Returns
+    b"" when the peer closed without sending anything. Raises ValueError for
+    an oversized request or a malformed Content-Length.
+    """
+    conn.settimeout(timeout)
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        chunk = conn.recv(65536)
+        if not chunk:
+            return b""
+        buf += chunk
+        if len(buf) > limit:
+            raise ValueError("request headers exceed the relay limit")
+    head, _, body = buf.partition(b"\r\n\r\n")
+    headers = {}
+    for line in head.split(b"\r\n")[1:]:
+        name, sep, value = line.partition(b":")
+        if sep:
+            headers[name.strip().lower()] = value.strip()
+
+    if b"chunked" in headers.get(b"transfer-encoding", b"").lower():
+        # Read until the zero-length chunk and its trailing CRLF.
+        while b"0\r\n\r\n" not in body:
+            chunk = conn.recv(65536)
+            if not chunk:
+                break
+            body += chunk
+            if len(body) > limit:
+                raise ValueError("request body exceeds the relay limit")
+    else:
+        raw_length = headers.get(b"content-length", b"0")
+        try:
+            length = int(raw_length or 0)
+        except ValueError:
+            raise ValueError("invalid Content-Length")
+        if length < 0 or length > limit:
+            raise ValueError("request body exceeds the relay limit")
+        while len(body) < length:
+            chunk = conn.recv(min(65536, length - len(body)))
+            if not chunk:
+                break
+            body += chunk
+        body = body[:length]
+    return head + b"\r\n\r\n" + body
+
+
 def _forward_request(sandbox: str, vm_port: int, request: bytes, box_dir: str = None) -> bytes:
     """Forward ONE buffered HTTP request through a SHORT-LIVED child process.
 

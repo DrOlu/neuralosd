@@ -191,6 +191,11 @@ def main(argv=None) -> int:
             print(json.dumps({"id": None, "ok": False,
                               "error": f"bad request json: {e}"}), flush=True)
             continue
+        if not isinstance(req, dict):
+            print(json.dumps({"id": None, "ok": False,
+                              "error": "bad request: expected a JSON object"}),
+                  flush=True)
+            continue
         resp = sc.handle(req)
         stop = resp.pop("_stop", False)
         print(json.dumps(resp, default=str), flush=True)

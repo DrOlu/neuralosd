@@ -136,12 +136,10 @@ def _http(url, headers=None, data=None, timeout=30.0, method=None):
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.read()
     except urllib.error.HTTPError as e:
-        try:
-            detail = e.read().decode(errors="replace")[:200]
-        except Exception:                       # noqa: BLE001 — body unreadable
-            detail = ""
+        # Never echo the target's body: on a caller-supplied gateway that is
+        # an internal-service data leak reflected through our 500 envelope.
         raise SynapseError(f"gateway {method or 'GET'} {url} -> "
-                           f"HTTP {e.code}: {detail}",
+                           f"HTTP {e.code}",
                            code=_error_code(e.code), status=e.code) from e
     except urllib.error.URLError as e:
         reason = getattr(e, "reason", None)
@@ -327,7 +325,18 @@ class SynapseHTTP:
     def __init__(self, gateway: str = DEFAULT_GATEWAY,
                  timeout: float = 30.0, token: Optional[str] = None,
                  token_path: Optional[str] = None, retries: int = 1):
-        self.gateway = gateway.rstrip("/")
+        from urllib.parse import urlparse
+        gateway = (gateway or DEFAULT_GATEWAY).rstrip("/")
+        parsed = urlparse(gateway)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            raise SynapseError(
+                "gateway must be an http(s):// URL with a host",
+                code="mesh_error")
+        if parsed.username or parsed.password:
+            raise SynapseError(
+                "gateway URL must not embed credentials; use "
+                "REACTORPRO_GATEWAY_TOKEN", code="mesh_error")
+        self.gateway = gateway
         self.timeout = timeout
         self.retries = max(0, int(retries))
         self.token = token if token is not None else \

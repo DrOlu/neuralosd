@@ -60,6 +60,28 @@ def test_examples_are_runnable_and_name_real_commands(parser):
                     break
 
 
+def _all_entries():
+    for name, entry in H.TOPICS.items():
+        yield name, entry
+    for group, table in (("mesh", H.MESH), ("door", H.DOORS)):
+        for name, entry in table.items():
+            yield "%s.%s" % (group, name), entry
+
+
+def test_every_example_parses_as_printed(parser):
+    """The examples are shipped instructions. argparse must accept each one
+    exactly as written, or an agent following the help gets exit 2."""
+    for topic, entry in _all_entries():
+        for ex in entry["examples"]:
+            argv = shlex.split(ex)[1:]
+            try:
+                parser.parse_args(argv)
+            except SystemExit as exc:
+                assert exc.code == 0, (topic, ex)
+            except Exception as exc:                    # pragma: no cover
+                pytest.fail(f"{topic}: example failed to parse: {ex}: {exc}")
+
+
 def test_help_pages_render_description_and_examples(parser):
     top = _subparsers(parser)
     for name, sub in top.choices.items():

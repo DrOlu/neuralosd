@@ -211,7 +211,7 @@ def close_probe_birth(metric, instance_dir):
 
     from ._cmd._common import load_instance
     from .instance import selftest_ledger
-    from .router import audit_source
+    from .router import NoResults, audit_source
     inst = load_instance(instance_dir)
     try:
         # birth-trap proof is SELF-TEST traffic (v2.9.6): it replays a
@@ -219,8 +219,17 @@ def close_probe_birth(metric, instance_dir):
         # as a user refusal in the SLO ledger
         with selftest_ledger(inst), audit_source("trap"):
             env = inst.ask(item["q"], use_cache=False)
-    except Exception as e:
-        env = getattr(e, "envelope", None) or {}
+    except NoResults as exc:
+        # A refusal IS the proof the trap closed the gap.
+        env = getattr(exc, "envelope", None) or {}
+    except Exception as exc:                  # noqa: BLE001
+        # A crash (database down, import error, router bug) is NOT a proven
+        # refusal. Recording it as one closed the receipt without evidence.
+        summary["refused"] = None
+        summary["error"] = str(exc)[:200]
+        metric.provenance["birth_trap"] = summary
+        _refresh_metric(metric, instance_dir)
+        return summary
     answered = env.get("results") not in (None, [], {})
     summary["refused"] = not answered
     summary["answered_by"] = env.get("probe") if answered else None
@@ -535,8 +544,11 @@ def _snapshot_label(label):
     snapshots directory or smuggle control characters into it."""
     if (not isinstance(label, str) or not label or len(label) > 80
             or label in (".", "..")
-            or any(c in label for c in "/\\")
+            or any(c in label for c in "/\\:*?\"<>|")
+            or label.endswith((".", " "))
             or any(ord(c) < 32 for c in label)):
+        # The last three checks are Windows: a label written on macOS must
+        # not create a file Windows cannot open.
         raise SystemExit(f"error: invalid snapshot label {label!r}")
     return label
 
@@ -937,6 +949,8 @@ def gossip_collect(inbox_dir):
                 blob = json.load(fh)
         except (ValueError, OSError):
             continue
+        if not isinstance(blob, dict):
+            continue                       # syntactically valid, wrong shape
         peer = name[:-5]
         peer_state = state["peers"].setdefault(peer, {"fingerprints": [],
                                                       "ts": time.time()})

@@ -71,7 +71,7 @@ chmod +x neuralosd-msb
 
 The first run extracts the payload once (~10 s); later runs are cached and
 start in ~0.25 s. Built with [Nuitka](https://nuitka.net); every binary is
-verified by a 12-check CLI smoke suite plus a strict backend check in CI.
+verified by an end-to-end CLI smoke suite plus a strict backend check in CI.
 
 ### Beyond what's baked in: the sidecar
 
@@ -157,7 +157,7 @@ pip install neuralosd[all]
 neuralosd init --source your_data.csv --name my-analyst
 
 # 3. Deploy into a sandbox
-neuralosd deploy --name my-analyst --backend boxlite
+neuralosd deploy --instance-dir ./my-analyst --name my-analyst --backend boxlite
 
 # 4. Ask
 neuralosd ask --instance my-analyst "how many records"
@@ -264,13 +264,11 @@ The HTTP service (`neuralosd serve`) carries the same contracts: `POST /ask`
 
 ## Code signing
 
-The Windows release binaries are Authenticode-signed. Signing runs inside the
-release workflow through [SignPath](https://signpath.io) and is gated on the
-`SIGNPATH_*` repository configuration (`docs/signing.md`); the job fails
-unless `Get-AuthenticodeSignature` reports `Valid` for every signed asset.
-The project is applying to the [SignPath Foundation](https://signpath.org/)
-for publicly trusted code signing and will use SignPath Foundation-issued
-signing once approved.
+Release binaries are currently **unsigned**. Windows Authenticode signing
+through [SignPath](https://signpath.io) is planned and will be enabled when
+the signing identity is approved; until then, verify a download against the
+`sha256` digest published in the GitHub release metadata (`neuralosd update`
+does this automatically for binary installs).
 
 ## License
 

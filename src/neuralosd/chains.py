@@ -66,7 +66,9 @@ class ChainRunner:
         steps = self.chains.get(name)
         if not steps:
             raise ChainError(name, "chain not registered")
-        context = {}
+        # initial_args was silently ignored; the {{probe.path}} form in the
+        # docstring could never resolve because only step_N was published.
+        context = dict(initial_args or {})
         results = []
         t0 = time.time()
         for i, step in enumerate(steps):
@@ -83,6 +85,7 @@ class ChainRunner:
                 raise ChainError(probe_name, f"execution failed: {exc}") from exc
             ctx_key = f"step_{i}"
             context[ctx_key] = r
+            context[probe_name] = r       # documented {{probe_name.field}}
             results.append({"step": i, "probe": probe_name, "result": r})
         return {"chain": name, "steps": results,
                 "latency_ms": int((time.time() - t0) * 1000)}

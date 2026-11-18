@@ -278,6 +278,31 @@ REFUSAL_REASONS = frozenset({
 #   serve    — a /ask served over HTTP (multi-instance + service)
 _AUDIT_SOURCE: ContextVar = ContextVar("neuralosd_audit_source", default=None)
 
+# Which ledger rows are written to. Request-scoped, so a self-test replay in
+# one thread cannot divert a concurrent USER ask into the self-test file.
+_AUDIT_FILE: ContextVar = ContextVar("neuralosd_audit_file", default=None)
+
+
+class audit_ledger:
+    """Send every audit row written inside the block to ``path``.
+
+    Request-scoped (ContextVar), unlike the old process-wide assignment to
+    ``router.audit_file`` which, on a ThreadingHTTPServer, let a golden run
+    capture another request's user row.
+    """
+
+    def __init__(self, path: str):
+        self._path = path
+        self._token = None
+
+    def __enter__(self):
+        self._token = _AUDIT_FILE.set(self._path)
+        return self._path
+
+    def __exit__(self, *exc):
+        _AUDIT_FILE.reset(self._token)
+        return False
+
 
 class audit_source:
     """Context manager stamping every audit row written inside the block.
@@ -410,8 +435,30 @@ def _mask_storage_value(v):
     return v
 
 
+def _key_tokens(name):
+    return [t for t in re.split(r"[^a-z0-9]+", str(name).lower()) if t]
+
+
 def _is_secret_key(k) -> bool:
-    return isinstance(k, str) and any(h in k.lower() for h in PII_HINTS)
+    """Token match, not substring: `shipping` and `mapping_count` contain
+    "pin" but are not PINs, and masking them destroyed real business data."""
+    if not isinstance(k, str):
+        return False
+    tokens = _key_tokens(k)
+    if not tokens:
+        return False
+    for hint in PII_HINTS:
+        ht = _key_tokens(hint)
+        if not ht:
+            continue
+        if len(ht) == 1:
+            if ht[0] in tokens:
+                return True
+        else:
+            for i in range(len(tokens) - len(ht) + 1):
+                if tokens[i:i + len(ht)] == ht:
+                    return True
+    return False
 
 
 def _mask_scalar_under_key(v):
@@ -423,11 +470,9 @@ def _mask_scalar_under_key(v):
     """
     if v is None or isinstance(v, bool):
         return v
-    if isinstance(v, str):
-        return MASKED
-    if isinstance(v, (int, float, complex)):
-        return MASKED
-    return v                       # containers are masked element-wise
+    # bytes, Decimal, UUID, date, ... are no less secret than str or int.
+    # Containers never reach here (the caller masks them element-wise).
+    return MASKED
 
 
 def _mask_all_leaves(v):
@@ -531,11 +576,12 @@ def _storage_mask(x, _seen=None):
     if isinstance(x, dict):
         out = {}
         for k, v in x.items():
+            key = _mask_storage_value(k) if isinstance(k, str) else k
             if _is_secret_key(k):
-                out[k] = _mask_scalar_under_key(v) if not isinstance(
+                out[key] = _mask_scalar_under_key(v) if not isinstance(
                     v, (dict, list)) else _mask_all_leaves(v)
             else:
-                out[k] = _storage_mask(v, _seen)
+                out[key] = _storage_mask(v, _seen)
         return out
     if isinstance(x, list):
         return [_storage_mask(v, _seen) for v in x]
@@ -560,11 +606,14 @@ def mask_pii(x, deep=True, _seen=None):
     if isinstance(x, dict):
         out = {}
         for k, v in x.items():
+            # Keys can BE the PII (a group-by-email result uses the address
+            # as the key); apply the value-shape rules to them too.
+            key = _mask_storage_value(k) if isinstance(k, str) else k
             if _is_secret_key(k):
-                out[k] = _mask_scalar_under_key(v) if not isinstance(
+                out[key] = _mask_scalar_under_key(v) if not isinstance(
                     v, (dict, list)) else _mask_all_leaves(v)
             else:
-                out[k] = mask_pii(v, deep, _seen)
+                out[key] = mask_pii(v, deep, _seen)
         return out
     if isinstance(x, list):
         return [mask_pii(v, deep, _seen) for v in x]
@@ -617,7 +666,12 @@ def match_enum_value(vals, question):
     for v in vals or []:
         if v is None:
             continue
-        if re.search(r"\b" + re.escape(str(v)) + r"\b", question, re.I):
+        # Lookarounds, not \b: enum values such as ".NET", "C++", "C#" and
+        # "50%" start or end with a non-word character, so \b can NEVER hold
+        # on both sides and those values were unmatchable.
+        pat = (r"(?<![A-Za-z0-9_])" + re.escape(str(v))
+               + r"(?![A-Za-z0-9_])")
+        if re.search(pat, question, re.I):
             if best is None or len(str(v)) > len(str(best)):
                 best = v
     return best
@@ -645,6 +699,45 @@ def _int_from_question(question):
     return int(m.group(1) + raw.replace(",", "")), ("," in raw)
 
 
+def _ints_in_question(question):
+    """Every integer in order, with whether it used thousands separators."""
+    out = []
+    for m in _INT_IN_QUESTION.finditer(_DATE_LIKE.sub(" ", question)):
+        raw = m.group(2)
+        out.append((int(m.group(1) + raw.replace(",", "")), "," in raw))
+    return out
+
+
+def _int_range(argname, spec, value):
+    lo, hi = spec.get("min", 1), spec.get("max", 100)
+    if value < lo or value > hi:
+        # Never clamp — see ArgOutOfRange.
+        raise ArgOutOfRange(argname, value, lo, hi)
+    return value
+
+
+def _int_named_for(argname, question, numbers, used):
+    """The number written next to this argument's name, if any.
+
+    For a probe with MORE THAN ONE integer argument, "top 5 orders for user
+    42" cannot be split by position — both arguments used to receive 5, and
+    the answer was confidently about the wrong user. Only an explicit
+    `uid 42` / `42 for uid` pairing is accepted; otherwise the gate refuses.
+    """
+    words = {argname.lower(), argname.replace("_", " ").lower()}
+    for i, (value, _sep) in enumerate(numbers):
+        if used[i]:
+            continue
+        for word in words:
+            w = re.escape(word)
+            v = re.escape(str(value))
+            if (re.search(w + r"[^\d]{0,16}" + v, question, re.I)
+                    or re.search(v + r"[^\d]{0,16}" + w, question, re.I)):
+                used[i] = True
+                return value
+    return None
+
+
 def _extract_one(argname, spec, question):
     t = spec.get("type", "string")
     if t == "enum":
@@ -658,11 +751,7 @@ def _extract_one(argname, spec, question):
         v, _sep = _int_from_question(question)
         if v is None:
             return spec.get("default")
-        lo, hi = spec.get("min", 1), spec.get("max", 100)
-        if v < lo or v > hi:
-            # Never clamp — see ArgOutOfRange.
-            raise ArgOutOfRange(argname, v, lo, hi)
-        return v
+        return _int_range(argname, spec, v)
     if t == "string" and spec.get("required"):
         m = re.search(r"\b(?:by|for|from|of|does)\s+([A-Z][\w'&./ -]{1,60})", question)
         if not m:
@@ -1032,9 +1121,19 @@ class Router:
 
         q_words = set(re.findall(r"[a-z0-9]+", normalized.lower()))
         for qual in QUALIFIERS:
-            head = qual.split()[0]
-            hit = head in q_words if len(qual.split()) == 1 else qual in normalized.lower()
-            if hit and head not in self._vocab.get(meta.name, frozenset()):
+            words = qual.split()
+            if len(words) == 1:
+                hit = words[0] in q_words
+                known = words[0] in self._vocab.get(meta.name, frozenset())
+            else:
+                # Multi-word qualifiers: compare the phrase, and check its
+                # CONTENT words. The old code compared the first word ("on"),
+                # a stopword absent from every vocab, so "on hold" could
+                # never be satisfied and every such question was refused.
+                hit = qual in normalized.lower()
+                vocab = self._vocab.get(meta.name, frozenset())
+                known = all(w in vocab for w in words if w not in STOP)
+            if hit and not known:
                 trace["dropped_qualifier"] = qual
                 return "dropped_filter"
         qt = tokens(normalized)
@@ -1056,6 +1155,17 @@ class Router:
 
         # A domain noun NO probe in the menu knows means the subject itself is
         # out of scope - refusing is correct no matter which probe scored top.
+        # Argument NAMES the question used to bind a value ("uid 42",
+        # "limit 5") are not unknown subjects.
+        arg_names = set()
+        meta = chosen[0] if chosen else None
+        vocab = self._vocab.get(meta.name, frozenset()) if meta else frozenset()
+        for name in ((chosen[2] if chosen else None) or {}):
+            # Only names that are not already part of the probe's triggers
+            # ("uid", "limit"). "show user 4" must keep "user", a trigger
+            # word, or coverage drops and a valid question is refused.
+            arg_names |= {t for t in tokens(str(name)) if t not in vocab}
+        domain = domain - arg_names
         unknown = [t for t in sorted(domain) if not self._known_anywhere(t)]
         if unknown:
             trace["unknown_nouns"] = unknown
@@ -1134,7 +1244,10 @@ class Router:
         vals = []
         for m in self.metas:
             for spec in m.args.values():
-                vals.extend(spec.get("values") or [])
+                # Enum values may be ints (years, codes); len() on them
+                # raised TypeError before the gate could even run.
+                vals.extend(str(v) for v in (spec.get("values") or [])
+                            if v is not None)
         return normalize_possessive(q, [v for v in dict.fromkeys(vals)
                                          if len(v) >= 3])
 
@@ -1177,7 +1290,14 @@ class Router:
         """
         tmp = None
         try:
-            env = self._for_storage(env)
+            stored = self._for_storage(env)
+            # The cache replays its payload as the answer. If storage masking
+            # changed the results, the cached answer would differ from the
+            # live one (an email answered in clear, then masked on the second
+            # ask). Do not cache PII-bearing answers at all.
+            if stored.get("results") != env.get("results"):
+                return
+            env = stored
             c = {}
             if os.path.exists(self.cache_file):
                 try:
@@ -1324,7 +1444,8 @@ class Router:
         rec = {**fields, **rec, "source": rec.get("source") or src}
         try:
             rec = self._for_storage(rec)
-            with open(self.audit_file, "a", encoding="utf-8") as fh:
+            ledger = _AUDIT_FILE.get() or self.audit_file
+            with open(ledger, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
         except Exception:
             pass
@@ -1525,6 +1646,8 @@ class Router:
             if hit:
                 env = dict(hit["payload"])
                 env.update({"ask_id": ask_id, "cached": True,
+                            "question": question, "normalized": normalized,
+                            "ts": time.time(),
                             "latency_ms": int((time.time() - t0) * 1000)})
                 self._audit(env)
                 return env
@@ -1896,6 +2019,10 @@ def extract_args(meta: ProbeMeta, question: str) -> Optional[Dict[str, Any]]:
     """Extract ALL args of the probe (required + optional-with-defaults) from
     the question. Returns None when a REQUIRED arg cannot be extracted."""
     kwargs = {}
+    int_args = [n for n, s in meta.args.items()
+                if s.get("type") == "integer"]
+    numbers = _ints_in_question(question) if len(int_args) > 1 else []
+    used_numbers = [False] * len(numbers)
     for argname, spec in meta.args.items():
         required = spec.get("required", True)
         t = spec.get("type", "string")
@@ -1906,7 +2033,13 @@ def extract_args(meta: ProbeMeta, question: str) -> Optional[Dict[str, Any]]:
             if val is None:
                 if required:
                     return None
-                val = spec.get("default") or (vals[0] if vals else "all")
+                # Never substitute vals[0]: an optional enum the question did
+                # not name used to become the first catalog value (".NET"
+                # asked, "Java" answered). Use the declared default, or omit.
+                default = spec.get("default")
+                if default is None:
+                    continue
+                val = default
             kwargs[argname] = val
         elif t == "pattern":
             m = re.search(spec.get("pattern", ""), question)
@@ -1921,9 +2054,22 @@ def extract_args(meta: ProbeMeta, question: str) -> Optional[Dict[str, Any]]:
                 continue
             kwargs[argname] = val
         elif t == "integer":
-            # Delegate to _extract_one so there is ONE integer implementation.
-            # It refuses rather than clamping, so `user 999` can never come
-            # back as user 10.
+            if len(int_args) > 1:
+                # Multiple integer args: only an explicit name pairing is
+                # safe (see _int_named_for).
+                v = _int_named_for(argname, question, numbers, used_numbers)
+                if v is None:
+                    default = spec.get("default")
+                    if required and default is None:
+                        return None
+                    if default is None:
+                        continue
+                    v = default
+                kwargs[argname] = _int_range(argname, spec, v)
+                continue
+            # One integer arg: the first number is unambiguous.
+            # _extract_one refuses rather than clamping, so `user 999` can
+            # never come back as user 10.
             v = _extract_one(argname, spec, question)
             if v is None:
                 if required:

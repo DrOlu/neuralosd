@@ -23,6 +23,12 @@ def test_version_ordering_is_numeric_and_pre_aware():
     assert up.parse_version("3.4.0rc2") > up.parse_version("3.4.0b10")
     assert up.parse_version("3.4.0b10") > up.parse_version("3.4.0a9")
     assert up.parse_version("v3.4.0+local") == up.parse_version("3.4.0")
+    # PEP 440 shapes that occurred in the wild and used to parse as None:
+    assert up.parse_version("3.5") == up.parse_version("3.5.0")
+    assert up.parse_version("3.5.0.post1") > up.parse_version("3.5.0")
+    assert up.parse_version("3.5.0.dev2") < up.parse_version("3.5.0a1")
+    assert up.is_prerelease("3.5.0.dev2")
+    assert up.is_newer("3.5.0.post1", "3.5.0")
     assert up.parse_version("not-a-version") is None
     assert up.is_newer("3.4.0", "3.3.1")
     assert not up.is_newer("3.3.1", "3.3.1")
@@ -93,6 +99,18 @@ def test_latest_release_stable_skips_drafts_and_prereleases():
         return {"tag_name": "v9.9.7", "prerelease": False}
 
     assert up.latest_release(fetch=stable_fetch) == "9.9.7"
+
+
+def test_latest_release_picks_the_highest_version_not_the_newest_tag():
+    # A backfilled older tag appears first/last depending on creation date.
+    def fetch(url, timeout=15):
+        return [
+            {"tag_name": "v9.9.9", "prerelease": False},
+            {"tag_name": "v10.0.0", "prerelease": False},
+            {"tag_name": "v9.10.0", "prerelease": False},
+        ]
+
+    assert up.latest_release(fetch=fetch) == "10.0.0"
 
 
 def test_check_reports_plan_and_update_available(monkeypatch):

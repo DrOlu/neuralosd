@@ -9,7 +9,6 @@ on it and the OpenAPI document is generated from it, so a path cannot exist
 in one and not the other.
 """
 import collections
-import concurrent.futures
 import contextlib
 import hashlib
 import hmac
@@ -269,6 +268,13 @@ class Handler(BaseHTTPRequestHandler):
         raise _HttpError(401, "unauthorized", "invalid API key")
 
     def _read_body(self):
+        # We do not decode chunked framing. Silently treating it as an empty
+        # body turned `apply {"dry_run": true}` into a REAL apply; require a
+        # length instead of guessing.
+        if self.headers.get("Transfer-Encoding"):
+            raise _HttpError(411, "length_required",
+                             "chunked bodies are not supported; send a "
+                             "Content-Length")
         try:
             n = int(self.headers.get("Content-Length") or 0)
         except (TypeError, ValueError):
@@ -296,14 +302,28 @@ class Handler(BaseHTTPRequestHandler):
         return payload
 
     def _call(self, fn, timeout):
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(fn)
-        try:
-            return future.result(timeout=timeout)
-        except concurrent.futures.TimeoutError:
+        # A daemon thread, not a ThreadPoolExecutor: a timed-out worker cannot
+        # be cancelled, and executor threads are joined at interpreter exit,
+        # so a slow probe could hang shutdown (and leak an executor per call).
+        box = {}
+        done = threading.Event()
+
+        def runner():
+            try:
+                box["value"] = fn()
+            except BaseException as exc:          # noqa: BLE001
+                box["error"] = exc
+            finally:
+                done.set()
+
+        thread = threading.Thread(target=runner, daemon=True,
+                                  name="neuralosd-api-call")
+        thread.start()
+        if not done.wait(timeout):
             raise _HttpError(504, "timeout", "call timed out")
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
+        if "error" in box:
+            raise box["error"]
+        return box.get("value")
 
     # -- dispatch -------------------------------------------------------
     def do_GET(self):
@@ -333,6 +353,9 @@ class Handler(BaseHTTPRequestHandler):
                     break
             if template is None:
                 raise _HttpError(404, "not_found", "not found")
+            # The route itself names the instance: audit coverage must not
+            # depend on a handler happening to put a string in its payload.
+            opened["instance"] = params.get("instance")
             open_paths = {"/healthz", "/openapi.json", "/docs"}
             if self.api.legacy_open:
                 # Pre-3.2 compatibility: a loopback server with no explicit
@@ -351,6 +374,15 @@ class Handler(BaseHTTPRequestHandler):
                 "ok": False, "code": exc.code, "error": exc.message,
                 "request_id": request_id, **exc.extra}
             meta = {}
+        except SystemExit as exc:
+            # load_instance signals a missing/broken instance with SystemExit
+            # (a BaseException): it used to escape and drop the connection
+            # with no JSON error at all.
+            status, payload = 500, {
+                "ok": False, "code": "internal",
+                "error": (str(exc) or "instance exited")[:300],
+                "request_id": request_id}
+            meta = {}
         except Exception as exc:  # noqa: BLE001 — the surface must not crash
             status, payload = 500, {
                 "ok": False, "code": "internal",
@@ -366,10 +398,11 @@ class Handler(BaseHTTPRequestHandler):
         # The block is exception-safe, so a logging failure cannot turn an
         # answer into an error.
         try:
-            instance = meta.get("instance")
+            instance = opened.get("instance") or meta.get("instance")
             if instance is None and isinstance(payload, dict):
                 instance = payload.get("instance")
-            state = self.api.states.get(instance) if instance else None
+            state = (self.api.states.get(instance)
+                     if isinstance(instance, str) and instance else None)
             if self.api.audit_enabled and state is not None and status != 401:
                 row = {
                     "event_id": "evt_" + uuid.uuid4().hex[:16],
@@ -739,6 +772,9 @@ class Handler(BaseHTTPRequestHandler):
         return 200, out, meta
 
     def _h_confirm(self, params, body, query, rid):
+        # A confirm=True probe performs a side effect by definition; the
+        # two-step HITL path must not become a read-only bypass.
+        self._require_mutable()
         s = self.api.state(params["instance"])
         result = s.confirm.confirm(params["token"])
         if isinstance(result, dict) and result.get("error"):
@@ -887,9 +923,11 @@ class Handler(BaseHTTPRequestHandler):
         status = (query.get("status") or [None])[0]
         if status:
             plans = [p for p in plans if p["state"] == status]
-        probe = (query.get("probe") or [None])[0]
-        if probe:
-            plans = [p for p in plans if p.get("probe") == probe]
+        # Plans are named actions, not probes: the old `?probe=` filter could
+        # never match any plan.
+        action = (query.get("action") or [None])[0]
+        if action:
+            plans = [p for p in plans if p.get("action") == action]
         since = (query.get("since") or [None])[0]
         if since:
             try:
@@ -1223,6 +1261,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _h_shadow_eval(self, params, body, query, rid):
         from . import loop
+        # evaluate appends to the agreement log and rewrites derived.json
+        self._require_mutable()
         s = self.api.state(params["instance"])
         try:
             result = loop.shadow_evaluate(s.path, params["name"])
@@ -1256,6 +1296,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _h_synonyms(self, params, body, query, rid):
         from . import loop
+        # propose_synonyms writes synonym_proposals.json and reimports the
+        # instance module; it is a mutation despite being a GET.
+        self._require_mutable()
         s = self.api.state(params["instance"])
         router = getattr(s.inst, "router", s.inst)
         blob = loop.propose_synonyms(s.path, audit_path=router.audit_file)
@@ -1407,10 +1450,11 @@ class Handler(BaseHTTPRequestHandler):
         question = body.get("question")
         if not isinstance(question, str) or not question.strip():
             raise _HttpError(400, "invalid_request", "question is required")
-        peers = discover_peers(
+        peers = self._call(lambda: discover_peers(
             transport, question, s.name,
             limit=_int(body.get("limit"), 5, 1, 20),
-            preflight=bool(body.get("preflight", False)))
+            preflight=bool(body.get("preflight", False))),
+            float(self.api.timeout))
         return 200, {"ok": True, "peers": peers}, {}
 
     def _h_mesh_preflight(self, params, body, query, rid):
@@ -1422,7 +1466,8 @@ class Handler(BaseHTTPRequestHandler):
             raise _HttpError(400, "invalid_request", "question is required")
         agent = MeshAgent(instance_name=s.name, router=s.inst.router,
                           transport=transport)
-        report = agent.preflight(question)
+        report = self._call(lambda: agent.preflight(question),
+                            float(self.api.timeout))
         return 200, {"ok": True, "preflight": report}, {}
 
     def _h_mesh_delegate(self, params, body, query, rid):
@@ -1434,14 +1479,15 @@ class Handler(BaseHTTPRequestHandler):
         if not peer_id or not isinstance(question, str) or not question.strip():
             raise _HttpError(400, "invalid_request",
                              "peer and question are required")
-        peers = discover_peers(transport, question, s.name)
+        peers = self._call(lambda: discover_peers(transport, question, s.name),
+                           float(self.api.timeout))
         peer = next((p for p in peers if p.get("agent_id") == peer_id), None)
         if peer is None:
             raise _HttpError(404, "not_found",
                              f"peer not found or does not match: {peer_id}")
-        result = delegate_to_peer(
+        result = self._call(lambda: delegate_to_peer(
             transport, peer, question,
-            trust=body.get("trust") or "known")
+            trust=body.get("trust") or "known"), float(self.api.timeout))
         if result is None:
             raise _HttpError(500, "internal", "delegation returned no result")
         return 200, {"ok": True, "delegation": result}, {}

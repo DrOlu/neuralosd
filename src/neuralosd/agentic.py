@@ -384,6 +384,10 @@ class IllegalRunTransition(Exception):
     """A run was asked to move along an edge that does not exist."""
 
 
+class RunCapacityError(RuntimeError):
+    """The async worker budget is full; the caller should retry later."""
+
+
 class RunStore:
     """Submit a long ask, poll it, cancel it.
 
@@ -394,10 +398,13 @@ class RunStore:
     was never durable (use Temporal for that).
     """
 
-    def __init__(self, max_runs=200):
+    def __init__(self, max_runs=200, max_workers=16):
         self._runs = collections.OrderedDict()
         self._lock = threading.Lock()
         self._max = max_runs
+        # One unbounded thread per async ask let an authenticated caller
+        # exhaust the process. Capacity is refused, not queued forever.
+        self._slots = threading.BoundedSemaphore(max_workers)
 
     def _transition(self, run, to):
         current = run["status"]
@@ -409,6 +416,8 @@ class RunStore:
         run["updated"] = time.time()
 
     def submit(self, fn, meta=None):
+        if not self._slots.acquire(blocking=False):
+            raise RunCapacityError("too many concurrent async runs")
         run_id = uuid.uuid4().hex[:12]
         run = {"run_id": run_id, "status": "queued", "created": time.time(),
                "started": None, "finished": None, "updated": time.time(),
@@ -452,8 +461,18 @@ class RunStore:
                     self._transition(run, "done")
                 run["finished"] = time.time()
 
-        threading.Thread(target=_work, daemon=True,
-                         name=f"neuralosd-run-{run_id}").start()
+        def _guarded():
+            try:
+                _work()
+            finally:
+                self._slots.release()
+
+        try:
+            threading.Thread(target=_guarded, daemon=True,
+                             name=f"neuralosd-run-{run_id}").start()
+        except Exception:
+            self._slots.release()
+            raise
         return run_id
 
     def get(self, run_id):

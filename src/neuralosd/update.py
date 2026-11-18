@@ -48,10 +48,14 @@ LOCK_STALE_SECONDS = 3600
 _CHANNELS = ("stable", "pre")
 
 _VERSION_RE = re.compile(
-    r"^\s*v?(\d+)\.(\d+)\.(\d+)"
+    r"^\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?"
     r"(?:(a|b|rc)(\d+))?"
+    r"(?:\.?(post|dev)(\d+))?"
     r"(?:\+[0-9A-Za-z.\-]+)?\s*$")
-_PRE_RANK = {"a": 0, "b": 1, "rc": 2}
+_PRE_RANK = {"a": 1, "b": 2, "rc": 3}
+# dev < a < b < rc < release < post; ranks leave room for all of them.
+_PHASE_FINAL = 4
+_PHASE_POST = 5
 
 
 class UpdateError(Exception):
@@ -63,17 +67,25 @@ class UpdateError(Exception):
 def parse_version(text):
     """Return a sortable tuple, or None when the string is not a version.
 
-    ``3.4.0`` > ``3.4.0rc1`` > ``3.4.0b2`` > ``3.4.0a1``; ``3.10`` beats
-    ``3.9`` (numeric, not lexical). Build metadata is ignored.
+    Handles PEP 440 releases the updater must understand:
+    ``3.5``, ``3.5.0``, ``3.5.0rc1``, ``3.5.0.post1`` and ``3.5.0.dev2``.
+    Ordering: dev < a < b < rc < release < post. Build metadata is ignored.
     """
     m = _VERSION_RE.match(text or "")
     if not m:
         return None
-    major, minor, patch = (int(x) for x in m.group(1, 2, 3))
-    pre, num = m.group(4), m.group(5)
+    major = int(m.group(1))
+    minor = int(m.group(2) or 0)
+    patch = int(m.group(3) or 0)
+    pre, pre_num, kind, kind_num = (m.group(4), m.group(5), m.group(6),
+                                    m.group(7))
+    if kind == "dev":
+        return (major, minor, patch, 0, int(kind_num))
     if pre:
-        return (major, minor, patch, _PRE_RANK[pre], int(num))
-    return (major, minor, patch, 3, 0)
+        return (major, minor, patch, _PRE_RANK[pre], int(pre_num))
+    if kind == "post":
+        return (major, minor, patch, _PHASE_POST, int(kind_num))
+    return (major, minor, patch, _PHASE_FINAL, 0)
 
 
 def is_newer(candidate, current):
@@ -85,7 +97,7 @@ def is_newer(candidate, current):
 
 def is_prerelease(text):
     m = _VERSION_RE.match(text or "")
-    return bool(m and m.group(4))
+    return bool(m and (m.group(4) or m.group(6) == "dev"))
 
 
 # ── install shape ────────────────────────────────────────────────────────
@@ -202,22 +214,26 @@ def latest_pypi(fetch=_get_json, timeout=15, channel="stable"):
 
 
 def latest_release(fetch=_get_json, timeout=15, channel="stable"):
-    """The newest GitHub release tag (``v`` prefix removed) or None."""
-    if channel == "pre":
-        releases = fetch(RELEASES_API + "?per_page=20", timeout)
-    else:
-        releases = [fetch(RELEASES_API + "/latest", timeout)]
+    """The HIGHEST GitHub release version (``v`` prefix removed) or None.
+
+    Not the first entry: GitHub orders by creation date, and a backfilled
+    older tag (the release workflow supports that) would otherwise be offered
+    as an "update" and could strand an install on the older line.
+    """
+    releases = fetch(RELEASES_API + "?per_page=30", timeout)
     if isinstance(releases, dict):
         releases = [releases]
-    for rel in releases:
+    best = None
+    for rel in releases or []:
         if not isinstance(rel, dict) or rel.get("draft"):
             continue
         if channel != "pre" and rel.get("prerelease"):
             continue
         tag = (rel.get("tag_name") or "").lstrip("v")
-        if parse_version(tag):
-            return tag
-    return None
+        parsed = parse_version(tag)
+        if parsed and (best is None or parsed > parse_version(best)):
+            best = tag
+    return best
 
 
 def latest_version(kind, channel="stable", fetch=_get_json, timeout=15,
@@ -376,7 +392,10 @@ def update_binary(version, fetch=_get_json, opener=urllib.request.urlopen,
     """Update the running standalone executable. Returns a result dict."""
     exe = os.path.realpath(exe or sys.executable)
     directory = os.path.dirname(exe) or "."
-    if not os.access(directory, os.W_OK) or not os.access(exe, os.W_OK):
+    # Only the DIRECTORY must be writable: os.replace works over a read-only
+    # executable in a writable directory, so checking the file refused a
+    # legitimate update.
+    if not os.access(directory, os.W_OK):
         raise UpdateError(f"{directory} is not writable; install neuralosd "
                           "somewhere the user owns, or update it with the "
                           "package manager that installed it")

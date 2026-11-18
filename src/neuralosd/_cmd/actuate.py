@@ -77,6 +77,11 @@ def run(a):
               "(or --undo with --undo-plan to reverse it)", file=sys.stderr)
         return 2
 
+    if not wants_undo and (not action or not target):
+        print("error: --action and --target are required unless --undo",
+              file=sys.stderr)
+        return 2
+
     # E6: the CLI's executor is a STUB — nothing touches the host. A
     # journal that says APPLIED while nothing happened is a lie an operator
     # will trust during an incident, so every entry written through this

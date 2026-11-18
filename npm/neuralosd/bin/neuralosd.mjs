@@ -3,8 +3,9 @@
 // from the official GitHub releases for the current platform.
 
 import { chmod, mkdir, writeFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createWriteStream } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { pipeline } from "node:stream/promises";
 import { homedir, platform, arch } from "node:os";
 import path from "node:path";
@@ -68,7 +69,7 @@ async function install(variant) {
   if (!target) {
     console.error(`Unsupported platform: ${platform()}-${arch()}`);
     process.exitCode = 1;
-    return;
+    return false;
   }
   const name = assetName(variant, target);
   const url = `https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}/${name}`;
@@ -82,7 +83,7 @@ async function install(variant) {
     console.error(error.message);
     console.error(`Check the release exists: https://github.com/${OWNER}/${REPO}/releases/tag/v${VERSION}`);
     process.exitCode = 1;
-    return;
+    return false;
   }
   process.stdout.write(`Done. Binary at ${destPath}\n`);
   if (platform() === "win32") {
@@ -90,6 +91,30 @@ async function install(variant) {
   } else {
     process.stdout.write(`Run it:  ${destPath} serve --instance-dir <dir>\n`);
   }
+  return true;
+}
+
+function binaryPath(variant = "base") {
+  const suffix = variant === "base" ? "" : `-${variant}`;
+  return path.join(INSTALL_DIR, `neuralosd${suffix}${platform() === "win32" ? ".exe" : ""}`);
+}
+
+// `npx neuralosd serve ...` is the documented entry point: install the base
+// binary on first use, then hand the whole argument vector to it. Before
+// this, every command except install/version printed usage and exited 0 —
+// a silent no-op that looked like success.
+async function passthrough(args) {
+  const bin = binaryPath("base");
+  if (!existsSync(bin)) {
+    console.error(`neuralOSd is not installed yet — installing v${VERSION} first.`);
+    if (!(await install("base"))) return 1;
+  }
+  const result = spawnSync(bin, args, { stdio: "inherit" });
+  if (result.error) {
+    console.error(`cannot run ${bin}: ${result.error.message}`);
+    return 1;
+  }
+  return result.status === null ? 1 : result.status;
 }
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -99,6 +124,8 @@ if (cmd === "install") {
   await install(variant);
 } else if (cmd === "--version" || cmd === "-v" || cmd === "version") {
   console.log(`neuralosd v${VERSION}`);
-} else {
+} else if (cmd === "help" || cmd === "-h" || cmd === "--help" || !cmd) {
   usage();
+} else {
+  process.exitCode = await passthrough([cmd, ...rest]);
 }

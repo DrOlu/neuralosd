@@ -42,9 +42,10 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .agentic import (BudgetStore, IdempotencyStore, RunStore, SessionStore,
-                      TraceStore, agent_tokens, effective_role, hash_token,
-                      refusal_contract, resolve_agent)
+from .agentic import (BudgetStore, IdempotencyStore, RunCapacityError,
+                      RunStore, SessionStore, TraceStore, agent_tokens,
+                      effective_role, hash_token, refusal_contract,
+                      resolve_agent)
 from .hitl import ConfirmRequired, ConfirmStore
 from .router import NoResults, audit_fields, audit_source, pii_policy
 
@@ -373,6 +374,11 @@ def serve(instance, port: int = 8877, host: str = "127.0.0.1",
             if path != "/ask":
                 self._send(404, {"error": "not found"})
                 return
+            if self.headers.get("Transfer-Encoding"):
+                self._send(411, {"error": "bad request: chunked bodies are "
+                                          "not supported; send a "
+                                          "Content-Length"})
+                return
             try:
                 n = int(self.headers.get("Content-Length") or 0)
             except (TypeError, ValueError):
@@ -523,8 +529,13 @@ def serve(instance, port: int = 8877, host: str = "127.0.0.1",
                 return env
 
             if payload.get("async"):
-                rid = _runs_store.submit(
-                    run_ask, meta={"question": q, "agent_id": agent_id})
+                try:
+                    rid = _runs_store.submit(
+                        run_ask, meta={"question": q, "agent_id": agent_id})
+                except RunCapacityError as exc:
+                    self._send(503, {"error": str(exc),
+                                     "retry_after_seconds": 5})
+                    return
                 _trace(rid, {"tool": "ask", "status": "submitted",
                              "agent_id": agent_id,
                              "session_id": session_id})
@@ -553,7 +564,20 @@ def serve(instance, port: int = 8877, host: str = "127.0.0.1",
                 return
             if path.startswith("/runs/"):
                 run_id = path[len("/runs/"):]
-                if _runs_store.cancel(run_id):
+                # Ownership: GET already hides another agent's run; cancel
+                # must not be an IDOR around the same rule.
+                caller_agent, caller_mode = self._caller(
+                    self.headers.get("X-Agent-Id") or None)
+                if caller_mode in ("missing", "bad"):
+                    self._send(401, {"error": "unauthorized: invalid agent "
+                                              "identity"})
+                    return
+                run = _runs_store.get(run_id)
+                if (run is None or (caller_mode == "agent"
+                                    and run.get("meta", {}).get("agent_id")
+                                    != caller_agent)):
+                    self._send(404, {"error": f"unknown run: {run_id}"})
+                elif _runs_store.cancel(run_id):
                     self._send(200, {"run_id": run_id, "cancelled": True})
                 else:
                     self._send(404, {"error": f"unknown run: {run_id}"})

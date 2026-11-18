@@ -73,12 +73,13 @@ connection), and `--packages` when a source needs a host library.""",
 its data mounted read-only and the runtime sealed in a microVM. The door
 records the host port so `serve`/HTTP clients reach it without opening the
 guest. Templates clone a known-good box instead of rebuilding.""",
-        "neuralosd deploy --instance-dir DIR --backend boxlite|msb [options]",
+        "neuralosd deploy --instance-dir DIR --name NAME "
+        "[--backend boxlite|msb] [options]",
         ["neuralosd deploy --instance-dir ./global-sales --backend boxlite "
          "--name sales-prod --port 8501",
-         "neuralosd deploy --instance-dir ./global-sales --backend msb "
-         "--from-template sales-gold",
-         "neuralosd deploy --instance-dir ./global-sales "
+         "neuralosd deploy --instance-dir ./global-sales --name sales-2 "
+         "--backend msb --from-template sales-gold",
+         "neuralosd deploy --instance-dir ./global-sales --name sales-gold "
          "--save-template sales-gold --force"],
         exits="0 deployed; 1 backend missing or the box failed to start",
         safety="Starts a long-running sandbox. `door stop NAME` shuts it down.",
@@ -111,7 +112,7 @@ only (Microsandbox).""",
         "neuralosd door {list|stop|proxy} [options]",
         ["neuralosd door list --json",
          "neuralosd door stop sales-prod",
-         "neuralosd door proxy sales-prod --port 8501 --target 8420 "
+         "neuralosd door proxy --name sales-prod --port 8501 --target 8420 "
          "--host 0.0.0.0"],
         exits="0 ok; 1 unknown door or backend error",
         safety="`stop` terminates the sandbox; `proxy` opens a host port.",
@@ -205,11 +206,13 @@ agree with oracles.""",
         """Talks to a running agent-browser control socket so a probe (or an
 operator) can inspect and act on a web page. Sessions keep cookies and
 tabs; refs come from `snapshot`.""",
-        "neuralosd browser {open|snapshot|click|fill} [options]",
-        ["neuralosd browser open https://status.internal.example",
+        "neuralosd browser {open|snapshot|click|fill|type|network|text|"
+        "setup} [--session S] [--url URL] [--target REF] [--text TEXT]",
+        ["neuralosd browser open --url https://status.internal.example "
+         "--session ops",
          "neuralosd browser snapshot --session ops",
-         "neuralosd browser click --ref e12 --session ops",
-         "neuralosd browser fill --ref e7 --text 'acme' --session ops"],
+         "neuralosd browser click --target e12 --session ops",
+         "neuralosd browser fill --target e7 --text 'acme' --session ops"],
         exits="0 action sent; 1 browser/session unavailable",
         safety="`click`/`fill` act on a live web page.",
         see=["doctor"], mutates=True),
@@ -273,8 +276,9 @@ cluster becomes one authoring task, with the cost framing attached.
         ["neuralosd gaps ./global-sales/ask_audit.jsonl "
          "--menu ./global-sales/needle_menu.json",
          "neuralosd gaps ./global-sales/ask_audit.jsonl "
-         "--export-fingerprints --out fps.json",
-         "neuralosd gaps peers.json --ingest-fingerprints"],
+         "--export-fingerprints ./fps.json",
+         "neuralosd gaps ./global-sales/ask_audit.jsonl "
+         "--ingest-fingerprints ./peers.json"],
         exits="0 report printed; 1 unreadable ledger",
         see=["synonyms", "build", "slo"]),
 
@@ -320,17 +324,22 @@ without risking answers.""",
 
     "feedback": _t(
         "Turn a rejected answer into a golden/trap candidate.",
-        """Captures the operator's judgment on one ask: a question that should
-have been refused becomes a trap candidate; one that should have answered
-becomes a golden case. Proven cases can be promoted directly into the
-banks.""",
-        "neuralosd feedback --instance-dir DIR [options]",
+        """Captures the operator's judgment on one ask. `--verdict bad` means
+the question was legitimate but the answer was wrong: it records a golden
+CANDIDATE with the optional `--correction` attached. `--verdict invalid`
+means the question is out of scope: it records a trap candidate, promoted
+only when the refusal is proven. `--apply` reviews and promotes the
+accumulated candidates into the banks.""",
+        "neuralosd feedback --instance-dir DIR (--question Q... --verdict "
+        "bad|invalid [--correction TEXT] | --apply)",
         ["neuralosd feedback --instance-dir ./global-sales "
-         "--question 'net margin' --should-refuse",
+         "--question 'net margin' --verdict invalid",
          "neuralosd feedback --instance-dir ./global-sales "
-         "--question 'revenue by region' --expect-probe revenue_by_region"],
-        exits="0 candidate recorded; 1 invalid reference",
-        safety="Writes bank candidates.",
+         "--question 'units by region' --verdict bad "
+         "--correction 'revenue by region' --by ada",
+         "neuralosd feedback --instance-dir ./global-sales --apply"],
+        exits="0 candidate recorded/promoted; 1 invalid reference",
+        safety="Writes bank candidates; `--apply` promotes them.",
         see=["golden", "calibrate"], mutates=True),
 
     "mothball": _t(
@@ -375,15 +384,16 @@ and `diff` can show what changed.""",
         "Run (or extend) the golden question bank.",
         """The routing regression test: every golden case must map to its
 expected probe, or refuse when expected. Exit 1 on any mismatch makes it a
-CI gate. Adding a case (`--question ... --expect-probe ...`) records a
-receipt and optional source.""",
-        "neuralosd golden --dir DIR [--question Q --expect-probe P | "
+CI gate. Adding a case requires `--record` with `--question ...
+--expect-probe ...`; without `--record` those flags are ignored and the
+existing bank is re-run.""",
+        "neuralosd golden --dir DIR [--record --question Q --expect-probe P | "
         "--expect-refusal] [options]",
         ["neuralosd golden --dir ./global-sales",
-         "neuralosd golden --dir ./global-sales --question 'total revenue' "
-         "--expect-probe revenue_by_region",
-         "neuralosd golden --dir ./global-sales --question 'forecast 2030' "
-         "--expect-refusal --value null"],
+         "neuralosd golden --dir ./global-sales --record "
+         "--question 'total revenue' --expect-probe revenue_by_region",
+         "neuralosd golden --dir ./global-sales --record "
+         "--question 'forecast 2030' --expect-refusal --value null"],
         exits="0 all cases pass; 1 any case fails",
         safety="Adding a case mutates golden.json.",
         see=["truth", "invariants", "calibrate"], mutates=True),
@@ -392,10 +402,12 @@ receipt and optional source.""",
         "Run the truth oracle (database instances).",
         """Computes expected values independently of the probes and compares
 them with what the probes return — the strongest verification the runtime
-offers. `--audit` lists every oracle and its last result.""",
-        "neuralosd truth --dir DIR [--audit]",
+offers. `--audit FILE` sends the self-test audit rows to FILE instead of
+the default self-test ledger.""",
+        "neuralosd truth --dir DIR [--audit FILE]",
         ["neuralosd truth --dir ./global-sales",
-         "neuralosd truth --dir ./global-sales --audit"],
+         "neuralosd truth --dir ./global-sales "
+         "--audit ./global-sales/ask_audit.selftest.jsonl"],
         exits="0 all oracles agree; 1 any mismatch",
         see=["golden", "invariants"]),
 
@@ -414,10 +426,12 @@ violated. Cheap, deterministic, and safe to run in CI.""",
         """Fits the refusal floor/margin from what golden cases must answer and
 traps must refuse, writes `router.json`, and reloads it. `--traps` names the
 trap bank; `--allow-no-traps` permits a one-sided fit (less safe).""",
-        "neuralosd calibrate --dir DIR [--traps TRAPS.json] [options]",
-        ["neuralosd calibrate --dir ./global-sales --traps ./traps.json",
-         "neuralosd calibrate --dir ./global-sales --traps ./traps.json "
-         "--base 0.5 --allow-no-traps"],
+        "neuralosd calibrate [--golden GOLDEN.json] [--traps TRAPS.json] "
+        "[--allow-no-traps]",
+        ["neuralosd calibrate --golden ./global-sales/golden.json "
+         "--traps ./global-sales/traps.json",
+         "neuralosd calibrate --golden ./global-sales/golden.json "
+         "--allow-no-traps"],
         exits="0 fitted; 1 banks inconsistent or no traps without the flag",
         safety="Rewrites router.json (changes the refusal boundary).",
         see=["golden", "slo"], mutates=True),
@@ -435,13 +449,14 @@ edit should separate. `--top` limits the list.""",
     "openapi": _t(
         "Generate OpenAPI 3.1 + an MCP manifest from a probe menu.",
         """Emits the probe-level contract (typed request bodies, responses) for
-client generation and an optional MCP manifest for agent harnesses. The
-live server's own document is at `/openapi.json`; this command works
-offline from the menu file.""",
-        "neuralosd openapi MENU.json [--agent OUT.json]",
+client generation and writes an MCP manifest. `--agent NAME` is the agent
+name recorded inside that manifest; the file itself is always written as
+`mcp_manifest.json` beside the menu. The live server's own document is at
+`/openapi.json`; this command works offline from the menu file.""",
+        "neuralosd openapi MENU.json [--agent NAME]",
         ["neuralosd openapi ./global-sales/needle_menu.json",
          "neuralosd openapi ./global-sales/needle_menu.json "
-         "--agent ./mcp-agent.json"],
+         "--agent global-sales"],
         exits="0 written; 1 invalid menu",
         see=["serve"], mutates=False),
 
@@ -485,9 +500,10 @@ Use it as the host-level uptime check.""",
         """Runs the golden bank and emits a shields-style JSON badge (optionally
 a workflow file) that reports the bank as passing or failing — the README
 badge that cannot lie because it is generated from a real run.""",
-        "neuralosd badge --dir DIR [--actions-out FILE]",
-        ["neuralosd badge --dir ./global-sales",
-         "neuralosd badge --dir ./global-sales "
+        "neuralosd badge --instance-dir DIR [--out FILE] "
+        "[--actions-out FILE]",
+        ["neuralosd badge --instance-dir ./global-sales",
+         "neuralosd badge --instance-dir ./global-sales "
          "--actions-out .github/workflows/golden-badge.yml"],
         exits="0 badge written; 1 bank failed or output unwritable",
         safety="`--actions-out` writes a workflow file.",
@@ -524,12 +540,13 @@ reviewer and reason, and only `--apply` performs it. `--undo --undo-plan`
 reverses an applied plan from the journal. The action catalogue is fixed;
 nothing here executes arbitrary commands.""",
         "neuralosd actuate --instance-dir DIR --action NAME --target T "
-        "--reviewed-by WHO --reason R [--apply] [--undo --undo-plan P]",
+        "--operator WHO --reason R [--apply --plan P] "
+        "[--undo --undo-plan P]",
         ["neuralosd actuate --instance-dir ./security --action block_ip "
-         "--target 10.0.0.42 --reviewed-by ada --reason 'incident 4711'",
+         "--target 10.0.0.42 --operator ada --reason 'incident 4711'",
          "neuralosd actuate --instance-dir ./security --action block_ip "
-         "--target 10.0.0.42 --reviewed-by ada --reason 'incident 4711' "
-         "--apply",
+         "--target 10.0.0.42 --operator ada --reason 'incident 4711' "
+         "--apply --plan PLAN-8f3",
          "neuralosd actuate --instance-dir ./security --undo "
          "--undo-plan PLAN-8f3"],
         exits="0 planned/applied/undone; 1 refused or plan invalid",
@@ -554,15 +571,17 @@ wants.""",
 
     "roles": _t(
         "Manage acl.json roles (probe allowlist + row filter).",
-        """Adds, lists or removes roles that constrain what an `ask --role`
-caller may run: a probe allowlist and an optional row filter expression.
-Roles are enforced before execution, not after.""",
-        "neuralosd roles --instance-dir DIR --op list|set|remove [options]",
+        """Adds, lists, shows or removes roles that constrain what an
+`ask --role` caller may run: a comma-separated probe allowlist and an
+optional row filter written `column=in:value1,value2`. Roles are enforced
+before execution, not after.""",
+        "neuralosd roles --instance-dir DIR --op list|show|set|remove "
+        "[--role R] [--allow A,B] [--row-filter 'COL=in:V1,V2']",
         ["neuralosd roles --instance-dir ./fin --op list",
          "neuralosd roles --instance-dir ./fin --op set --role analyst "
-         "--allow revenue_by_region --allow margin_by_quarter",
+         "--allow revenue_by_region,margin_by_quarter",
          "neuralosd roles --instance-dir ./fin --op set --role analyst "
-         "--row-filter \"region == 'EMEA'\"",
+         "--row-filter 'region=in:EMEA'",
          "neuralosd roles --instance-dir ./fin --op remove --role intern"],
         exits="0 ok; 1 invalid role/filter",
         safety="`set`/`remove` rewrite acl.json.",
@@ -641,27 +660,32 @@ discover the CLI without parsing prose.""",
 MESH = {
     "serve": _t(
         "Serve this instance on the mesh (Synapse).",
-        "Registers and listens for mesh asks, heartbeating skills and "
-        "capabilities so peers can discover it. `--publish` advertises the "
-        "instance's probes as skills.",
-        "neuralosd mesh serve --instance-dir DIR [--publish] [--heartbeat S]",
+        "Registers this instance and listens for mesh asks, heartbeating its "
+        "skills so peers can discover it. `--publish` advertises the "
+        "instance's probes as skills immediately.",
+        "neuralosd mesh serve --instance-dir DIR [--publish] "
+        "[--heartbeat SECONDS]",
         ["neuralosd mesh serve --instance-dir ./global-sales --publish "
          "--heartbeat 30"],
         exits="0 stopped; 1 gateway unreachable",
         safety="Opens a network listener through the gateway.",
-        see=["mesh.discover", "mesh.register"], mutates=False),
+        see=["mesh.register", "mesh.discover"], mutates=False),
     "discover": _t(
-        "Discover peers that could answer a question/skill.",
+        "Discover peers that could answer a question or skill.",
         "Asks the gateway for peers whose advertised skills/capabilities "
-        "match. `--preflight` also asks each whether it would answer.",
-        "neuralosd mesh discover [--skill S] [--preflight]",
-        ["neuralosd mesh discover --skill 'revenue' --preflight"],
+        "match the text. `--preflight` also asks each peer whether it would "
+        "answer (no probe runs).",
+        "neuralosd mesh discover [--skill TEXT] [--instance-name NAME] "
+        "[--preflight] [--json]",
+        ["neuralosd mesh discover --skill 'revenue' --preflight",
+         "neuralosd mesh discover --skill 'revenue' --json"],
         exits="0 list printed; 1 gateway unreachable",
         see=["mesh.delegate", "mesh.ask"]),
     "agents": _t(
         "Print the peer directory (phonebook).",
         "Lists known peers, their addresses, skills, trust state and last "
-        "heartbeat.", "neuralosd mesh agents",
+        "heartbeat. `--capabilities` filters by advertised capability.",
+        "neuralosd mesh agents [--capabilities TEXT]",
         ["neuralosd mesh agents"],
         exits="0 printed; 1 gateway unreachable",
         see=["mesh.discover"]),
@@ -670,16 +694,18 @@ MESH = {
         "Runs the question locally first; `--delegate` lets the mesh answer "
         "when the local menu refuses, and `--preflight` only reports who "
         "would answer without running a probe.",
-        "neuralosd mesh ask --instance-dir DIR [--delegate] [--preflight] Q",
+        "neuralosd mesh ask --instance-dir DIR [--delegate] [--preflight] "
+        "[--max-hops N] [--deadline-ms MS] QUESTION",
         ["neuralosd mesh ask --instance-dir ./global-sales --delegate "
          "--preflight 'q3 margin split'"],
         exits="0 answered; 2 refused; 1 mesh/gateway error",
         see=["ask", "mesh.delegate"]),
     "delegate": _t(
         "Delegate a question to a mesh peer.",
-        "Chooses a peer (or the named target) and forwards the question within "
-        "hop and deadline limits, returning the peer's envelope.",
-        "neuralosd mesh delegate QUESTION [--max-hops N] [--deadline-ms MS]",
+        "Chooses a peer and forwards the question within hop, visited-set and "
+        "deadline limits, returning the peer's envelope.",
+        "neuralosd mesh delegate QUESTION... [--max-hops N] "
+        "[--deadline-ms MS] [--trust known|any]",
         ["neuralosd mesh delegate 'q3 margin split by product line' "
          "--max-hops 2 --deadline-ms 60000"],
         exits="0 answered; 2 refused by the peer; 1 no route/timeout",
@@ -687,89 +713,95 @@ MESH = {
     "send": _t(
         "Send a message to a peer.",
         "Posts a text message to a named peer's mailbox over the gateway.",
-        "neuralosd mesh send --target PEER TEXT",
+        "neuralosd mesh send --target PEER TEXT... [--timeout-ms N]",
         ["neuralosd mesh send --target finance-edge "
          "'total revenue by region'"],
         exits="0 delivered; 1 gateway/peer error",
         see=["mesh.mailbox"]),
     "task-create": _t(
         "Create a task on a peer.",
-        "Creates a named task for a peer with a skill and payload; returns "
-        "the task id used by `task-status`, `task-retry` and `task-cancel`.",
-        "neuralosd mesh task-create --target PEER --skill S [--payload JSON]",
+        "Creates a named task for a peer carrying a question/payload; the "
+        "gateway mints a task id (or use --task-id for an idempotent retry).",
+        "neuralosd mesh task-create --target PEER QUESTION... [--task-id ID]",
         ["neuralosd mesh task-create --target reporting-edge "
-         "--skill 'nightly_report'"],
+         "'build the nightly report'"],
         exits="0 task created; 1 gateway error",
         see=["mesh.task-status"]),
     "task-status": _t(
         "Check a mesh task's status.",
         "Reads the task state from the gateway; `--refresh` asks the peer "
         "again instead of using the cached view.",
-        "neuralosd mesh task-status --task-id ID [--refresh]",
-        ["neuralosd mesh task-status --task-id T-91 --refresh"],
+        "neuralosd mesh task-status TASK_ID [--refresh]",
+        ["neuralosd mesh task-status T-91 --refresh"],
         exits="0 status printed; 1 unknown task",
         see=["mesh.task-create"]),
     "task-cancel": _t(
         "Cancel a mesh task.",
         "Requests cancellation of an in-flight task on its peer.",
-        "neuralosd mesh task-cancel --task-id ID",
-        ["neuralosd mesh task-cancel --task-id T-91"],
+        "neuralosd mesh task-cancel TASK_ID",
+        ["neuralosd mesh task-cancel T-91"],
         exits="0 cancelled; 1 unknown/terminal task",
         safety="Stops work on the peer.",
         see=["mesh.task-status"], mutates=True),
     "task-retry": _t(
         "Retry a failed mesh task.",
         "Re-queues a failed task with its original payload.",
-        "neuralosd mesh task-retry --task-id ID",
-        ["neuralosd mesh task-retry --task-id T-91"],
+        "neuralosd mesh task-retry TASK_ID",
+        ["neuralosd mesh task-retry T-91"],
         exits="0 re-queued; 1 task not retryable",
         see=["mesh.task-status"], mutates=True),
     "mailbox": _t(
-        "Read or send peer mailbox messages.",
-        "Lists mailbox traffic for a peer, or posts one message.",
-        "neuralosd mesh mailbox --target PEER [MESSAGE]",
-        ["neuralosd mesh mailbox --target finance-edge "
-         "'board pack is ready'"],
+        "Read a peer's mailbox.",
+        "Reads mailbox messages for a peer, filtered by skill (default "
+        "status). It does not send: use `mesh send` for that.",
+        "neuralosd mesh mailbox --target PEER [--skill NAME]",
+        ["neuralosd mesh mailbox --target finance-edge",
+         "neuralosd mesh mailbox --target finance-edge --skill report"],
         exits="0 ok; 1 gateway error",
         see=["mesh.send"]),
     "trust": _t(
-        "Pin peer identities by fingerprint.",
-        "Records the fingerprints you expect for peers, so a changed identity "
-        "is refused rather than silently trusted.",
-        "neuralosd mesh trust --peers A,B --fingerprints FP1,FP2",
-        ["neuralosd mesh trust --peers finance-edge,syslog-edge "
-         "--fingerprints fp1,fp2"],
-        exits="0 pinned; 1 count mismatch",
-        safety="Changes the local trust store.",
-        see=["mesh.verify"], mutates=True),
+        "List the gateway's peer trust state.",
+        "Prints the trust records the gateway holds for known peers "
+        "(identities and pinned fingerprints). It reads; it does not "
+        "change the local trust store.",
+        "neuralosd mesh trust",
+        ["neuralosd mesh trust"],
+        exits="0 printed; 1 gateway unreachable",
+        see=["mesh.verify"]),
     "setup": _t(
         "Configure mesh credentials and check reachability.",
-        "Writes the gateway token to the configured env file and verifies the "
-        "gateway answers.", "neuralosd mesh setup --token TOKEN",
-        ["neuralosd mesh setup --token \"$TOKEN\""],
+        "Stores the gateway credential (argument or the configured env file) "
+        "where the client expects it, then verifies the gateway answers.",
+        "neuralosd mesh setup [--token VALUE] [--token-path PATH]",
+        ["neuralosd mesh setup --token-path "
+         "$HOME/.config/reactorpro/gateway.env"],
         exits="0 ready; 1 unreachable/unauthorised",
-        safety="Writes the gateway token to disk.",
+        safety="Writes the gateway credential file.",
         see=["mesh.health"], mutates=True),
     "gossip-push": _t(
         "Publish this instance's gap fingerprints to peers.",
-        "Exports refusal fingerprints (hashes, not questions) and sends them "
-        "to the peers you name, so gaps can be clustered without sharing the "
-        "raw asks.", "neuralosd mesh gossip-push --instance-dir DIR [--peers A,B]",
-        ["neuralosd mesh gossip-push --instance-dir ./global-sales"],
-        exits="0 sent; 1 no fingerprints/gateway error",
+        "Exports refusal fingerprints (hashes, not questions) from a "
+        "pre-exported file or the audit log, and sends them to the peers "
+        "you name.",
+        "neuralosd mesh gossip-push --peers A,B "
+        "(--fingerprints FILE | --audit FILE)",
+        ["neuralosd mesh gossip-push --peers finance-edge "
+         "--audit ./global-sales/ask_audit.jsonl"],
+        exits="0 sent; 2 no fingerprints source; 1 gateway error",
         see=["gaps"], mutates=True),
     "gossip-pull": _t(
         "Collect peers' gap fingerprints.",
-        "Reads the gossip inbox (or a gateway mailbox) and merges peer "
-        "fingerprints into the local set.", "neuralosd mesh gossip-pull --inbox DIR",
-        ["neuralosd mesh gossip-pull --instance-dir ./global-sales"],
+        "Reads the gossip inbox directory the gateway writes and merges "
+        "peer fingerprints into the local set.",
+        "neuralosd mesh gossip-pull --inbox DIR",
+        ["neuralosd mesh gossip-pull --inbox ./gossip_inbox"],
         exits="0 merged; 1 unreadable inbox",
         see=["mesh.gossip-push", "mesh.gaps"], mutates=True),
     "preflight": _t(
         "Would the gate answer this question? (no probe runs)",
         "Runs routing only and reports the chosen probe and score, or the "
         "refusal reason — side-effect free.",
-        "neuralosd mesh preflight QUESTION --instance-dir DIR",
+        "neuralosd mesh preflight --instance-dir DIR QUESTION...",
         ["neuralosd mesh preflight 'what is our revenue' "
          "--instance-dir ./global-sales"],
         exits="0 would answer; 2 would refuse",
@@ -777,14 +809,16 @@ MESH = {
     "gaps": _t(
         "Cluster local + gossiped fingerprints into proposals.",
         "Combines this instance's gaps with peers' fingerprints and emits "
-        "clustered authoring proposals.", "neuralosd mesh gaps --instance-dir DIR",
+        "clustered authoring proposals.",
+        "neuralosd mesh gaps --instance-dir DIR [--min-count N] [--json]",
         ["neuralosd mesh gaps --instance-dir ./global-sales"],
         exits="0 report; 1 unreadable ledger",
         see=["gaps", "mesh.gossip-pull"]),
     "verify": _t(
         "Verify a signed mesh envelope.",
-        "Checks the envelope signature and menu/gate versions against the "
-        "pinned peer identity.", "neuralosd mesh verify --file ENVELOPE.json",
+        "Checks an envelope file's signature and menu/gate versions against "
+        "the supplied key or the pinned peer identity.",
+        "neuralosd mesh verify --file ENVELOPE.json [--key KEY]",
         ["neuralosd mesh verify --file envelope.json"],
         exits="0 valid; 1 invalid/unknown signer",
         see=["mesh.trust"]),
@@ -805,6 +839,7 @@ MESH = {
         see=["mesh.serve"], mutates=True),
 }
 
+
 DOORS = {
     "list": _t(
         "List deployed doors.", "Shows every recorded door: name, backend, "
@@ -821,9 +856,9 @@ DOORS = {
         "Add a host relay for a sandbox without a native forward.",
         "Runs a host-side TCP relay from a host port to the sandbox port; "
         "needed for Microsandbox, whose forwards are create-time only.",
-        "neuralosd door proxy NAME --port P [--target T] [--host H] "
+        "neuralosd door proxy --name NAME --port P [--target T] [--host H] "
         "[--backend msb|boxlite]",
-        ["neuralosd door proxy sales-prod --port 8501 --target 8420 "
+        ["neuralosd door proxy --name sales-prod --port 8501 --target 8420 "
          "--host 0.0.0.0"],
         exits="0 relay running; 1 unknown door/port busy",
         safety="Opens a host port.", see=["deploy"], mutates=True),
