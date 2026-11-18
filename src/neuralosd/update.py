@@ -387,10 +387,42 @@ def swap_verified(exe, staged):
     return backup
 
 
+def launcher_path(comp=None):
+    """The executable the USER runs, not Nuitka's extracted cache copy.
+
+    In a onefile build ``sys.executable`` is the extracted
+    ``~/.cache/.../python``; replacing that updated a throw-away cache and the
+    launcher kept starting the old version. Nuitka records the original
+    invocation in ``__compiled__.original_argv0`` and in ``sys.argv[0]``.
+    """
+    if comp is None:
+        comp = globals().get("__compiled__")
+    candidates = []
+    for attr in ("original_argv0", "argv0"):
+        value = getattr(comp, attr, None) if comp is not None else None
+        if isinstance(value, str) and value:
+            candidates.append(value)
+    env = os.environ.get("NUITKA_ONEFILE_BINARY")
+    if env:
+        candidates.append(env)
+    if sys.argv and sys.argv[0]:
+        candidates.append(sys.argv[0])
+    for raw in candidates:
+        resolved = shutil.which(raw)
+        if not resolved and os.path.isabs(raw):
+            resolved = raw
+        if not resolved:
+            resolved = os.path.abspath(raw)
+        if (os.path.isfile(resolved)
+                and not os.path.basename(resolved).startswith("python")):
+            return os.path.realpath(resolved)
+    return os.path.realpath(sys.executable)
+
+
 def update_binary(version, fetch=_get_json, opener=urllib.request.urlopen,
                   timeout=120, exe=None):
     """Update the running standalone executable. Returns a result dict."""
-    exe = os.path.realpath(exe or sys.executable)
+    exe = os.path.realpath(exe or launcher_path())
     directory = os.path.dirname(exe) or "."
     # Only the DIRECTORY must be writable: os.replace works over a read-only
     # executable in a writable directory, so checking the file refused a
@@ -470,7 +502,7 @@ def check(channel="stable", timeout=15, fetch=_get_json,
     available = is_newer(latest, current)
     plan = None
     if kind == "frozen":
-        plan = f"download {asset_name(variant=variant_from_path(sys.executable))}"
+        plan = f"download {asset_name(variant=variant_from_path(launcher_path()))}"
     elif kind == "pip":
         cmd = update_command(latest)
         plan = " ".join(cmd) if cmd else None

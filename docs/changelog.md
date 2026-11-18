@@ -1,5 +1,25 @@
 # Changelog
 
+## 3.5.3 — standalone binaries update the launcher again
+
+Found by testing the new updater against a real onefile build: Nuitka runs
+from an extracted cache copy, so `sys.executable` is
+`~/.cache/.../python`. `neuralosd update` replaced that throw-away copy; the
+launcher the user actually runs kept its old version and reported an update
+forever.
+
+`update_binary` now resolves the launcher from
+`__compiled__.original_argv0` / `argv0`, `NUITKA_ONEFILE_BINARY`, or
+`sys.argv[0]` (never a `python*` cache path), and swaps that file. The asset
+variant is derived from the same path.
+
+**Bootstrap:** a binary from 3.5.2 or older has the old updater in its own
+code, so it cannot fix itself. Update such an install once manually
+(reinstall from the release asset or `npm install -g neuralosd@latest`);
+every later `neuralosd update` swaps the launcher correctly.
+
+Tests: 1,586 passed, 4 skipped.
+
 ## 3.5.2 — generated optional arguments
 
 The 3.5.1 review stopped the router from injecting the first enum value

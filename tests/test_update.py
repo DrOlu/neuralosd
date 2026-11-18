@@ -204,6 +204,22 @@ def _exe(tmp_path):
     return exe
 
 
+def test_onefile_update_targets_the_launcher_not_the_cache(tmp_path):
+    from types import SimpleNamespace
+
+    exe = tmp_path / "neuralosd"
+    exe.write_bytes(b"launcher")
+    cache = tmp_path / "python"
+    cache.write_bytes(b"extracted")
+    # Nuitka: sys.executable is the cache copy; original_argv0 is what the
+    # user ran.
+    comp = SimpleNamespace(original_argv0=str(exe), argv0=str(exe))
+    assert up.launcher_path(comp) == os.path.realpath(exe)
+    # If original_argv0 is unusable, argv0 still points at the launcher.
+    comp2 = SimpleNamespace(original_argv0=str(cache), argv0=str(exe))
+    assert up.launcher_path(comp2) == os.path.realpath(exe)
+
+
 def test_binary_update_verifies_then_swaps(monkeypatch, tmp_path):
     payload = b"new-binary-payload"
     exe = _exe(tmp_path)
