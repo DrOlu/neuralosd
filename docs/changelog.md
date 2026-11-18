@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.5.2 — generated optional arguments
+
+The 3.5.1 review stopped the router from injecting the first enum value
+into an optional argument the question did not name. That exposed a
+generated-code defect the old guess had been hiding: the XLSX scaffold's
+`formula_scan` declared `sheet` optional in the menu but required in Python,
+so "formula scan" raised `TypeError` and the answer lost its body. The
+generator now emits `sheet=None`; optional in the menu means optional in the
+function.
+
+This also unblocks the 3.5.1 binary release, whose build-job unit tests
+caught the failure on every platform.
+
+Tests: 1,585 passed, 4 skipped (with the `data` extras installed).
+
 ## 3.5.1 — holistic review fixes
 
 A full review of the CLI, runtime, HTTP surface, integrations and packaging.
