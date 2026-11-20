@@ -5,8 +5,6 @@ validation, probe generation, routing, argument caging, the read-only
 boundary, and the two-step plan/apply gate. No network, no Windows.
 """
 import json
-import os
-import stat
 import sys
 
 import pytest
@@ -132,12 +130,12 @@ else:
 def fake(tmp_path, monkeypatch):
     log = tmp_path / "argv.jsonl"
     monkeypatch.setenv("FAKE_PLASMA_LOG", str(log))
-    bin_path = tmp_path / "plasma"
-    bin_path.write_text(FAKE.format(python=sys.executable,
-                                    catalog=repr(CATALOG)),
-                        encoding="utf-8")
-    bin_path.chmod(bin_path.stat().st_mode | stat.S_IXUSR)
-    return bin_path, log
+    script = tmp_path / "plasma.py"
+    script.write_text(FAKE.format(python=sys.executable,
+                                  catalog=repr(CATALOG)),
+                      encoding="utf-8")
+    # An argv prefix, not a shebang file: works on Windows too.
+    return [sys.executable, str(script)], log
 
 
 def _argv_log(log):
@@ -147,7 +145,7 @@ def _argv_log(log):
 
 def test_catalog_validation(fake):
     bin_path, _ = fake
-    cat = plasma.load_catalog(str(bin_path))
+    cat = plasma.load_catalog(bin_path)
     assert cat["version"] == "9.9.9"
     index = plasma.catalog_index(cat)
     assert ("control", "policy", "show") in index
@@ -159,8 +157,8 @@ def test_catalog_validation(fake):
 
 def test_build_probes_exposes_only_generatable_read_only(fake):
     bin_path, _ = fake
-    probes = plasma.build_probes(plasma.load_catalog(str(bin_path)),
-                                 bin_path=str(bin_path))
+    probes = plasma.build_probes(plasma.load_catalog(bin_path),
+                                 bin_path=bin_path)
     names = {p._probe.name for p in probes}
     assert "plasma_health" in names
     assert "plasma_control_policy_show" in names
@@ -177,10 +175,10 @@ def test_build_probes_exposes_only_generatable_read_only(fake):
 def test_generated_instance_routes_and_calls_plasma(fake, tmp_path):
     bin_path, log = fake
     root = tmp_path / "root"
-    cat = plasma.load_catalog(str(bin_path))
+    cat = plasma.load_catalog(bin_path)
     inst_dir = tmp_path / "inst"
     plasma.write_probe_module(inst_dir, cat, root=str(root),
-                              bin_path=str(bin_path))
+                              bin_path=bin_path)
     inst = load_instance(str(inst_dir))
     env = inst.ask("is the estate healthy")
     assert env["probe"] == "plasma_health"
@@ -197,31 +195,31 @@ def test_generated_instance_routes_and_calls_plasma(fake, tmp_path):
 
 def test_plasma_call_refuses_non_read_only(fake):
     bin_path, _ = fake
-    cat = plasma.load_catalog(str(bin_path))
+    cat = plasma.load_catalog(bin_path)
     idx = plasma.catalog_index(cat)
     with pytest.raises(plasma.PlasmaError, match="plan.gated|mutating"):
         plasma.plasma_call(idx[("control", "policy", "set")], {},
-                           bin_path=str(bin_path))
+                           bin_path=bin_path)
     with pytest.raises(plasma.PlasmaError, match="plan.gated"):
         plasma.plasma_call(idx[("enforce", "run")], {},
-                           bin_path=str(bin_path))
+                           bin_path=bin_path)
 
 
 def test_plan_apply_is_two_step_and_one_shot(fake, tmp_path):
     bin_path, log = fake
     root = tmp_path / "root"
-    cat = plasma.load_catalog(str(bin_path))
+    cat = plasma.load_catalog(bin_path)
     idx = plasma.catalog_index(cat)
     row = plasma.plan_action(idx[("enforce", "run")], {},
-                             bin_path=str(bin_path), root=str(root))
+                             bin_path=bin_path, root=str(root))
     assert row["plan_id"].startswith("plp_")
     assert row["plasma_plan_id"] == 7
     assert row["dry_run"]["dry_run"] == 1
-    applied = plasma.apply_action(row["plan_id"], cat, bin_path=str(bin_path),
+    applied = plasma.apply_action(row["plan_id"], cat, bin_path=bin_path,
                                   root=str(root))
     assert applied["applied"]["result"]["applied"] == 1
     with pytest.raises(plasma.PlasmaError, match="already applied"):
-        plasma.apply_action(row["plan_id"], cat, bin_path=str(bin_path),
+        plasma.apply_action(row["plan_id"], cat, bin_path=bin_path,
                             root=str(root))
     apply_call = [c for c in _argv_log(log)
                   if c[:2] == ["enforce", "run"] and "--apply" in c]
@@ -230,17 +228,17 @@ def test_plan_apply_is_two_step_and_one_shot(fake, tmp_path):
 
 def test_plan_requires_plan_gated_and_known_params(fake, tmp_path):
     bin_path, _ = fake
-    cat = plasma.load_catalog(str(bin_path))
+    cat = plasma.load_catalog(bin_path)
     idx = plasma.catalog_index(cat)
     with pytest.raises(plasma.PlasmaError, match="not plan-gated"):
-        plasma.plan_action(idx[("health",)], {}, bin_path=str(bin_path),
+        plasma.plan_action(idx[("health",)], {}, bin_path=bin_path,
                            root=str(tmp_path / "root"))
     with pytest.raises(plasma.PlasmaError, match="unknown option"):
         plasma.plan_action(idx[("prevent", "rollback")], {"bogus": 1},
-                           bin_path=str(bin_path), root=str(tmp_path / "root"))
+                           bin_path=bin_path, root=str(tmp_path / "root"))
     with pytest.raises(plasma.PlasmaError, match="unknown option"):
         plasma.plasma_call(idx[("health",)], {"apply": True},
-                           bin_path=str(bin_path))
+                           bin_path=bin_path)
 
 
 def test_cli_init_call_and_plan(fake, tmp_path, capsys):
@@ -249,7 +247,7 @@ def test_cli_init_call_and_plan(fake, tmp_path, capsys):
 
     class Init:
         plasma_cmd = "init"
-        plasma_bin = str(bin_path)
+        plasma_bin = bin_path
         timeout = 10
         json = False
         root = str(tmp_path / "root")
@@ -264,7 +262,7 @@ def test_cli_init_call_and_plan(fake, tmp_path, capsys):
 
     class Call:
         plasma_cmd = "call"
-        plasma_bin = str(bin_path)
+        plasma_bin = bin_path
         timeout = 10
         json = True
         root = str(tmp_path / "root")
@@ -278,7 +276,7 @@ def test_cli_init_call_and_plan(fake, tmp_path, capsys):
 
     class Plan:
         plasma_cmd = "plan"
-        plasma_bin = str(bin_path)
+        plasma_bin = bin_path
         timeout = 10
         root = str(tmp_path / "root")
         events = None

@@ -89,10 +89,18 @@ def plasma_bin(value=None):
     return value or os.environ.get("PLASMA_BIN") or DEFAULT_PLASMA_BIN
 
 
+def _command_prefix(bin_path):
+    """A string executable, or an argv prefix (tests/launchers)."""
+    if isinstance(bin_path, (list, tuple)):
+        return [str(part) for part in bin_path]
+    return [str(bin_path)]
+
+
 def _run(argv, bin_path, timeout=60, cwd=None):
     import subprocess
     try:
-        proc = subprocess.run([bin_path] + list(argv), capture_output=True,
+        proc = subprocess.run(_command_prefix(bin_path) + list(argv),
+                              capture_output=True,
                               text=True, timeout=timeout, cwd=cwd)
     except FileNotFoundError as exc:
         raise PlasmaError(f"Plasma executable not found: {bin_path}") from exc
