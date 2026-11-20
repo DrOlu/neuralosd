@@ -751,6 +751,73 @@ def build_parser():
     p_ver = sub.add_parser("version", help="Print the installed version")
     p_ver.add_argument("--json", action="store_true", help="machine-readable")
 
+    # plasma — drive the Plasma EDR through its published catalog
+    p_pl = sub.add_parser(
+        "plasma", help="Drive Plasma through its published command catalog")
+    pl_sub = p_pl.add_subparsers(dest="plasma_cmd")
+
+    def _pl_common(p, root=True):
+        p.add_argument("--plasma-bin", default=None,
+                       help="Plasma executable (default: $PLASMA_BIN or "
+                            "`plasma`)")
+        p.add_argument("--timeout", type=int, default=60)
+        if root:
+            p.add_argument("--root", default=None,
+                           help="Plasma state root (default: .plasma)")
+            p.add_argument("--events", default=None,
+                           help="event store override")
+
+    p_plc = pl_sub.add_parser("catalog", help="List Plasma commands + safety")
+    _pl_common(p_plc, root=False)
+    p_plc.add_argument("--read-only", action="store_true")
+    p_plc.add_argument("--plan-gated", action="store_true")
+    p_plc.add_argument("--group", action="append", default=None)
+    p_plc.add_argument("--json", action="store_true")
+
+    p_pli = pl_sub.add_parser(
+        "init", help="Scaffold a neuralosd instance from the Plasma catalog")
+    _pl_common(p_pli)
+    p_pli.add_argument("--out", default="plasma-instance")
+    p_pli.add_argument("--group", action="append", default=None)
+    p_pli.add_argument("--include", action="append", default=None,
+                       help="explicit command path (repeatable), e.g. "
+                            "'control audit verify'")
+
+    p_plp = pl_sub.add_parser(
+        "probes", help="List the probes the catalog would generate")
+    _pl_common(p_plp, root=False)
+    p_plp.add_argument("--group", action="append", default=None)
+    p_plp.add_argument("--include", action="append", default=None)
+    p_plp.add_argument("--json", action="store_true")
+
+    p_plcall = pl_sub.add_parser(
+        "call", help="Run one READ-ONLY Plasma command")
+    _pl_common(p_plcall)
+    p_plcall.add_argument("plasma_command", nargs="+")
+    p_plcall.add_argument("--param", action="append", default=None,
+                          help="key=value (repeatable)")
+    p_plcall.add_argument("--json", action="store_true")
+
+    p_plplan = pl_sub.add_parser(
+        "plan", help="Dry-run one plan-gated command and record the plan")
+    _pl_common(p_plplan)
+    p_plplan.add_argument("plasma_command", nargs="+")
+    p_plplan.add_argument("--param", action="append", default=None)
+
+    p_plapply = pl_sub.add_parser(
+        "apply", help="Execute a recorded Plasma plan")
+    _pl_common(p_plapply)
+    p_plapply.add_argument("plasma_plan_id")
+
+    p_plpend = pl_sub.add_parser(
+        "pending", help="List containment decisions awaiting approval")
+    _pl_common(p_plpend)
+    p_plpend.add_argument("--json", action="store_true")
+
+    p_plh = pl_sub.add_parser("health", help="Plasma health verdict")
+    _pl_common(p_plh)
+    p_plh.add_argument("--json", action="store_true")
+
     # help — detailed catalogue, per command or machine-readable
     p_help = sub.add_parser(
         "help", help="Detailed help for every command, with examples")
@@ -918,6 +985,9 @@ def main():
     elif a.command == "update":
         from ._cmd import update
         raise SystemExit(update.run(a))
+    elif a.command == "plasma":
+        from ._cmd import plasma as plasma_cmd
+        raise SystemExit(plasma_cmd.run(a))
     elif a.command == "help":
         from . import help as _help
         raise SystemExit(_help.run(a))

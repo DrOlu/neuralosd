@@ -29,6 +29,7 @@ nav:
   - SDK: sdk.md
   - API Reference: reference.md
   - HTTP API: api.md
+  - Plasma EDR: plasma.md
   - Cookbook: cookbook.md
   - Architecture: architecture.md
   - Security: security.md

@@ -138,6 +138,20 @@ Connectors: CSV/TSV, SQLite, Excel, JSON/JSONL, syslog, journald, Windows
 Event Log, REST APIs, browser snapshots, **Plasma EDR** events,
 **mitmproxy HAR** captures, and **rea** evidence bundles.
 
+**Plasma, driven end to end.** Plasma 1.24 publishes its CLI as
+`plasma help --json`; neuralOSd turns every generatable read-only command
+into a typed probe and keeps plan-gated containment/prevention two-step:
+
+```sh
+neuralosd plasma init --out ./plasma-estate --root .plasma
+neuralosd ask --instance-dir ./plasma-estate "is the estate healthy"
+neuralosd plasma plan "enforce run" --root .plasma   # dry-run, recorded
+neuralosd plasma apply plp_0123456789ab --root .plasma
+```
+
+No shell, no arbitrary execution, and the model is never in the action
+path. See [Plasma EDR](docs/plasma.md).
+
 ## Two sandbox backends
 
 | Backend | Install | Best for |

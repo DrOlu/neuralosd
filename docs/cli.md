@@ -1,6 +1,6 @@
 # CLI reference — every subcommand
 
-`neuralosd` ships **41 top-level subcommands**, a `mesh` group with **20 subcommands**, and a `door` group with **3 subcommands**. This page is the complete reference: one entry per command, its key flags, and a runnable example. For guided tutorials see [usage](usage.md); for the Python/HTTP API see [reference](reference.md); for end-to-end recipes see the [cookbook](cookbook.md).
+`neuralosd` ships **42 top-level subcommands**, a `mesh` group with **20 subcommands**, and a `door` group with **3 subcommands**. This page is the complete reference: one entry per command, its key flags, and a runnable example. For guided tutorials see [usage](usage.md); for the Python/HTTP API see [reference](reference.md); for end-to-end recipes see the [cookbook](cookbook.md).
 
 Conventions used everywhere below:
 
@@ -17,6 +17,7 @@ Conventions used everywhere below:
 | **Author capabilities** | `build` · `pi` · `temporal` · `gaps` · `synonyms` · `transfer` · `shadow` · `feedback` · `mothball` · `drift` · `snapshot` |
 | **Verify & observe** | `golden` · `truth` · `invariants` · `calibrate` · `lint` · `openapi` · `diff` · `slo` · `fleet` · `badge` · `doctor` · `audit` |
 | **Act & watch** | `actuate` · `watch` · `roles` · `scrub` |
+| **Plasma (EDR)** | `plasma` (`catalog`/`init`/`probes`/`call`/`plan`/`apply`/`pending`/`health`) |
 | **Mesh (Synapse)** | `mesh serve` · `register` · `discover` · `agents` · `ask` · `delegate` · `send` · `task-create/status/cancel/retry` · `mailbox` · `trust` · `setup` · `gossip-push` · `gossip-pull` · `preflight` · `gaps` · `verify` · `health` |
 | **Meta** | `docs` · `version` · `update` · `help` |
 
@@ -476,6 +477,34 @@ neuralosd mesh preflight "…" --instance-dir ./global-sales  # would the gate a
 | `preflight` | Ask the gate "would you answer this?" without running a probe |
 
 Trust classes (from `mesh trust` + gateway policy) keep strangers to **argument-types-only** envelopes; trusted peers get real args and durable tasks.
+
+---
+
+## Plasma — drive the EDR from neuralOSd
+
+Plasma 1.24+ publishes its CLI as `plasma help --json`. neuralOSd consumes
+that catalog: every generatable **read-only** command becomes a typed probe,
+and plan-gated commands stay two-step. Full guide: [Plasma EDR](plasma.md).
+
+```sh
+neuralosd plasma catalog --read-only
+neuralosd plasma init --out ./plasma-estate --root .plasma
+neuralosd ask --instance-dir ./plasma-estate "is the estate healthy"
+neuralosd plasma call health
+neuralosd plasma plan "enforce run" --root .plasma
+neuralosd plasma apply plp_0123456789ab --root .plasma
+```
+
+| Subcommand | Purpose |
+|---|---|
+| `catalog` | List Plasma commands, groups and safety classes |
+| `init` | Scaffold an instance whose probes are the catalog's read-only commands |
+| `probes` | Show the probes `init` would generate |
+| `call` | Run one read-only command with validated `--param k=v` |
+| `plan` | Dry-run a plan-gated command and record the plan |
+| `apply` | Execute a recorded plan once (Plasma's `--apply --plan`) |
+| `pending` | List containment decisions awaiting approval |
+| `health` | Plasma health verdict |
 
 ---
 

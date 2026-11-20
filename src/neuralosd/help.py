@@ -85,6 +85,26 @@ guest. Templates clone a known-good box instead of rebuilding.""",
         safety="Starts a long-running sandbox. `door stop NAME` shuts it down.",
         see=["door", "backends", "sidecar"], mutates=True),
 
+    "plasma": _t(
+        "Drive the Plasma EDR through its published command catalog.",
+        """Plasma publishes every command as `plasma help --json` (schema
+plasma.help/1) with a safety class. `plasma catalog` lists them; `plasma
+init` turns every generatable READ-ONLY command into a neuralosd probe, so
+the whole read surface is answerable in plain English. Plan-gated commands
+are two-step: `plasma plan` records Plasma's dry-run, `plasma apply`
+executes exactly that plan. There is no arbitrary execution and no shell.
+Subcommands: catalog, init, probes, call, plan, apply, pending, health.""",
+        "neuralosd plasma {catalog|init|probes|call|plan|apply|pending|health} "
+        "[options]",
+        ["neuralosd plasma catalog --read-only",
+         "neuralosd plasma init --out ./plasma-estate --root .plasma",
+         "neuralosd plasma call health",
+         "neuralosd plasma plan 'enforce run'",
+         "neuralosd plasma apply plp_0123456789ab"],
+        exits="0 ok; 1 Plasma refused/failed; 2 invalid command",
+        safety="`apply` executes a previously recorded plan-gated command.",
+        see=["init", "ask", "actuate"]),
+
     "mesh": _t(
         "Talk to other neuralOSd peers over the Synapse A2A mesh.",
         """Serve an instance's capabilities to peers, discover who can answer a
@@ -840,6 +860,91 @@ MESH = {
 }
 
 
+PLASMA = {
+    "catalog": _t(
+        "List Plasma commands with their safety class.",
+        "Reads `plasma help --json` and prints every command path, its group "
+        "and safety (read-only / plan-gated / mutating). `--read-only` and "
+        "`--plan-gated` filter; `--group` limits to one Plasma group.",
+        "neuralosd plasma catalog [--read-only|--plan-gated] [--group G] "
+        "[--json]",
+        ["neuralosd plasma catalog --read-only",
+         "neuralosd plasma catalog --plan-gated --json"],
+        exits="0 printed; 1 Plasma missing or catalog invalid",
+        see=["plasma.init"]),
+    "init": _t(
+        "Scaffold a neuralosd instance from the Plasma catalog.",
+        "Saves the catalog and writes a probes.py that exposes every "
+        "generatable read-only Plasma command as a typed probe, with the "
+        "state root and event store baked in. The instance loads without "
+        "Plasma running; only probe execution calls the binary.",
+        "neuralosd plasma init --out DIR [--root PATH] [--events PATH] "
+        "[--group G] [--include 'command path']",
+        ["neuralosd plasma init --out ./plasma-estate --root .plasma",
+         "neuralosd plasma init --out ./plasma-ro --group health --group "
+         "trust"],
+        exits="0 written; 1 Plasma missing or catalog invalid",
+        safety="Writes an instance directory (never touches Plasma state).",
+        see=["plasma.probes", "ask"], mutates=True),
+    "probes": _t(
+        "List the probes the catalog would generate.",
+        "Shows probe names, triggers and typed arguments without writing an "
+        "instance. Useful before `init` and for auditing routing coverage.",
+        "neuralosd plasma probes [--group G] [--include PATH] [--json]",
+        ["neuralosd plasma probes",
+         "neuralosd plasma probes --json"],
+        exits="0 printed; 1 Plasma missing",
+        see=["plasma.init"]),
+    "call": _t(
+        "Run one READ-ONLY Plasma command.",
+        "Executes exactly one catalog command (argv list, no shell) with "
+        "typed `--param key=value` options and prints its JSON. Mutating and "
+        "plan-gated commands are refused: use plan/apply.",
+        "neuralosd plasma call COMMAND... [--param k=v] [--root P] "
+        "[--events P]",
+        ["neuralosd plasma call health",
+         "neuralosd plasma call control audit tail --param limit=20"],
+        exits="0 ok; 1 command failed; 2 not read-only",
+        see=["plasma.plan"]),
+    "plan": _t(
+        "Dry-run one plan-gated command and record the plan.",
+        "Validates the command and parameters against the catalog, runs "
+        "Plasma's own dry-run, and records a local plan id plus the Plasma "
+        "plan/approval id when it returns one. Nothing is executed.",
+        "neuralosd plasma plan COMMAND... [--param k=v] [--root P]",
+        ["neuralosd plasma plan 'enforce run'",
+         "neuralosd plasma plan 'prevent rollback' --param id=12"],
+        exits="0 planned; 1 not plan-gated or Plasma failed",
+        safety="Dry-run only; `apply` performs the action.",
+        see=["plasma.apply"]),
+    "apply": _t(
+        "Execute a recorded Plasma plan.",
+        "Runs the recorded command with `--apply` (and `--plan <id>` when "
+        "Plasma returned one). A plan applies once; a second attempt is "
+        "refused. The command must still exist and still be plan-gated.",
+        "neuralosd plasma apply PLAN_ID [--root P]",
+        ["neuralosd plasma apply plp_0123456789ab"],
+        exits="0 applied; 1 unknown/already-applied/failed",
+        safety="Performs Plasma's plan-gated action on the host.",
+        see=["plasma.plan"], mutates=True),
+    "pending": _t(
+        "List containment decisions awaiting approval.",
+        "Shortcut for `plasma call enforce pending`.",
+        "neuralosd plasma pending [--root P] [--json]",
+        ["neuralosd plasma pending"],
+        exits="0 ok; 1 Plasma failed",
+        see=["plasma.call"]),
+    "health": _t(
+        "Plasma health verdict.",
+        "Shortcut for `plasma call health`: a deterministic verdict over the "
+        "local Plasma stack with blind-spot accounting.",
+        "neuralosd plasma health [--root P] [--json]",
+        ["neuralosd plasma health"],
+        exits="0 ok; 1 Plasma failed",
+        see=["plasma.call"]),
+}
+
+
 DOORS = {
     "list": _t(
         "List deployed doors.", "Shows every recorded door: name, backend, "
@@ -873,7 +978,7 @@ def lookup(topic):
         return TOPICS[topic]
     if "." in topic:
         group, name = topic.split(".", 1)
-        table = {"mesh": MESH, "door": DOORS}.get(group)
+        table = {"mesh": MESH, "door": DOORS, "plasma": PLASMA}.get(group)
         if table and name in table:
             return table[name]
     return None
@@ -950,6 +1055,7 @@ def render_index(stream=None):
                               "lint", "openapi", "diff", "slo", "fleet",
                               "badge", "doctor", "audit"]),
         ("Act & watch", ["actuate", "watch", "roles", "scrub"]),
+        ("Plasma (EDR)", ["plasma"]),
         ("Mesh (Synapse)", ["mesh"]),
         ("Meta", ["docs", "version", "update", "help"]),
     ]
@@ -1058,7 +1164,8 @@ def catalogue(parser=None):
         if p is not None:
             item["flags"] = _flags(p)
         doc["commands"][name] = item
-    for group, table in (("mesh", MESH), ("door", DOORS)):
+    for group, table in (("mesh", MESH), ("door", DOORS),
+                        ("plasma", PLASMA)):
         group_doc = {"summary": TOPICS[group]["summary"], "commands": {}}
         gp = choices.get(group)
         subchoices = {}
