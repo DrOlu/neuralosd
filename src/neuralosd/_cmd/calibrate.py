@@ -35,8 +35,9 @@ FALSE_REFUSAL = -1   # positive refused
 
 def run(a):
     from ._common import load_instance
-    from ..router import (GENERIC_INTENT, tokens, score_probe, extract_args,
-                          _args_seen)
+    from ..router import (ARG_MATCH_BONUS, GENERIC_INTENT,
+                          UNCONSUMED_PENALTY, _args_seen, _passes_coverage,
+                          extract_args, score_probe, tokens)
 
     golden_path = a.golden
     if not os.path.isfile(golden_path):
@@ -90,17 +91,39 @@ def run(a):
         question names something the top probe EXTRACTED (an id, an email), the
         thresholds do not apply - the extraction is the confidence."""
         vec, item = entry["vec"], entry["item"]
-        domain = domain_of(entry["q"])
+        q = entry["q"]
+        domain = domain_of(q)
         if not vec:
             return "refused", "no_probe_matches"
-        top_score, top_name, top_meta = vec[0]
-        try:
-            kw = extract_args(top_meta, entry["q"])
-        except Exception:
-            kw = None
-        if kw and _args_seen(kw, entry["q"]) > 0:
+        # Mirror the router's deterministic walk, not just the top lexical
+        # hit: a lower-scoring probe whose caged arguments EXTRACT (the bucket
+        # enum in "objects in bucket reactorpro-…") is the one that runs.
+        cands = []
+        top_lexical = vec[0][0]
+        for lex, name, meta in vec[:8]:
+            try:
+                kw = extract_args(meta, q)
+            except Exception:
+                continue
+            if kw is None:
+                continue
+            if not _passes_coverage(meta, tokens(q)):
+                continue
+            has_caged = any(s.get("required", True) or s.get("pattern")
+                            for s in meta.args.values())
+            if not has_caged and lex < 0.5 * top_lexical:
+                continue
+            ignored = inst.router._unconsumed_for(meta, kw, q)
+            effective = (lex + ARG_MATCH_BONUS * _args_seen(kw, q)
+                         - UNCONSUMED_PENALTY * len(ignored))
+            cands.append((effective, lex, name, meta, kw))
+        if not cands:
+            return "refused", "no_probe_matches"
+        cands.sort(key=lambda c: -c[0])
+        _, top_score, top_name, top_meta, kw = cands[0]
+        if kw and _args_seen(kw, q) > 0:
             return "answered", top_name
-        second = vec[1][0] if len(vec) > 1 else 0.0
+        second = max((c[1] for c in cands[1:]), default=0.0)
         if top_score < floor:
             return "refused", "below_floor"
         if (top_score - second) < margin:
@@ -144,9 +167,33 @@ def run(a):
                       "confident_wrong": confident_wrong,
                       "false_refusals": false_refusals})
 
-    # Best = zero confident wrongs first, then fewest false refusals, then score.
-    chosen = min(curve, key=lambda r: (r["confident_wrong"],
-                                       r["false_refusals"], -r["score"]))
+    # The GOLDEN BANK is a hard constraint: a fitted point that refuses or
+    # misroutes a golden question must never be written, even if it refuses
+    # more traps. (Observed on the real aws instance: the old objective chose
+    # floor 12, breaking 5 of 12 golden cases to refuse 7 more traps.)
+    # Golden items that expect a REFUSAL are traps for fitting purposes; only
+    # answerable items are hard positives.
+    positives = sum(1 for i in golden.get("items", [])
+                    if not i.get("expect_refusal"))
+    valid = [r for r in curve if r["correct"] == positives
+             and r["false_refusals"] == 0]
+    if not valid:
+        best = max(curve, key=lambda r: (r["correct"],
+                                         -r["false_refusals"],
+                                         -r["confident_wrong"]))
+        print(f"error: no threshold answers every golden case "
+              f"({best['correct']}/{positives} at best) — the golden and "
+              f"trap banks conflict. router.json was NOT written.",
+              file=sys.stderr)
+        print("  Fix the bank: a trap whose question is also a golden case "
+              "(or scores identically) cannot be both answered and refused.",
+              file=sys.stderr)
+        return 1
+    # Among points that satisfy every golden case, refuse as many traps as
+    # possible without answering one confidently.
+    chosen = max(valid, key=lambda r: (r["traps_refused"],
+                                       -r["confident_wrong"],
+                                       -r["false_refusals"], -r["score"]))
     out_path = os.path.join(inst_dir, "router.json")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump({"floor": chosen["floor"], "margin": chosen["margin"],

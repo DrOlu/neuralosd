@@ -1340,9 +1340,14 @@ class Handler(BaseHTTPRequestHandler):
         out = io.StringIO()
         try:
             with contextlib.redirect_stdout(out):
-                calibrate.run(ns)
+                rc = calibrate.run(ns)
         except SystemExit as exc:
             raise _HttpError(400, "invalid_request", str(exc))
+        if rc:
+            raise _HttpError(
+                409, "conflict",
+                "calibration refused: " + (out.getvalue().strip()[-500:]
+                                           or "banks conflict"))
         self._reload_state(s)
         return 200, {"ok": True, "output": out.getvalue()[-4000:]}, {
             "instance": s.name}

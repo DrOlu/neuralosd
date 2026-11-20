@@ -78,6 +78,63 @@ def test_ambiguous_multiple_integers_refuse_instead_of_guessing(tmp_path):
     assert exc.value.envelope["refusal_reason"] == "args_not_extractable"
 
 
+def test_action_verbs_are_not_excused_by_enum_values(tmp_path):
+    # A bucket literally named "do-not-delete-..." must not make the menu
+    # look like it owns the verb "delete".
+    @probe(description="Bucket sizes", triggers=["buckets"],
+           args={"bucket": {"type": "enum", "required": False,
+                            "values": ["do-not-delete-ssm-diagnosis"]}})
+    def buckets(bucket=None):
+        return {"bucket": bucket}
+
+    with pytest.raises(NoResults) as exc:
+        _router(tmp_path, [buckets]).ask("delete all buckets")
+    assert exc.value.envelope["refusal_reason"] == "action_intent"
+
+
+def test_stop_is_an_action_even_when_the_menu_has_a_stopped_state(tmp_path):
+    @probe(description="EC2 instances", triggers=["instances"],
+           args={"state": {"type": "enum", "required": False,
+                           "values": ["all", "running", "stopped"]}})
+    def instances(state="all"):
+        return {"state": state}
+
+    with pytest.raises(NoResults) as exc:
+        _router(tmp_path, [instances]).ask("stop instance i-0123456789abcdef0")
+    assert exc.value.envelope["refusal_reason"] == "action_intent"
+
+
+def test_a_probe_that_owns_an_action_verb_still_answers(tmp_path):
+    @probe(description="Cancelled orders", triggers=["cancel order"])
+    def cancelled_orders():
+        return {"cancelled": 2}
+
+    env = _router(tmp_path, [cancelled_orders]).ask("cancel order")
+    assert env["probe"] == "cancelled_orders"
+
+
+def test_lowercase_identifier_satisfies_a_required_string_arg(tmp_path):
+    @probe(description="One instance", triggers=["details of instance"],
+           args={"instance_id": {"type": "string", "required": True}})
+    def detail(instance_id):
+        return {"instance_id": instance_id}
+
+    env = _router(tmp_path, [detail]).ask(
+        "details of instance i-086c400995b1db8f8")
+    assert env["results"][0]["instance_id"] == "i-086c400995b1db8f8"
+
+
+def test_two_identifiers_do_not_guess_a_string_arg(tmp_path):
+    @probe(description="One instance", triggers=["details of instance"],
+           args={"instance_id": {"type": "string", "required": True}})
+    def detail(instance_id):
+        return {"instance_id": instance_id}
+
+    with pytest.raises(NoResults):
+        _router(tmp_path, [detail]).ask(
+            "details of instance i-086c400995b1db8f8 and i-0d4173eefa6fd65fe")
+
+
 def test_multi_word_qualifier_can_be_satisfied(tmp_path):
     @probe(description="Work orders on hold",
            triggers=["work orders on hold"])

@@ -122,7 +122,9 @@ def action_intent_reason(normalized, menu_vocab):
 
 ACTION_VERBS = ("play", "erase", "delete", "remove", "drop", "wipe", "purge",
                 "send", "execute", "restart", "shutdown", "kill", "exploit",
-                "deploy", "cancel")
+                "deploy", "cancel", "stop", "start", "terminate", "reboot",
+                "isolate", "block", "unblock", "quarantine", "revoke",
+                "rotate", "disable", "enable")
 
 QUALIFIERS = ("blocked", "overdue", "rejected", "closed", "resolved",
               "pending", "escalated", "cancelled", "archived", "on hold",
@@ -738,6 +740,37 @@ def _int_named_for(argname, question, numbers, used):
     return None
 
 
+def _string_from_question(question):
+    """The string value a required string arg names, or None.
+
+    The old rule only accepted a Capitalised phrase after by/for/from/of, so
+    identifiers like `i-086c400995b1db8f8`, `reactorpro-builds-1759426793`
+    and `ws1` could NEVER be extracted — an AWS instance detail question was
+    refused `args_not_extractable`. Order: an explicit quote, then a
+    capitalised phrase, then the ONE identifier-like token in the question.
+    """
+    quoted = re.search(r'"([^"]{1,80})"|\'([^\']{1,80})\'', question)
+    if quoted:
+        return (quoted.group(1) or quoted.group(2)).strip()
+    m = re.search(r"\b(?:by|for|from|of|does|named)\s+"
+                  r"([A-Z][\w'&./ -]{1,60})", question)
+    if m:
+        value = m.group(1).strip()
+        for stop in (" have", " ?", "?"):
+            value = value.replace(stop, "").strip()
+        if value:
+            return value
+    # One identifier-like token: contains a digit or hyphen (i-0abc, ws-1,
+    # build-2024). Dates and bare numbers are not identifiers.
+    candidates = [t for t in re.findall(r"\b[A-Za-z0-9][\w.-]{1,80}\b",
+                                       _DATE_LIKE.sub(" ", question))
+                  if ("-" in t or any(ch.isdigit() for ch in t))
+                  and not t.isdigit() and "." not in t]
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
+
+
 def _extract_one(argname, spec, question):
     t = spec.get("type", "string")
     if t == "enum":
@@ -753,10 +786,7 @@ def _extract_one(argname, spec, question):
             return spec.get("default")
         return _int_range(argname, spec, v)
     if t == "string" and spec.get("required"):
-        m = re.search(r"\b(?:by|for|from|of|does)\s+([A-Z][\w'&./ -]{1,60})", question)
-        if not m:
-            return None
-        return m.group(1).strip()
+        return _string_from_question(question)
     return spec.get("default")
 
 
@@ -843,6 +873,14 @@ class Router:
                        if hasattr(m, "_vocab_tokens")}
         self._menu_vocab = frozenset().union(*self._vocab.values()) \
             if self._vocab else frozenset()
+        # Action detection must only honour a verb a probe ACTUALLY answers
+        # (trigger/name). Enum values are data: a bucket literally named
+        # "do-not-delete-..." must not make "delete all buckets" look like a
+        # question the menu owns.
+        self._action_vocab = frozenset().union(*(
+            tokens(" ".join(m.triggers or []))
+            | tokens(m.name.replace("_", " "))
+            for m in self.metas)) if self.metas else frozenset()
         self.menu_version = self._menu_version()
         self._filter_vocab = self._build_filter_vocab()
         # Verification bands: a golden match (and its typed oracle, when the
@@ -1107,7 +1145,7 @@ class Router:
         # the user asked for an action no probe can perform, and answering
         # with the nearest data would be a confident wrong answer about what
         # the system just did.
-        action = action_intent_reason(normalized, self._menu_vocab)
+        action = action_intent_reason(normalized, self._action_vocab)
         if action:
             trace["note"] = "action_intent"
             return action
@@ -1553,7 +1591,7 @@ class Router:
 
         # Mirror ask(): a destructive imperative is refused before retrieval so
         # it reports action_intent rather than degrading into no_probe_matches.
-        if action_intent_reason(normalized, self._menu_vocab):
+        if action_intent_reason(normalized, self._action_vocab):
             return _done("action_intent")
 
         retrieved = self._retrieve(normalized, k)
@@ -1615,7 +1653,7 @@ class Router:
             return _done(None, None, "defer_to_model")
         if args_failed:
             return _done("args_not_extractable")
-        return _done(action_intent_reason(normalized, self._menu_vocab)
+        return _done(action_intent_reason(normalized, self._action_vocab)
                      or "no_probe_matches")
 
     # -- public ask --------------------------------------------------------
@@ -1637,7 +1675,7 @@ class Router:
         # invoices") must still get the SPECIFIC action_intent reason, not
         # the generic no_probe_matches. The check runs BEFORE the walk so it
         # fires even when no probe is executable.
-        if action_intent_reason(normalized, self._menu_vocab):
+        if action_intent_reason(normalized, self._action_vocab):
             self._refuse(ask_id, time.time(), question, normalized,
                          "action_intent")
 
@@ -1803,7 +1841,7 @@ class Router:
                     refusal_reason = "args_not_extractable"
                 else:
                     refusal_reason = (action_intent_reason(normalized,
-                                                           self._menu_vocab)
+                                                           self._action_vocab)
                                       or "no_probe_matches")
                 # THE v2.9.6 FIX: this branch used to build its audit
                 # envelope inline and omit `ts` and `mode`. Every other
@@ -2077,14 +2115,10 @@ def extract_args(meta: ProbeMeta, question: str) -> Optional[Dict[str, Any]]:
                 continue
             kwargs[argname] = v
         else:
-            m = re.search(r"\b(?:by|for|from|of|does)\s+([A-Z][\w'&./ -]{1,60})",
-                          question)
-            if not m:
+            val = _string_from_question(question)
+            if val is None:
                 if required:
                     return None
                 continue
-            val = m.group(1).strip()
-            for stop in (" have", " ?", "?"):
-                val = val.replace(stop, "").strip()
             kwargs[argname] = val
     return kwargs
