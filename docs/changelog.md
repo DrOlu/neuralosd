@@ -1,5 +1,18 @@
 # Changelog
 
+## 3.6.2 — generated Plasma instances on Windows
+
+`neuralosd plasma init` wrote the instance directory raw into the generated
+`probes.py` docstring. A Windows path (`C:\Users\...`) therefore introduced
+a truncated `\U` escape and the module would not compile — every generated
+Plasma instance on Windows was unusable, and the 3.6.1 build-job unit tests
+caught it.
+
+The docstring no longer interpolates the path, and a regression test
+generates into a Windows-style path and compiles the result.
+
+Tests: 1,598 passed, 4 skipped.
+
 ## 3.6.1 — Plasma driver tests on Windows
 
 The 3.6.0 binary build failed its Windows unit tests: the Plasma driver's
