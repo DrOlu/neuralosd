@@ -1,5 +1,36 @@
 # Changelog
 
+## 3.6.0 — Plasma, driven end to end
+
+Plasma 1.24 publishes its whole CLI as `plasma help --json` (schema
+`plasma.help/1`, 179 commands, each with a safety class). neuralOSd now
+drives that catalog instead of a hand-written verb list.
+
+- **Catalog client** (`neuralosd.plasma`): validates the schema, indexes leaf
+  commands, classifies safety (`read-only`, `plan-gated`, `mutating`) and
+  executes argv lists only — no shell, bounded output, timeouts.
+- **Read-only commands become probes.** `neuralosd plasma init` saves the
+  catalog and writes a `probes.py` exposing every generatable read-only
+  command (46 on Plasma 1.24.1) with typed enum/integer arguments, natural
+  triggers and the state root/event store baked in. The instance loads
+  without Plasma running.
+- **Plan-gated actions stay two-step.** `plasma plan` validates the command
+  and parameters, runs Plasma's own dry-run and records a local plan plus
+  Plasma's plan/approval id. `plasma apply` re-validates, adds `--apply`
+  (and `--plan <id>` when returned) and refuses a second application.
+- **New CLI group:** `neuralosd plasma {catalog, init, probes, call, plan,
+  apply, pending, health}`, with full help pages and a dedicated
+  [Plasma guide](plasma.md).
+- Commands with required free-form arguments are not probes; they run via
+  `plasma call` (read-only) or `plasma plan` (plan-gated) with explicit,
+  validated parameters. Unknown commands and option injection are refused.
+
+Verified against Plasma 1.24.1: health, coverage, policy, ledger
+verification, approvals, prevention posture and plan/apply all answered
+through neuralosd on this host.
+
+Tests: `tests/test_plasma_driver.py` (7); suite 1,597 passed, 4 skipped.
+
 ## 3.5.3 — standalone binaries update the launcher again
 
 Found by testing the new updater against a real onefile build: Nuitka runs
