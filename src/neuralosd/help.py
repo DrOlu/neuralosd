@@ -1032,6 +1032,7 @@ Examples:
   neuralosd ask --instance-dir ./sales "total revenue by region"
   neuralosd serve --instance-dir ./sales --port 9998 --api-key "$KEY"
   neuralosd golden --dir ./sales
+  neuralosd plasma init --out ./plasma-estate --root .plasma
   neuralosd help ask                 # full help for one command
   neuralosd help --json              # machine-readable catalogue
 
