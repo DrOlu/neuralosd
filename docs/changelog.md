@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.6.1 — Plasma driver tests on Windows
+
+The 3.6.0 binary build failed its Windows unit tests: the Plasma driver's
+fake CLI was a shebang script, and Windows cannot execute one as a
+subprocess. The test now invokes `[python, script]`, and
+`plasma_bin`/`_run` accept an argv prefix as well as a single executable
+(also useful for wrappers and launch shims). No runtime behaviour change.
+
+Tests: 1,597 passed, 4 skipped.
+
 ## 3.6.0 — Plasma, driven end to end
 
 Plasma 1.24 publishes its whole CLI as `plasma help --json` (schema
