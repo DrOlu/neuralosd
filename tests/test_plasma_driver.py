@@ -193,6 +193,20 @@ def test_generated_instance_routes_and_calls_plasma(fake, tmp_path):
     assert any(c[:2] == ["detect", "test"] and "--root" in c for c in calls)
 
 
+def test_generated_module_survives_windows_style_paths(fake, tmp_path):
+    # The docstring used to interpolate the instance directory raw, so a
+    # Windows path introduced a truncated \U escape and probes.py would not
+    # compile. Simulate that path on POSIX too.
+    bin_path, _ = fake
+    cat = plasma.load_catalog(bin_path)
+    weird = tmp_path / "C:\\Users\\runner\\inst"
+    plasma.write_probe_module(str(weird), cat,
+                              root="C:\\ProgramData\\Plasma",
+                              bin_path=bin_path)
+    source = (weird / "probes.py").read_text(encoding="utf-8")
+    compile(source, "probes.py", "exec")
+
+
 def test_plasma_call_refuses_non_read_only(fake):
     bin_path, _ = fake
     cat = plasma.load_catalog(bin_path)
