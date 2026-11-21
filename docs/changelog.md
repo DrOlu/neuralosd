@@ -1,5 +1,39 @@
 # Changelog
 
+## 3.6.3 — gate fixes found on the live AWS estate
+
+Driving the real `aws` instance end to end exposed three defects.
+
+- **A destructive request could be answered with data.** Action detection
+  excused a verb whenever it appeared anywhere in the menu vocabulary —
+  including enum VALUES. A bucket literally named
+  `do-not-delete-ssm-diagnosis-…` made “delete all buckets” look like a
+  question the menu owned, and it returned the bucket list. Verbs are now
+  checked against triggers and probe names only. Added the missing
+  destructive verbs: stop, start, terminate, reboot, isolate, block,
+  unblock, quarantine, revoke, rotate, disable, enable.
+- **Lowercase identifiers were unextractable.** A required string argument
+  only matched a Capitalised phrase after by/for/from/of, so an AWS id like
+  `i-086c400995b1db8f8` never matched and `aws_instance_detail` refused
+  `args_not_extractable`. Extraction now accepts a quoted value, a
+  Capitalised phrase, or the single identifier-like token; two identifiers
+  are treated as ambiguous and refused.
+- **`calibrate` could break the golden bank.** Its simulation looked only at
+  the top lexical probe, missing the lower-scoring probe whose caged
+  argument actually extracts, and its objective traded golden answers for
+  trap refusals. On the aws copy it wrote `floor=12`, taking golden from
+  12/12 to 7/12. It now mirrors the router's executable-candidate walk,
+  treats every golden case as a hard constraint, counts golden refusal items
+  as traps, and refuses to write when the banks conflict. The HTTP endpoint
+  returns 409 instead of a false 200.
+
+Verified on the live estate: 12/12 golden questions, Windows Server detail
+with SSM Online, destructive questions refused `action_intent`, HTTP API
+13/13, and the Plasma group end to end. Known residual: a bare region filter
+(“running instances in eu-west-3”) is still answered unfiltered.
+
+Tests: 1,603 passed, 4 skipped.
+
 ## 3.6.2 — generated Plasma instances on Windows
 
 `neuralosd plasma init` wrote the instance directory raw into the generated
