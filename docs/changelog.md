@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.7.1 — plugin source instances can add a backend
+
+`init --source plugin:…` wrote an allow list containing only the source
+plugin. That is operator policy, not a scaffold default: the new instance
+then refused a backend/sink added later with `--plugin-dir` (for example
+`deploy --backend my-backend`). The generated `plugins.json` no longer
+writes an allow list; an operator who wants one adds it explicitly.
+Verified by scaffolding a source instance and deploying it with a plugin
+backend.
+
+Tests: 1,653 passed, 4 skipped.
+
 ## 3.7.0 — plugin system
 
 Plugins add capabilities without forking the core. Five kinds share one
