@@ -504,3 +504,51 @@ def test_plugin_docs_exist():
     assert os.path.isfile(os.path.join(root, "docs", "plugins.md"))
     mkdocs = open(os.path.join(root, "mkdocs.yml"), encoding="utf-8").read()
     assert "plugins.md" in mkdocs
+
+
+SINK_HOOK_PLUGIN = '''\
+import json
+from neuralosd import probe
+
+
+@probe(description="Acme hello", triggers=["acme hello"])
+def hello():
+    return {"hello": "world"}
+
+
+def register(ctx):
+    sink_path = ctx.config["sink"]
+
+    def sink(row):
+        with open(sink_path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row) + "\\n")
+
+    def hook(question, probe_name, args):
+        return "policy_blocked" if probe_name.endswith("_hello") else None
+
+    ctx.register_probe(hello)
+    ctx.register_audit_sink(sink)
+    ctx.register_policy_hook(hook)
+'''
+
+
+def test_audit_sink_receives_rows_and_hook_can_refuse(tmp_path):
+    from neuralosd import NoResults
+    from neuralosd._cmd._common import load_instance
+
+    sink = tmp_path / "sink.jsonl"
+    plug = _plugin_dir(tmp_path, "guarded", SINK_HOOK_PLUGIN,
+                       kinds=("probes", "audit_sink", "policy_hook"))
+    inst_dir = _instance_dir(tmp_path, plugins=[{
+        "path": str(plug), "enabled": True,
+        "config": {"sink": str(sink)}}])
+    inst = load_instance(str(inst_dir))
+    with pytest.raises(NoResults) as exc:
+        inst.ask("acme hello")
+    assert exc.value.envelope["refusal_reason"] == "policy_blocked"
+    env = inst.ask("how many rows")
+    assert env["results"][0]["rows"] == 3
+    rows = [json.loads(line) for line in sink.read_text(
+        encoding="utf-8").splitlines()]
+    assert len(rows) >= 2
+    assert any(r.get("probe") == "rows" for r in rows)

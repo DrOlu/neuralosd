@@ -865,6 +865,8 @@ class Router:
         self.name = name
         self.config_dir = config_dir
         self.plugin_provenance = {}
+        self.audit_sinks = []          # additive, never replace the ledger
+        self.policy_hooks = []         # refusal-only
         # When True, an answer that would have dropped a filter the user named
         # is refused instead of returned. Off by default so existing callers
         # keep working; the ledger is still always present in the envelope.
@@ -1546,6 +1548,12 @@ class Router:
             ledger = _AUDIT_FILE.get() or self.audit_file
             with open(ledger, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+            for sink in self.audit_sinks:
+                try:
+                    writer = getattr(sink, "write", None)
+                    (writer or sink)(dict(rec))
+                except Exception:
+                    pass          # a sink cannot break an answer or the ledger
         except Exception:
             pass
 
@@ -1872,6 +1880,18 @@ class Router:
                         {}, exc.reason, token=exc.token,
                         probe_name=_meta.name)
                     raise exc
+                hook_reason = None
+                for hook in self.policy_hooks:
+                    try:
+                        verdict = hook(normalized, _meta.name, dict(kwargs))
+                    except Exception:
+                        continue
+                    if verdict:
+                        hook_reason = str(verdict)
+                        break
+                if hook_reason:
+                    self._refuse(ask_id, time.time(), question, normalized,
+                                 hook_reason, retrieved)
                 mode = "deterministic"
                 used_probe = _meta.name
                 try:

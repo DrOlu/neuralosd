@@ -137,5 +137,11 @@ class Registry:
     def backend_names(self) -> List[str]:
         return sorted(self._backends)
 
+    def audit_sinks(self) -> List[Any]:
+        return [sink for _owner, sink in self._sinks]
+
+    def policy_hooks(self) -> List[Any]:
+        return [hook for _owner, hook in self._hooks]
+
     def provider_names(self) -> List[str]:
         return sorted(self._providers)

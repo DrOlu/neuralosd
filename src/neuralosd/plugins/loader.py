@@ -209,6 +209,8 @@ def apply_to_instance(inst, instance_dir: str, model_provider: Optional[str] = N
                 provenance[meta.name] = found
         inst.add_probes(bundle.probes(), provenance=provenance)
     inst.plugins = bundle
+    inst.router.audit_sinks = bundle.registry.audit_sinks()
+    inst.router.policy_hooks = bundle.registry.policy_hooks()
     inst.plugin_provenance = {
         record.name: {"version": record.manifest.version,
                       "digest": record.digest}
