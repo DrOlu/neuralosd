@@ -1,15 +1,20 @@
-from .boxlite_backend import BoxLiteBackend
-from .msb_backend import MSBBackend
+"""Sandbox backends, resolved through the plugin registry.
+
+The shipped backends are registered exactly like third-party ones, so a
+plugin can add a backend without a core fork.
+"""
+def _record():
+    from ..plugins.builtins import builtin_record
+    return builtin_record()
 
 
 def get_backend(name: str, **kwargs):
-    if name == "boxlite":
-        return BoxLiteBackend(**kwargs)
-    if name == "msb":
-        return MSBBackend(**kwargs)
-    raise ValueError(f"unknown backend: {name}")
+    factory = _record().backends.get(name)
+    if factory is None:
+        raise ValueError(f"unknown backend: {name}")
+    return factory(**kwargs)
 
 
 def available_backends():
-    return {"boxlite": BoxLiteBackend.available(),
-            "msb": MSBBackend.available()}
+    return {name: factory.available()
+            for name, factory in _record().backends.items()}
