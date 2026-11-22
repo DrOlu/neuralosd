@@ -1,5 +1,38 @@
 # Changelog
 
+## 3.7.0 — plugin system
+
+Plugins add capabilities without forking the core. Five kinds share one
+versioned manifest and registry:
+
+- **Probe packs** — questions, namespaced by plugin and collision-checked;
+  every audit row carries `plugin`, `plugin_version` and `plugin_digest`.
+- **Sources** — `init --source plugin:NAME:SPEC --plugin-dir DIR` scaffolds
+  an instance from a source plugin's `probes(spec)`.
+- **Model providers** — deterministic, Ollama, OpenAI-compatible, or a
+  plugin provider. A provider may only name a probe already in the menu and
+  supply arguments the probe accepts; the core executes it and the gate,
+  masking and audit still apply.
+- **Sandbox backends** — `deploy --backend NAME --plugin-dir DIR` resolves a
+  plugin backend and calls its `deploy(instance_dir, name=, host=, port=)`.
+- **Audit sinks and policy hooks** — sinks receive every masked audited row
+  (additive, failure-isolated); hooks can add a refusal, never force an answer.
+
+Other pieces:
+
+- `neuralosd plugin` group (list/inspect/enable/disable/test/new/sources/
+  providers/doctor/lock/install) with full help pages;
+  `--model-provider` on `ask`/`serve`; `--plugin-dir` where applicable.
+- `runtime: "process"` plugins speak newline-delimited JSON-RPC over
+  stdin/stdout with a scrubbed environment, per-call timeout and crash
+  isolation.
+- `plugins.lock` pins versions and sha256 code digests; an operator allowlist
+  and optional detached OpenSSL signatures are verified before install.
+- Docs: `docs/plugins.md`, CLI map, mkdocs nav, and a shipped example at
+  `examples/plugins/hello-probe`.
+
+Tests: 1,653 passed, 4 skipped.
+
 ## 3.6.3 — gate fixes found on the live AWS estate
 
 Driving the real `aws` instance end to end exposed three defects.
