@@ -293,3 +293,106 @@ def test_plugin_allowlist_refuses_others(tmp_path):
     (inst_dir / "plugins.json").write_text(json.dumps(cfg), encoding="utf-8")
     with pytest.raises(PluginError, match="allow list"):
         load_instance(str(inst_dir))
+
+
+# ── Phase 2: out-of-process plugins ──────────────────────────────────────
+
+PROCESS_PLUGIN = '''\
+import json
+import sys
+
+for line in sys.stdin:
+    req = json.loads(line)
+    method = req.get("method")
+    rid = req.get("id")
+    if method == "init":
+        result = {"probes": [{"name": "hello",
+                              "description": "Process hello",
+                              "triggers": ["process hello"], "args": {}}],
+                  "providers": [{"name": "fixed"}]}
+    elif method == "probe":
+        result = {"hello": "process"}
+    elif method == "select":
+        result = {"probe": "hello", "args": {}}
+    elif method == "health":
+        result = {"ok": True}
+    elif method == "shutdown":
+        print(json.dumps({"jsonrpc": "2.0", "id": rid, "result": {"ok": True}}),
+              flush=True)
+        break
+    else:
+        result = None
+    print(json.dumps({"jsonrpc": "2.0", "id": rid, "result": result}),
+          flush=True)
+'''
+
+
+def _process_plugin(tmp_path, name="proc-plugin", source=PROCESS_PLUGIN,
+                    timeout=None):
+    d = _plugin_dir(tmp_path, name, source)
+    manifest = json.loads((d / "neuralosd-plugin.json").read_text(
+        encoding="utf-8"))
+    manifest.update({
+        "runtime": "process",
+        "command": [sys.executable, str(d / "plugin.py")],
+        "entrypoint": None,
+        "kinds": ["probes", "model_provider"],
+        "permissions": {"timeout_seconds": timeout or 10},
+    })
+    (d / "neuralosd-plugin.json").write_text(json.dumps(manifest),
+                                             encoding="utf-8")
+    return d
+
+
+def test_process_plugin_probes_and_provider(tmp_path):
+    from neuralosd._cmd._common import load_instance
+
+    plug = _process_plugin(tmp_path)
+    inst_dir = _instance_dir(tmp_path, plugins=[{"path": str(plug),
+                                                 "enabled": True}])
+    inst = load_instance(str(inst_dir))
+    assert any(m.name.endswith("_hello") for m in inst.router.metas)
+    env = inst.ask("process hello")
+    assert env["results"][0]["hello"] == "process"
+    assert env["results"][0]["_tool"].endswith("_hello")
+
+
+def test_process_plugin_timeout_does_not_hang_or_corrupt_core(tmp_path):
+    from neuralosd._cmd._common import load_instance
+    from neuralosd.plugins import PluginError
+
+    source = PROCESS_PLUGIN.replace(
+        'result = {"hello": "process"}',
+        'import time; time.sleep(5); result = {"hello": "late"}')
+    plug = _process_plugin(tmp_path, source=source, timeout=1)
+    inst_dir = _instance_dir(tmp_path, plugins=[{"path": str(plug),
+                                                 "enabled": True}])
+    inst = load_instance(str(inst_dir))
+    from neuralosd import NoResults
+    try:
+        env = inst.ask("process hello")
+    except NoResults as exc:
+        env = exc.envelope
+    assert "timed out" in json.dumps(env), env
+    # Core probes still work after a plugin timeout.
+    env = inst.ask("how many rows")
+    assert env["results"][0]["rows"] == 3
+
+
+def test_process_plugin_crash_raises_not_guesses(tmp_path):
+    from neuralosd._cmd._common import load_instance
+    from neuralosd.plugins import PluginError
+
+    source = PROCESS_PLUGIN.replace(
+        'result = {"hello": "process"}', 'sys.exit(3)')
+    plug = _process_plugin(tmp_path, source=source)
+    inst_dir = _instance_dir(tmp_path, plugins=[{"path": str(plug),
+                                                 "enabled": True}])
+    inst = load_instance(str(inst_dir))
+    from neuralosd import NoResults
+    try:
+        env = inst.ask("process hello")
+    except NoResults as exc:
+        env = exc.envelope
+    blob = json.dumps(env)
+    assert "PluginError" in blob or "closed stdout" in blob or "exited" in blob
