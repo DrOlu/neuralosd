@@ -225,6 +225,167 @@ openssl dgst -sha256 -sign key.pem -out plugin.sig payload.txt
 Set `signature` and `public_key` in the manifest. A present signature that does
 not verify is refused.
 
+## Manifest fields
+
+| Field | Required | Meaning |
+|---|---|---|
+| `schema` | yes | `neuralosd.plugin/1` |
+| `name` | yes | Unique plugin name; probes are namespaced by it |
+| `version` | yes | Semver; recorded in `plugins.lock` and audit rows |
+| `plugin_api` | yes | `1` (checked at load) |
+| `neuralosd` | no | Version range, e.g. `>=3.7,<4` |
+| `kinds` | yes | Any of probes, source, model_provider, backend, audit_sink, policy_hook |
+| `runtime` | no | `inprocess` (default) or `process` |
+| `entrypoint` | inprocess | `module:attribute`; a `register(ctx)` function or Plugin |
+| `command` | process | argv list for the plugin process |
+| `permissions` | no | `timeout_seconds` (process), declared capabilities |
+| `config_schema` | no | JSON Schema for `config` in `plugins.json` |
+| `integrity` | no | `sha256:` of the code tree; verified on install |
+| `signature` / `public_key` | no | Detached OpenSSL signature over the code digest |
+
+## Plugin API reference
+
+`register(ctx)` receives a `PluginContext`:
+
+| Method | Adds |
+|---|---|
+| `register_probe(fn, name=None, golden=None, traps=None)` | A `@probe` function |
+| `register_provider(name, provider)` | A `ModelProvider` |
+| `register_source(name, source)` | A source with `profile(spec)` / `probes(spec)` |
+| `register_backend(name, factory)` | A sandbox backend factory |
+| `register_audit_sink(sink)` | A `write(row)` callable or callable |
+| `register_policy_hook(hook)` | `hook(question, probe, args) -> reason or None` |
+
+`ctx` also exposes `manifest`, `instance_dir`, `config`, `read_only` and a
+logger. It does not expose the router, the gate or the audit chain.
+
+**Provider contract**
+
+```python
+class ModelProvider:
+    name = "my-provider"
+    def available(self) -> bool: ...
+    def select(self, question, menu, k=8):
+        return {"probe": "...", "args": {...}}   # or None to abstain
+    def complete(self, messages, **opts) -> str | None: ...
+```
+
+The menu entries are `{name, description, args, triggers}`. The returned probe
+must be one of those names, and the arguments must satisfy the probe's spec;
+otherwise the fallback abstains and the router refuses.
+
+**Source contract**
+
+```python
+class MySource:
+    def profile(self, spec) -> dict: ...      # optional validation/metadata
+    def probes(self, spec) -> list[callable]: ...  # required
+```
+
+**Backend contract**
+
+```python
+class MyBackend:
+    @staticmethod
+    def available() -> bool: ...
+    def deploy(self, instance_dir, *, name, host, port) -> dict: ...
+```
+
+**Sink / hook contract**
+
+```python
+def sink(row: dict) -> None: ...                     # masked audit row
+def hook(question: str, probe: str, args: dict) -> str | None: ...
+```
+
+## Recipes
+
+**Ollama routing fallback**
+
+```sh
+neuralosd ask --instance-dir ./sales --model-provider ollama:llama3.1 \
+  "which region had the most incidents"
+```
+
+Ollama receives the closed menu and must reply with a probe name; the core
+executes it. If Ollama is unreachable the ask fails loudly rather than
+silently falling back to a guess.
+
+**OpenAI-compatible (vLLM, LM Studio, llama.cpp)**
+
+```sh
+export OPENAI_API_KEY=...        # only if your server needs it
+neuralosd serve --instance-dir ./sales \
+  --model-provider openai:http://127.0.0.1:8000/v1:qwen2.5-7b
+```
+
+**A probe pack**
+
+```python
+from neuralosd import probe
+
+@probe(description="Refund count", triggers=["refund count"])
+def refunds():
+    return {"refunds": 4}
+
+def register(ctx):
+    ctx.register_probe(refunds)
+```
+
+**A source-backed instance**
+
+```sh
+neuralosd init --source plugin:tickets:7 --plugin-dir ./tickets \
+  --name tickets --out ./tickets-inst
+```
+
+**A backend**
+
+```sh
+neuralosd deploy --instance-dir ./sales --backend my-backend \
+  --plugin-dir ./my-backend --name sales-edge --port 8501
+```
+
+**An audit sink + refusal hook**
+
+```python
+def register(ctx):
+    ctx.register_audit_sink(lambda row: open("audit.jsonl", "a").write(
+        __import__("json").dumps(row) + "\n"))
+    ctx.register_policy_hook(
+        lambda q, probe, args: "off_hours" if probe == "refunds" else None)
+```
+
+## Publishing checklist
+
+1. `neuralosd plugin test DIR` passes.
+2. Manifest has `name`, `version`, `plugin_api`, `kinds`, `neuralosd`.
+3. Probe names are unique and meaningful after namespacing.
+4. `neuralosd plugin lock --instance-dir INST` pins the code digest.
+5. Optional: sign the digest with `openssl`; set `signature`/`public_key`.
+6. `neuralosd plugin install DIR` verifies before copying.
+
+## Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| `not in plugins.json allow list` | Add the name to `allow`, or remove the list |
+| `locked version … does not match` | Re-run `plugin lock` after a deliberate upgrade |
+| `integrity does not match plugins.lock` | Code changed after locking; re-lock |
+| `signature verification failed` | Re-sign the code digest or check `public_key` |
+| `plugin call timed out` | Raise `permissions.timeout_seconds` or fix the plugin |
+| A provider always abstains | It returned a probe not in the menu or invalid args |
+| Source init says “no plugin source” | Pass `--plugin-dir`, and check `plugin sources` |
+
+## Limits
+
+- In-process plugins share the runtime's privileges.
+- Out-of-process isolation is process-level (scrubbed env, timeout, line cap),
+  not a VM; use a sandbox backend for hostile code.
+- Source-generated probes are not auto-namespaced; give them unique names.
+- Policy hooks cannot force an answer; only the core gate can.
+- A plugin cannot alter the signed envelope or the audit hash chain.
+
 ## Security model
 
 - Plugins are code with the privileges of the runtime; enable only what you

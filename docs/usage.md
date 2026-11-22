@@ -1376,6 +1376,44 @@ Five actions: `block_ip`, `isolate_host`, `disable_user`,
 `rotate_credential`, `quarantine_file`. Every step journaled to
 `actuation_journal.jsonl` with who/when/what/why/rollback.
 
+## 6g. Plugins (v3.7.0)
+
+Add a capability without forking the core:
+
+```sh
+neuralosd plugin new acme --kind probes --out ./acme
+neuralosd plugin test ./acme
+neuralosd plugin enable acme --instance-dir ./sales --path ./acme
+neuralosd ask --instance-dir ./sales "acme hello"
+```
+
+Use a model provider for routing fallback (the model still only selects a
+probe; it never answers or acts):
+
+```sh
+neuralosd ask --instance-dir ./sales --model-provider ollama:llama3.1 "…"
+neuralosd ask --instance-dir ./sales \
+  --model-provider openai:http://127.0.0.1:8000/v1:llama3.1 "…"
+```
+
+Scaffold from a source plugin and deploy through a backend plugin:
+
+```sh
+neuralosd init --source plugin:tickets:7 --plugin-dir ./tickets \
+  --name tickets --out ./tickets-inst
+neuralosd deploy --instance-dir ./tickets-inst --backend my-backend \
+  --plugin-dir ./my-backend --name tickets-edge
+```
+
+Pin and verify what you enabled:
+
+```sh
+neuralosd plugin lock --instance-dir ./sales
+neuralosd plugin install ./acme
+```
+
+Full guide: [Plugins](plugins.md).
+
 ## 7. Run as a Service
 
 ### 7.1 Start the standard service

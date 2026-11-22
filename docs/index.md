@@ -56,6 +56,26 @@ it's what makes it safe for regulated environments.
 | Errors are silent | Discards are **visible** |
 | Deployment = "it should work" | Deployment = **verified end to end** |
 
+## What's new in 3.7.1 — plugins
+
+Plugins add probe packs, sources, model providers (on-device, Ollama,
+OpenAI-compatible), sandbox backends and audit sinks without forking the
+core. The gate, signed envelope and audit chain stay core-owned.
+
+```sh
+neuralosd plugin new acme --kind probes --out ./acme
+neuralosd plugin enable acme --instance-dir ./sales --path ./acme
+neuralosd ask --instance-dir ./sales --model-provider ollama:llama3.1 "…"
+neuralosd init --source plugin:tickets:7 --plugin-dir ./tickets --name tickets
+neuralosd deploy --instance-dir ./sales --backend my-backend --plugin-dir ./my-backend
+```
+
+[Plugins guide](plugins.md) · [CLI reference](cli.md) · [API reference](reference.md)
+
+## What's new in 3.6.0 — Plasma, driven end to end
+
+[Plasma guide](plasma.md)
+
 ## What's new in 2.8.1 — gossip + streaming
 
 - **Federation gossip** — `mesh gossip-push/pull`: the fingerprint

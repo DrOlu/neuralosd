@@ -115,6 +115,38 @@ arguments.
 
 ---
 
+## 3b. The plugin layer
+
+Plugins extend the menu, sources, model providers, sandbox backends and audit
+sinks through one versioned registry. The core keeps the refusal gate, the
+signed envelope and the audit hash chain; plugin hooks are additive and
+refusal-only.
+
+```
+Caller → Router → Gate → Probe
+                    │
+              Plugin registry
+        ┌──────────┼──────────┬──────────┐
+     probes     providers    sources   backends
+        │           │           │          │
+   namespaced   closed-list   init spec   deploy()
+   menu entries   routing      probes      door
+```
+
+- **Probe packs** are merged into the Router menu at load; duplicate names are
+  refused, and `menu_version` includes each plugin's name, version and digest.
+- **Model providers** are closed-list routers: they name a menu probe and
+  arguments the probe declares; the Router executes it and applies the results
+  gate. The model never acts.
+- **Audit provenance**: every plugin probe row carries `plugin`,
+  `plugin_version`, `plugin_digest`; sinks receive masked rows after the core
+  writes the ledger.
+- **Out-of-process plugins** run behind newline-delimited JSON-RPC with a
+  scrubbed environment, timeout and crash isolation.
+- **Supply chain**: `plugins.json` enables per instance, an optional `allow`
+  list restricts, `plugins.lock` pins code digests, and optional OpenSSL
+  signatures are verified before install.
+
 ## 4. The Instance Kernel
 
 An **instance** is a named set of probes + a data source + verification

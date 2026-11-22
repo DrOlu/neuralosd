@@ -123,6 +123,13 @@ slower than the budget (a cloud API on a cold start), health answers `200`
 with `"degraded": true` instead of 503: the menu, gate and model are loaded
 and cached answers still work.
 
+Plugin probes appear in `/v1/instances/{instance}/menu` and in the
+probe-level OpenAPI document exactly like core probes; plugin model providers
+are selected at server start (`serve --model-provider`). API audit rows for a
+plugin probe include `plugin`, `plugin_version` and `plugin_digest`. There is
+no API route that installs or enables a plugin: plugin management is an
+operator action on the host.
+
 ## Ask
 
 ```bash

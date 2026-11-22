@@ -45,6 +45,7 @@ neuralosd init --source plugin:acme:events.csv --plugin-dir ./acme --name acme
 | `--secret-ref NAME` | Reference a secret by name instead of embedding it |
 | `--since` / `--on` | Time-window hints for log/API sources |
 | `--packages` | Extra pip packages the generated probes may import |
+| `--plugin-dir DIR` | Load a source plugin for `--source plugin:NAME:SPEC` |
 
 What lands in the instance dir: a **profile** of the data, **Pydantic models**, a **router**, a starter **probe menu**, and the **banks** directory (golden questions, truth oracles, invariants). See [usage §3](usage.md#3-build-an-instance).
 
@@ -109,6 +110,8 @@ neuralosd ask --strict --instance-dir ./fin "net margin per quarter"
 | Flag | Purpose |
 |---|---|
 | `--model` | Load the on-device model as a routing fallback |
+| `--model-provider SPEC` | Routing fallback: deterministic, `ollama[:MODEL]`, `openai:BASE:MODEL` |
+| `--plugin-dir DIR` | Load a plugin directory for this call (repeatable) |
 | `--strict` | Reject answers that fall back to partial menus |
 | `--explain` | Dry run: show the probe, arguments and gate decision without executing or auditing |
 | `--as-of ISO` | Point temporal questions at a specific date |
@@ -136,6 +139,8 @@ neuralosd serve --instance-dir ./a --instance-dir ./b --port 9998 \
 | `--allow-mesh` | Enable the mesh discover/preflight/delegate endpoints (off by default) |
 | `--host` / `--port` | Bind address (default `127.0.0.1:9998`) |
 | `--model` / `--strict` | Same semantics as `ask` |
+| `--model-provider SPEC` | Routing fallback provider for every instance |
+| `--plugin-dir DIR` | Load a plugin directory (repeatable) |
 
 The `/v1` surface, auth, OpenAPI 3.1 at `/openapi.json`, `/docs`, plans,
 audit and deployment notes are in the [HTTP API guide](api.md). A

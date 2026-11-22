@@ -17,14 +17,34 @@ What neuralosd trusts, what it verifies, and where the boundary is.
 - **HTTP is the multi-tenant boundary.** Identity, role, PII and budget are
   enforced there (see below).
 
+## Plugins
+
+Plugins are code and run with the runtime's privileges unless you choose the
+out-of-process runtime.
+
+- **Enable only what you reviewed.** `plugins.json` is per instance; an
+  optional `allow` list refuses anything not named.
+- **Pin code.** `plugins.lock` records a sha256 tree digest; a changed plugin
+  is refused. `plugin install` verifies `integrity` and an optional detached
+  OpenSSL signature before replacing files.
+- **Out-of-process is lighter trust, not a VM.** It gets a scrubbed
+  environment, a timeout and a line cap; use a sandbox backend for hostile
+  code.
+- **The gate stays sovereign.** A provider may only select a probe already in
+  the menu and valid arguments; a policy hook may add a refusal, never remove
+  one; a plugin cannot alter the envelope or the audit chain.
+- **Secrets**: manifests and `plugins.json` carry references, never secret
+  values. A provider's API key comes from the environment.
+
 ## Binding and transport
 
 - `neuralosd serve` and `neuralosd serve-multi` bind `127.0.0.1` by default.
 - A non-loopback bind is **refused** unless a credential is configured (a
   global token or at least one per-agent token). There is no silent wide
   bind.
-- There is no TLS in the server. Terminate TLS at a reverse proxy and send
-  the bearer token over that leg.
+- TLS is optional: `serve --tls-cert cert.pem --tls-key key.pem` wraps the
+  listener. Terminating TLS at a reverse proxy remains valid; either way the
+  bearer token must not cross an untrusted leg.
 - Bodies are capped at 1 MB (413), live request threads are capped (503 on
   overflow), and a stalled socket times out after 30 s.
 

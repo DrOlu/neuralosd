@@ -9,6 +9,7 @@ in the `neuralosd` package.
 
 - [neuralosd (top-level)](#neuralosd-top-level)
 - [neuralosd.probe](#neuralosdprobe)
+- [neuralosd.plugins](#neuralosdplugins)
 - [neuralosd.router](#neuralosdrouter)
 - [neuralosd.instance](#neuralosdinstance)
 - [neuralosd.chains](#neuralosdchains)
@@ -204,6 +205,80 @@ Dataclass attached to every `@probe`-decorated function as `._probe`.
 | `function` | `Callable` | The decorated function. |
 
 ---
+
+## neuralosd.plugins
+
+The plugin contract, registry, providers and loader.
+
+### `PluginManifest`
+
+Dataclass for `neuralosd-plugin.json`: `name`, `version`, `plugin_api`,
+`kinds`, `runtime`, `entrypoint`, `command`, `permissions`, `config_schema`,
+`neuralosd` range, `integrity`, `signature`, `public_key`, `path`, `config`.
+`to_dict()` returns the manifest document.
+
+### `load_manifest(source)` / `validate_manifest(data, core_version=None)`
+
+Load from a directory/file/dict and validate schema, API version, kinds,
+runtime and the `neuralosd` range. Raises `PluginError`.
+
+### `check_compatible(manifest, core_version)`
+
+Enforce `plugin_api` and the optional version range (`>=3.7,<4`).
+
+### `tree_digest(directory)` / `signed_payload(manifest)` / `verify_signature(manifest)`
+
+Stable sha256 over the plugin code (excluding the manifest, lock and
+signature files), the signed payload `name@version:digest`, and optional
+OpenSSL detached-signature verification.
+
+### `class Registry`
+
+`add(record)`, `probes()`, `providers()`, `provider(name)`, `sources()`,
+`source(name)`, `source_owner(name)`, `backend(name)`, `backend_names()`,
+`audit_sinks()`, `policy_hooks()`, `provenance(probe)`, `menu_extra()`.
+
+### `class PluginRecord`
+
+`manifest`, `probes`, `providers`, `sources`, `backends`, `audit_sinks`,
+`policy_hooks`, and a `digest` property.
+
+### `class PluginContext`
+
+`register_probe`, `register_provider`, `register_source`, `register_backend`,
+`register_audit_sink`, `register_policy_hook`, plus `manifest`,
+`instance_dir`, `config`, `read_only`, `logger`.
+
+### `class Plugin` (optional base)
+
+`register(ctx)`, `health()`, `shutdown()`.
+
+### `neuralosd.plugins.providers`
+
+`ModelProvider`, `OllamaProvider(model, url, timeout)`,
+`OpenAICompatProvider(model, base_url, api_key, timeout)`,
+`DeterministicProvider`, `provider_from_spec("ollama:MODEL" |
+"openai:BASE:MODEL" | "deterministic")`, `fallback_from_provider(provider)`
+(validates the probe name and arguments before execution).
+
+### `neuralosd.plugins.loader`
+
+`plugin_config(instance_dir)`, `load_bundle(instance_dir, read_only=False,
+plugin_dirs=None, extra_entries=None)`, `attach_provider(inst, spec)`,
+`apply_to_instance(inst, instance_dir, model_provider=None, plugin_dirs=None)`,
+`PluginBundle`.
+
+### `neuralosd.plugins.host`
+
+`ProcessPlugin(manifest, config)` — newline-delimited JSON-RPC host with
+`init` / `probe` / `select` / `complete` / `health` / `shutdown`, a scrubbed
+environment, per-call timeout and line cap.
+
+### CLI
+
+`neuralosd plugin list|inspect|enable|disable|test|new|sources|providers|doctor|lock|install`.
+`--model-provider` on `ask`/`serve`; `--plugin-dir` on `ask`, `serve`, `init`,
+`deploy`.
 
 ## neuralosd.router
 
