@@ -41,6 +41,8 @@ class PluginManifest:
     neuralosd: Optional[str] = None
     description: str = ""
     integrity: Optional[str] = None
+    signature: Optional[str] = None
+    public_key: Optional[str] = None
     path: Optional[str] = None
     config: Dict[str, Any] = field(default_factory=dict)
 
@@ -54,6 +56,8 @@ class PluginManifest:
             "config_schema": dict(self.config_schema),
             "neuralosd": self.neuralosd, "description": self.description,
             "integrity": self.integrity,
+            "signature": self.signature,
+            "public_key": self.public_key,
         }
 
 
@@ -96,6 +100,8 @@ def validate_manifest(data: Dict[str, Any],
         neuralosd=data.get("neuralosd"),
         description=str(data.get("description") or ""),
         integrity=data.get("integrity"),
+        signature=data.get("signature"),
+        public_key=data.get("public_key"),
         path=data.get("path"))
     if core_version:
         check_compatible(manifest, core_version)
@@ -168,3 +174,83 @@ def load_manifest(source) -> PluginManifest:
     manifest = validate_manifest(data, core_version=__version__)
     manifest.path = os.path.dirname(os.path.abspath(path))
     return manifest
+
+
+# ── integrity and signatures ─────────────────────────────────────────────
+
+_DIGEST_SKIP = ("neuralosd-plugin.json", "plugins.lock", ".DS_Store")
+_DIGEST_SUFFIXES = (".sig", ".pub")
+
+
+def tree_digest(directory: str) -> str:
+    """A stable sha256 over the plugin's CODE, excluding metadata/signatures.
+
+    The manifest, lock and signature files are excluded so signing and
+    locking do not change the thing they attest.
+    """
+    import hashlib
+    h = hashlib.sha256()
+    base = os.path.abspath(directory)
+    for root, dirs, files in os.walk(base):
+        dirs[:] = sorted(d for d in dirs
+                         if d not in ("__pycache__", ".git", ".pytest_cache"))
+        for name in sorted(files):
+            if name in _DIGEST_SKIP or name.endswith(_DIGEST_SUFFIXES):
+                continue
+            path = os.path.join(root, name)
+            rel = os.path.relpath(path, base)
+            h.update(rel.encode("utf-8"))
+            with open(path, "rb") as fh:
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    h.update(chunk)
+    return "sha256:" + h.hexdigest()
+
+
+def signed_payload(manifest: PluginManifest) -> bytes:
+    digest = tree_digest(manifest.path or ".")
+    return (f"neuralosd-plugin:{manifest.name}@{manifest.version}:"
+            f"{digest}").encode()
+
+
+def verify_signature(manifest: PluginManifest) -> None:
+    """Verify an optional detached OpenSSL signature over the code digest.
+
+    Signing is optional, but a signature that is present MUST verify. The
+    command a publisher runs is documented in docs/plugins.md; it needs no
+    Python dependency, only `openssl`.
+    """
+    if not (manifest.signature or manifest.public_key):
+        return
+    import subprocess
+    import tempfile
+    if not manifest.signature or not manifest.public_key:
+        raise PluginError(
+            f"{manifest.name}: signature and public_key must be set together")
+    base = manifest.path or "."
+    sig = manifest.signature if os.path.isabs(manifest.signature) \
+        else os.path.join(base, manifest.signature)
+    pub = manifest.public_key if os.path.isabs(manifest.public_key) \
+        else os.path.join(base, manifest.public_key)
+    for path in (sig, pub):
+        if not os.path.isfile(path):
+            raise PluginError(f"{manifest.name}: signature file missing: "
+                              f"{path}")
+    with tempfile.NamedTemporaryFile(delete=False) as fh:
+        fh.write(signed_payload(manifest))
+        payload_path = fh.name
+    try:
+        proc = subprocess.run(
+            ["openssl", "dgst", "-sha256", "-verify", pub,
+             "-signature", sig, payload_path],
+            capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise PluginError(f"{manifest.name}: cannot verify signature: {exc}")
+    finally:
+        try:
+            os.unlink(payload_path)
+        except OSError:
+            pass
+    if proc.returncode != 0:
+        raise PluginError(
+            f"{manifest.name}: signature verification failed: "
+            f"{(proc.stderr or proc.stdout).strip()[:200]}")

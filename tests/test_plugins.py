@@ -396,3 +396,89 @@ def test_process_plugin_crash_raises_not_guesses(tmp_path):
         env = exc.envelope
     blob = json.dumps(env)
     assert "PluginError" in blob or "closed stdout" in blob or "exited" in blob
+
+
+# ── Phase 3: lock, integrity, signatures ─────────────────────────────────
+
+def test_lock_detects_code_change(tmp_path):
+    from neuralosd._cmd import plugin as plugin_cli
+    from neuralosd._cmd._common import load_instance
+    from neuralosd.plugins import PluginError
+
+    plug = _plugin_dir(tmp_path)
+    inst_dir = _instance_dir(tmp_path, plugins=[{"path": str(plug),
+                                                 "enabled": True}])
+
+    class Lock:
+        plugin_cmd = "lock"; instance_dir = str(inst_dir)
+    assert plugin_cli.run(Lock()) == 0
+    assert load_instance(str(inst_dir))  # locked copy loads
+    (plug / "plugin.py").write_text(PROBE_PLUGIN + "\n# changed\n",
+                                    encoding="utf-8")
+    with pytest.raises(PluginError, match="integrity"):
+        load_instance(str(inst_dir))
+
+
+def test_signed_plugin_verifies_and_tamper_fails(tmp_path):
+    import shutil
+    import subprocess
+    from neuralosd.plugins import PluginError
+    from neuralosd.plugins.manifest import signed_payload, tree_digest
+
+    if not shutil.which("openssl"):
+        pytest.skip("openssl not installed")
+    plug = _plugin_dir(tmp_path)
+    key = plug / "key.pem"
+    pub = plug / "plugin.pub"
+    sig = plug / "plugin.sig"
+    subprocess.run(["openssl", "genpkey", "-algorithm", "RSA",
+                    "-pkeyopt", "rsa_keygen_bits:2048", "-out", str(key)],
+                   check=True, capture_output=True)
+    subprocess.run(["openssl", "pkey", "-in", str(key), "-pubout",
+                    "-out", str(pub)], check=True, capture_output=True)
+    manifest = load_manifest(plug)
+    payload = plug / "payload.txt"
+    payload.write_bytes(signed_payload(manifest))
+    subprocess.run(["openssl", "dgst", "-sha256", "-sign", str(key),
+                    "-out", str(sig), str(payload)], check=True,
+                   capture_output=True)
+    payload.unlink()
+    data = json.loads((plug / "neuralosd-plugin.json").read_text(
+        encoding="utf-8"))
+    data.update({"signature": "plugin.sig", "public_key": "plugin.pub"})
+    (plug / "neuralosd-plugin.json").write_text(json.dumps(data),
+                                                encoding="utf-8")
+    inst_dir = _instance_dir(tmp_path, plugins=[{"path": str(plug),
+                                                 "enabled": True}])
+    from neuralosd._cmd._common import load_instance
+    assert load_instance(str(inst_dir))
+    (plug / "plugin.py").write_text(PROBE_PLUGIN + "\n# tampered\n",
+                                    encoding="utf-8")
+    with pytest.raises(PluginError, match="signature"):
+        load_instance(str(inst_dir))
+
+
+def test_install_verifies_declared_integrity(tmp_path, monkeypatch, capsys):
+    from neuralosd._cmd import plugin as plugin_cli
+    from neuralosd.plugins import PluginError
+    from neuralosd.plugins.manifest import tree_digest
+
+    plug = _plugin_dir(tmp_path)
+    digest = tree_digest(plug)
+    data = json.loads((plug / "neuralosd-plugin.json").read_text(
+        encoding="utf-8"))
+    data["integrity"] = digest
+    (plug / "neuralosd-plugin.json").write_text(json.dumps(data),
+                                                encoding="utf-8")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    class Install:
+        plugin_cmd = "install"; target = str(plug)
+    assert plugin_cli.run(Install()) == 0
+    capsys.readouterr()
+
+    data["integrity"] = "sha256:" + "0" * 64
+    (plug / "neuralosd-plugin.json").write_text(json.dumps(data),
+                                                encoding="utf-8")
+    assert plugin_cli.run(Install()) == 1
+    assert "integrity mismatch" in capsys.readouterr().err

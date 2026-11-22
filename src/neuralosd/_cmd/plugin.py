@@ -17,7 +17,8 @@ import shutil
 import sys
 
 from ..plugins.loader import CONFIG_NAME, LOCK_NAME, load_bundle, plugin_config
-from ..plugins.manifest import (MANIFEST_NAME, PluginError, load_manifest)
+from ..plugins.manifest import (MANIFEST_NAME, PluginError, load_manifest,
+                                tree_digest, verify_signature)
 
 
 def _write_json(path, data):
@@ -47,20 +48,6 @@ def _find_entry(config, name):
                 and os.path.basename(str(entry["path"]).rstrip("/")) == name):
             return entry
     return None
-
-
-def _tree_digest(directory):
-    h = hashlib.sha256()
-    for root, dirs, files in os.walk(directory):
-        dirs[:] = sorted(d for d in dirs if d not in ("__pycache__", ".git"))
-        for name in sorted(files):
-            path = os.path.join(root, name)
-            rel = os.path.relpath(path, directory)
-            h.update(rel.encode())
-            with open(path, "rb") as fh:
-                for chunk in iter(lambda: fh.read(1 << 20), b""):
-                    h.update(chunk)
-    return "sha256:" + h.hexdigest()
 
 
 def run(a):
@@ -236,7 +223,7 @@ def run(a):
                 manifest = load_manifest(path)
                 locked[manifest.name] = {
                     "version": manifest.version,
-                    "integrity": _tree_digest(path),
+                    "integrity": tree_digest(path),
                 }
             _write_json(os.path.join(instance_dir, LOCK_NAME),
                         {"schema": "neuralosd.plugins.lock/1",
@@ -249,16 +236,18 @@ def run(a):
             manifest = load_manifest(source)
             dest_root = os.path.expanduser("~/.neuralosd/plugins")
             dest = os.path.join(dest_root, manifest.name)
+            # Verify BEFORE touching the destination: a refused install must
+            # not leave a half-replaced plugin behind.
+            if manifest.integrity and tree_digest(source) != manifest.integrity:
+                raise PluginError(
+                    f"integrity mismatch: {tree_digest(source)} != "
+                    f"{manifest.integrity}")
+            verify_signature(manifest)
             os.makedirs(dest_root, exist_ok=True)
             if os.path.isdir(dest):
                 shutil.rmtree(dest)
             shutil.copytree(source, dest,
                             ignore=shutil.ignore_patterns("__pycache__"))
-            if manifest.integrity:
-                actual = _tree_digest(dest)
-                if actual != manifest.integrity:
-                    raise PluginError(
-                        f"integrity mismatch: {actual} != {manifest.integrity}")
             print(f"installed {manifest.name} -> {dest}")
             print(f"  enable it: neuralosd plugin enable {manifest.name} "
                   f"--instance-dir <DIR> --path {dest}")

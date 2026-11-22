@@ -13,7 +13,8 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from .api import PluginContext
-from .manifest import PluginError, PluginManifest, load_manifest
+from .manifest import (PluginError, PluginManifest, load_manifest,
+                       tree_digest, verify_signature)
 from .providers import fallback_from_provider, provider_from_spec
 from .registry import Registry
 
@@ -123,10 +124,13 @@ def _check_policy(instance_dir: str, manifest: PluginManifest) -> None:
                 raise PluginError(
                     f"{manifest.name}: locked version {locked.get('version')} "
                     f"does not match {manifest.version}")
-            if locked.get("integrity") and manifest.integrity \
-                    and locked["integrity"] != manifest.integrity:
-                raise PluginError(
-                    f"{manifest.name}: integrity does not match plugins.lock")
+            if locked.get("integrity"):
+                actual = tree_digest(manifest.path or ".")
+                if actual != locked["integrity"]:
+                    raise PluginError(
+                        f"{manifest.name}: integrity does not match "
+                        f"plugins.lock (code changed since lock)")
+    verify_signature(manifest)
 
 
 def load_bundle(instance_dir: str, read_only: bool = False,
