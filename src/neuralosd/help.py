@@ -57,9 +57,15 @@ or database URL: it profiles the source, writes a starter `probes.py` and
 `needle_menu.json`, and records the menu version. Run `ask` against the new
 directory immediately — scaffolded probes answer without an edit first.
 Use `--extra-source` to join a second source (the probes get the extra
-connection), and `--packages` when a source needs a host library.""",
-        "neuralosd init --source SRC --name NAME [--out DIR] [options]",
+connection), and `--packages` when a source needs a host library.
+`--source plugin:NAME:SPEC --plugin-dir DIR` scaffolds an instance whose
+probes come from a source plugin (the plugin must expose profile(spec) and
+probes(spec)).""",
+        "neuralosd init --source SRC --name NAME [--out DIR] "
+        "[--plugin-dir DIR] [options]",
         ["neuralosd init --source ./sales_2024.csv --name global-sales",
+         "neuralosd init --source plugin:acme:events.csv --plugin-dir ./acme "
+         "--name acme",
          "neuralosd init --source postgresql://user:pass@host/analytics "
          "--name fin --packages pandas",
          "neuralosd init --source syslog:/var/log/system.log --name syslog "
@@ -72,11 +78,15 @@ connection), and `--packages` when a source needs a host library.""",
         """Builds and starts the instance inside BoxLite or Microsandbox, with
 its data mounted read-only and the runtime sealed in a microVM. The door
 records the host port so `serve`/HTTP clients reach it without opening the
-guest. Templates clone a known-good box instead of rebuilding.""",
+guest. Templates clone a known-good box instead of rebuilding. A plugin
+backend is selected by name with `--plugin-dir`; it must implement
+deploy(instance_dir, name=..., host=..., port=...).""",
         "neuralosd deploy --instance-dir DIR --name NAME "
-        "[--backend boxlite|msb] [options]",
+        "[--backend boxlite|msb|PLUGIN] [--plugin-dir DIR] [options]",
         ["neuralosd deploy --instance-dir ./global-sales --backend boxlite "
          "--name sales-prod --port 8501",
+         "neuralosd deploy --instance-dir ./global-sales --backend fake "
+         "--plugin-dir ./my-backend --name sales-edge",
          "neuralosd deploy --instance-dir ./global-sales --name sales-2 "
          "--backend msb --from-template sales-gold",
          "neuralosd deploy --instance-dir ./global-sales --name sales-gold "

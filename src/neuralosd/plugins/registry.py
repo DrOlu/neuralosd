@@ -113,6 +113,10 @@ class Registry:
         item = self._sources.get(name)
         return item[1] if item else None
 
+    def source_owner(self, name: str):
+        item = self._sources.get(name)
+        return self.records.get(item[0]) if item else None
+
     def backend(self, name: str):
         return self._backends.get(name)
 

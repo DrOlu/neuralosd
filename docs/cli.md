@@ -32,6 +32,7 @@ Conventions used everywhere below:
 neuralosd init --source ./sales_2024.csv --name global-sales
 neuralosd init --source postgresql://user:pass@host/analytics --name fin --packages pandas
 neuralosd init --source syslog:/var/log/system.log --name syslog --header "X-Tenant: acme" --secret-ref pg_password
+neuralosd init --source plugin:acme:events.csv --plugin-dir ./acme --name acme
 ```
 
 | Flag | Purpose |
@@ -53,6 +54,7 @@ What lands in the instance dir: a **profile** of the data, **Pydantic models**, 
 neuralosd deploy --instance-dir ./global-sales --backend boxlite --name sales-prod --port 8501
 neuralosd deploy --instance-dir ./global-sales --name sales-2 --backend msb --from-template sales-gold
 neuralosd deploy --instance-dir ./global-sales --name sales-gold --save-template sales-gold --force
+neuralosd deploy --instance-dir ./global-sales --backend fake --plugin-dir ./my-backend --name sales-edge
 ```
 
 | Flag | Purpose |

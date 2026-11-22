@@ -666,6 +666,41 @@ def run(a):
     if not os.path.isfile(os.path.join(inst_dir, "probes.py")):
         raise SystemExit(f"error: {inst_dir} has no probes.py")
 
+    # Plugin backends use the same registry as the shipped ones. A plugin
+    # backend must implement deploy(instance_dir, name=..., host=..., port=...).
+    from ..plugins.loader import load_bundle
+    bundle = load_bundle(inst_dir,
+                         plugin_dirs=getattr(a, "plugin_dir", None))
+    factory = bundle.registry.backend(a.backend)
+    if factory is not None:
+        backend = factory() if isinstance(factory, type) else factory
+        available = getattr(backend, "available", None)
+        if callable(available) and not available():
+            raise SystemExit(
+                f"error: plugin backend {a.backend!r} reports unavailable")
+        deploy_fn = getattr(backend, "deploy", None)
+        if not callable(deploy_fn):
+            raise SystemExit(
+                f"error: plugin backend {a.backend!r} must implement "
+                "deploy(instance_dir, name=..., host=..., port=...)")
+        try:
+            result = deploy_fn(inst_dir, name=a.name,
+                               host=getattr(a, "bind", "127.0.0.1"),
+                               port=a.port)
+            if hasattr(result, "__await__"):
+                import asyncio
+                result = asyncio.run(result)
+        except Exception as exc:  # noqa: BLE001
+            raise SystemExit(f"deploy failed: {exc}")
+        if isinstance(result, dict):
+            print(json.dumps(result, indent=2, default=str))
+            door = result.get("url") or result.get("door")
+            if door:
+                print(f"  host door : {door}")
+        print(f"deployed '{a.name}' ({a.backend}); "
+              f"service on port {a.port}")
+        return 0
+
     avail = available_backends()
     if not avail.get(a.backend):
         raise SystemExit(

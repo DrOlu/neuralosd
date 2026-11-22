@@ -552,3 +552,85 @@ def test_audit_sink_receives_rows_and_hook_can_refuse(tmp_path):
         encoding="utf-8").splitlines()]
     assert len(rows) >= 2
     assert any(r.get("probe") == "rows" for r in rows)
+
+
+# ── init --source plugin / deploy --backend plugin ───────────────────────
+
+SOURCE_PLUGIN = '''\
+from neuralosd import probe
+
+
+class Tickets:
+    def profile(self, spec):
+        return {"kind": "tickets", "rows": int(spec or 0)}
+
+    def probes(self, spec):
+        @probe(description="Ticket count", triggers=["ticket count"])
+        def ticket_count():
+            return {"tickets": int(spec or 0)}
+        return [ticket_count]
+
+
+def register(ctx):
+    ctx.register_source("tickets", Tickets())
+'''
+
+BACKEND_PLUGIN = '''\
+class FakeBackend:
+    def deploy(self, instance_dir, *, name, host, port):
+        return {"backend": "fake", "name": name, "url": f"http://{host}:{port}",
+                "instance_dir": instance_dir}
+
+    @staticmethod
+    def available():
+        return True
+
+
+def register(ctx):
+    ctx.register_backend("fake", FakeBackend)
+'''
+
+
+def test_init_from_a_plugin_source(tmp_path, capsys):
+    from types import SimpleNamespace
+    from neuralosd._cmd import init as init_cmd
+    from neuralosd._cmd._common import load_instance
+
+    plug = _plugin_dir(tmp_path, "tickets", SOURCE_PLUGIN, kinds=("source",))
+    out = tmp_path / "tickets-inst"
+    a = SimpleNamespace(source="plugin:tickets:7", out=str(out),
+                        name="tickets", plugin_dir=[str(plug)],
+                        extra_source=None)
+    assert init_cmd.run(a) == 0
+    assert (out / "probes.py").is_file()
+    assert (out / "plugins.json").is_file()
+    inst = load_instance(str(out))
+    env = inst.ask("ticket count")
+    assert env["probe"] == "ticket_count"
+    assert env["results"][0]["tickets"] == 7
+
+
+def test_init_plugin_source_requires_a_loaded_source(tmp_path):
+    from types import SimpleNamespace
+    from neuralosd._cmd import init as init_cmd
+
+    a = SimpleNamespace(source="plugin:nope:1", out=str(tmp_path / "x"),
+                        name="x", plugin_dir=[], extra_source=None)
+    with pytest.raises(SystemExit, match="no plugin source"):
+        init_cmd.run(a)
+
+
+def test_deploy_uses_a_plugin_backend(tmp_path, capsys):
+    from types import SimpleNamespace
+    from neuralosd._cmd import deploy
+
+    plug = _plugin_dir(tmp_path, "fake-backend", BACKEND_PLUGIN,
+                       kinds=("backend",))
+    inst_dir = _instance_dir(tmp_path)
+    a = SimpleNamespace(instance_dir=str(inst_dir), backend="fake",
+                        name="box1", port=8899, bind="127.0.0.1",
+                        plugin_dir=[str(plug)])
+    assert deploy.run(a) == 0
+    text = capsys.readouterr().out
+    assert "http://127.0.0.1:8899" in text
+    assert "deployed 'box1'" in text

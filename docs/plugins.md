@@ -151,6 +151,54 @@ The process gets a scrubbed environment, a working directory inside the
 plugin, a per-call timeout and a 4 MiB line cap. A crash or timeout becomes an
 execution error; the core keeps serving its own probes.
 
+
+## Sources and `init`
+
+A source plugin turns `init` into a plugin-driven scaffold. It must expose:
+
+```python
+class Tickets:
+    def profile(self, spec):      # optional: validate/metadata
+        return {"kind": "tickets", "rows": 7}
+    def probes(self, spec):       # required: @probe functions for this spec
+        return [ticket_count]
+
+def register(ctx):
+    ctx.register_source("tickets", Tickets())
+```
+
+```sh
+neuralosd init --source plugin:tickets:7 --plugin-dir ./tickets \
+  --name tickets --out ./tickets-inst
+neuralosd ask --instance-dir ./tickets-inst "ticket count"
+```
+
+The generated instance saves `plugins.json`, `source.json` and a `probes.py`
+that loads the plugin and calls `probes(spec)` at load time; data access stays
+in the plugin.
+
+## Backends and `deploy`
+
+A backend plugin registers a factory whose object implements:
+
+```python
+class MyBackend:
+    def deploy(self, instance_dir, *, name, host, port):
+        return {"url": f"http://{host}:{port}", "name": name}
+    @staticmethod
+    def available():
+        return True
+```
+
+```sh
+neuralosd deploy --instance-dir ./sales --backend my-backend \
+  --plugin-dir ./my-backend --name sales-edge --port 8501
+```
+
+`deploy` resolves the name through the registry, checks `available()`, and
+calls `deploy(...)`; a returned `url`/`door` is printed. The backend owns its
+isolation, lifecycle and door semantics.
+
 ## Integrity, lock and signatures
 
 ```sh

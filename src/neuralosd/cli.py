@@ -106,7 +106,9 @@ def build_parser():
     p_init.add_argument("--secret-ref", default=None,
                         help="credential REFERENCE: env:VAR | scrt:<store>:<key>"
                              " | op:<vault>/<item>/<field> — never the secret")
-    p_init.add_argument("--source", required=True, help="Data source (CSV, DB DSN, JSON, log, API URL)")
+    p_init.add_argument("--source", required=True, help="Data source (CSV, DB DSN, JSON, log, API URL, plugin:NAME:SPEC)")
+    p_init.add_argument("--plugin-dir", action="append", default=None,
+                        help="plugin directory for plugin: sources (repeatable)")
     p_init.add_argument("--name", required=True)
     p_init.add_argument("--out", help="Output dir (default: ./<name>)")
     p_init.add_argument("--packages", default="", help="Extra pip packages")
@@ -115,7 +117,10 @@ def build_parser():
     p_deploy = sub.add_parser("deploy", help="Deploy into a sandbox")
     p_deploy.add_argument("--instance-dir", required=True)
     p_deploy.add_argument("--name", required=True)
-    p_deploy.add_argument("--backend", choices=["boxlite", "msb"], default="boxlite")
+    p_deploy.add_argument("--backend", default="boxlite",
+                          help="boxlite, msb, or a plugin backend")
+    p_deploy.add_argument("--plugin-dir", action="append", default=None,
+                          help="load a plugin directory (repeatable)")
     p_deploy.add_argument("--port", type=int, default=8877)
     p_deploy.add_argument("--packages", default="pydantic")
     p_deploy.add_argument("--bind", default="127.0.0.1",
