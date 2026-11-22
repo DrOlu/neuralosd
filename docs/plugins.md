@@ -173,7 +173,8 @@ neuralosd init --source plugin:tickets:7 --plugin-dir ./tickets \
 neuralosd ask --instance-dir ./tickets-inst "ticket count"
 ```
 
-The generated instance saves `plugins.json`, `source.json` and a `probes.py`
+The generated instance saves `plugins.json` (no allow list, so a later
+backend/sink can be added), `source.json` and a `probes.py`
 that loads the plugin and calls `probes(spec)` at load time; data access stays
 in the plugin.
 

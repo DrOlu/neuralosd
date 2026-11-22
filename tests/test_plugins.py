@@ -604,6 +604,8 @@ def test_init_from_a_plugin_source(tmp_path, capsys):
     assert init_cmd.run(a) == 0
     assert (out / "probes.py").is_file()
     assert (out / "plugins.json").is_file()
+    cfg = json.loads((out / "plugins.json").read_text(encoding="utf-8"))
+    assert "allow" not in cfg   # a later backend/sink must not be forbidden
     inst = load_instance(str(out))
     env = inst.ask("ticket count")
     assert env["probe"] == "ticket_count"

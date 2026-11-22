@@ -109,8 +109,9 @@ def _init_from_source_plugin(a, src, out):
         entry["entrypoint"] = record.manifest.entrypoint
     with open(os.path.join(out, "plugins.json"), "w",
               encoding="utf-8") as fh:
-        json.dump({"plugins": [entry], "allow": [name],
-                   "model_provider": None}, fh, indent=2)
+        # Do NOT write an allow list here: it would silently forbid a
+        # backend/sink the operator adds later with --plugin-dir.
+        json.dump({"plugins": [entry], "model_provider": None}, fh, indent=2)
         fh.write("\n")
     with open(os.path.join(out, "source.json"), "w", encoding="utf-8") as fh:
         json.dump({"plugin": name, "spec": spec,
