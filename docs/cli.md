@@ -1,6 +1,6 @@
 # CLI reference — every subcommand
 
-`neuralosd` ships **42 top-level subcommands**, a `mesh` group with **20 subcommands**, and a `door` group with **3 subcommands**. This page is the complete reference: one entry per command, its key flags, and a runnable example. For guided tutorials see [usage](usage.md); for the Python/HTTP API see [reference](reference.md); for end-to-end recipes see the [cookbook](cookbook.md).
+`neuralosd` ships **43 top-level subcommands**, a `mesh` group with **20 subcommands**, and a `door` group with **3 subcommands**. This page is the complete reference: one entry per command, its key flags, and a runnable example. For guided tutorials see [usage](usage.md); for the Python/HTTP API see [reference](reference.md); for end-to-end recipes see the [cookbook](cookbook.md).
 
 Conventions used everywhere below:
 
@@ -18,6 +18,7 @@ Conventions used everywhere below:
 | **Verify & observe** | `golden` · `truth` · `invariants` · `calibrate` · `lint` · `openapi` · `diff` · `slo` · `fleet` · `badge` · `doctor` · `audit` |
 | **Act & watch** | `actuate` · `watch` · `roles` · `scrub` |
 | **Plasma (EDR)** | `plasma` (`catalog`/`init`/`probes`/`call`/`plan`/`apply`/`pending`/`health`) |
+| **Plugins** | `plugin` (`list`/`inspect`/`enable`/`disable`/`test`/`new`/`sources`/`providers`/`doctor`/`lock`/`install`) |
 | **Mesh (Synapse)** | `mesh serve` · `register` · `discover` · `agents` · `ask` · `delegate` · `send` · `task-create/status/cancel/retry` · `mailbox` · `trust` · `setup` · `gossip-push` · `gossip-pull` · `preflight` · `gaps` · `verify` · `health` |
 | **Meta** | `docs` · `version` · `update` · `help` |
 
@@ -505,6 +506,33 @@ neuralosd plasma apply plp_0123456789ab --root .plasma
 | `apply` | Execute a recorded plan once (Plasma's `--apply --plan`) |
 | `pending` | List containment decisions awaiting approval |
 | `health` | Plasma health verdict |
+
+---
+
+## Plugins
+
+Plugins add probes, sources, model providers, sandbox backends and audit
+sinks without forking the core. Full guide: [Plugins](plugins.md).
+
+```sh
+neuralosd plugin new acme --kind probes --out ./acme
+neuralosd plugin test ./acme
+neuralosd plugin enable acme --instance-dir ./sales --path ./acme
+neuralosd ask --instance-dir ./sales --model-provider ollama:llama3.1 "…"
+neuralosd plugin lock --instance-dir ./sales
+```
+
+| Subcommand | Purpose |
+|---|---|
+| `list` | Enabled + installed plugins |
+| `inspect` | Validate and print a manifest |
+| `enable` / `disable` | Edit the instance's plugins.json |
+| `test` | Load a plugin and report what it registered |
+| `new` | Scaffold a probe pack or provider |
+| `sources` / `providers` | List registered sources / model providers |
+| `doctor` | Check every enabled plugin |
+| `lock` | Pin versions and code digests |
+| `install` | Verify integrity/signature, then install |
 
 ---
 

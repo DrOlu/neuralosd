@@ -152,6 +152,20 @@ neuralosd plasma apply plp_0123456789ab --root .plasma
 No shell, no arbitrary execution, and the model is never in the action
 path. See [Plasma EDR](docs/plasma.md).
 
+**Plugins, without forking the core.** Probe packs, data sources, model
+providers (on-device, Ollama, OpenAI-compatible), sandbox backends and audit
+sinks share one versioned manifest and registry. A provider may only name a
+probe already in the menu; the gate, signed envelope and audit chain stay
+core-owned.
+
+```sh
+neuralosd plugin new acme --kind probes --out ./acme
+neuralosd plugin enable acme --instance-dir ./sales --path ./acme
+neuralosd ask --instance-dir ./sales --model-provider ollama:llama3.1 "…"
+```
+
+See [Plugins](docs/plugins.md).
+
 ## Two sandbox backends
 
 | Backend | Install | Best for |

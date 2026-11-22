@@ -482,3 +482,25 @@ def test_install_verifies_declared_integrity(tmp_path, monkeypatch, capsys):
                                                 encoding="utf-8")
     assert plugin_cli.run(Install()) == 1
     assert "integrity mismatch" in capsys.readouterr().err
+
+
+# ── Phase 4: shipped example and docs ────────────────────────────────────
+
+def test_shipped_example_plugin_loads_and_answers(tmp_path):
+    from neuralosd._cmd._common import load_instance
+
+    example = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "examples", "plugins", "hello-probe")
+    inst_dir = _instance_dir(tmp_path, plugins=[{"path": example,
+                                                 "enabled": True}])
+    inst = load_instance(str(inst_dir))
+    env = inst.ask("hello plugin")
+    assert env["probe"] == "hello_hello"
+    assert env["results"][0]["hello"].startswith("from the hello plugin")
+
+
+def test_plugin_docs_exist():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    assert os.path.isfile(os.path.join(root, "docs", "plugins.md"))
+    mkdocs = open(os.path.join(root, "mkdocs.yml"), encoding="utf-8").read()
+    assert "plugins.md" in mkdocs

@@ -1,0 +1,12 @@
+{
+  "schema": "neuralosd.plugin/1",
+  "name": "hello",
+  "version": "1.0.0",
+  "plugin_api": "1",
+  "neuralosd": ">=3.6,<4",
+  "kinds": ["probes"],
+  "runtime": "inprocess",
+  "entrypoint": "plugin:register",
+  "description": "Minimal probe pack: one answerable question.",
+  "permissions": {}
+}
