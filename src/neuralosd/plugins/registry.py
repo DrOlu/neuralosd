@@ -121,8 +121,9 @@ class Registry:
         if not owner:
             return None
         record = self.records[owner]
-        return {"plugin": record.name, "version": record.manifest.version,
-                "digest": record.digest}
+        return {"plugin": record.name,
+                "plugin_version": record.manifest.version,
+                "plugin_digest": record.digest}
 
     def menu_extra(self) -> List[Dict[str, str]]:
         """Plugin identity goes into menu_version, so caches and signed

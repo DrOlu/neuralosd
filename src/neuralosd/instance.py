@@ -76,7 +76,17 @@ class Instance:
             pii_mask=pii_mask, ttl=ttl, name=name,
             config_dir=self.state_dir,
         )
+        self.plugins = None          # set by the plugin loader
+        self.plugin_provenance = {}
         self._synthesize_birth_traps()
+
+    def add_probes(self, probes, provenance=None):
+        """Append plugin probes and rebuild the router's derived menu state."""
+        probes = list(probes)
+        if not probes:
+            return
+        self.probes.extend(probes)
+        self.router.add_probes(probes, provenance=provenance)
 
     def _synthesize_birth_traps(self):
         """Every registered probe gets its misuse trap in the bank at birth

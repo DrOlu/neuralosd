@@ -28,7 +28,7 @@ def test_every_parser_has_a_catalogue_entry(parser):
     top = set(_subparsers(parser).choices)
     assert top == set(H.TOPICS)
     for group, table in (("mesh", H.MESH), ("door", H.DOORS),
-                         ("plasma", H.PLASMA)):
+                         ("plasma", H.PLASMA), ("plugin", H.PLUGIN)):
         gp = _subparsers(parser).choices[group]
         assert set(_subparsers(gp).choices) == set(table)
 
@@ -53,7 +53,7 @@ def test_examples_are_runnable_and_name_real_commands(parser):
                                                  "--help"), (topic, ex)
             if argv[1] not in top:
                 continue
-            if argv[1] in ("mesh", "door", "plasma"):
+            if argv[1] in ("mesh", "door", "plasma", "plugin"):
                 assert len(argv) > 2, (topic, ex)
                 assert argv[2] in _subparsers(top[argv[1]]).choices, (topic, ex)
             for ch in argv[2:]:
@@ -65,7 +65,7 @@ def _all_entries():
     for name, entry in H.TOPICS.items():
         yield name, entry
     for group, table in (("mesh", H.MESH), ("door", H.DOORS),
-                         ("plasma", H.PLASMA)):
+                         ("plasma", H.PLASMA), ("plugin", H.PLUGIN)):
         for name, entry in table.items():
             yield "%s.%s" % (group, name), entry
 
@@ -94,7 +94,7 @@ def test_help_pages_render_description_and_examples(parser):
         assert "Examples:" in text, name
         assert entry["examples"][0] in text, name
         assert "Exit codes:" in text, name
-    for group in ("mesh", "door", "plasma"):
+    for group in ("mesh", "door", "plasma", "plugin"):
         subchoices = _subparsers(top.choices[group])
         for name, sub in subchoices.choices.items():
             text = sub.format_help()

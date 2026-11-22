@@ -15,8 +15,11 @@ def run(a):
         print(json.dumps(env, indent=2, ensure_ascii=False, default=str))
         return 0 if env.get("results") not in (None, [], {}) else 2
 
-    inst = load_instance(a.instance_dir, with_model=getattr(a, "model", False),
-                         role=getattr(a, "role", None))
+    inst = load_instance(
+        a.instance_dir, with_model=getattr(a, "model", False),
+        role=getattr(a, "role", None),
+        model_provider=getattr(a, "model_provider", None),
+        plugin_dirs=getattr(a, "plugin_dir", None))
     if getattr(a, "strict", False):
         # Refuse an answer that would have dropped a filter the user named,
         # rather than returning it with a `discarded` ledger.

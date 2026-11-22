@@ -152,6 +152,12 @@ def build_parser():
     p_ask.add_argument("--role", default=None,
                        help="answer AS this role (acl.json controls the "
                             "probe allow-list and row filters)")
+    p_ask.add_argument("--model-provider", default=None,
+                       help="routing fallback provider: deterministic | "
+                            "ollama[:MODEL] | openai:BASE_URL:MODEL")
+    p_ask.add_argument("--plugin-dir", action="append", default=None,
+                       help="load a plugin directory for this call "
+                            "(repeatable)")
     p_ask.add_argument("question", nargs="+")
 
     # serve
@@ -193,6 +199,11 @@ def build_parser():
     p_serve.add_argument("--allow-mesh", action="store_true",
                          help="enable the mesh discover/preflight/delegate "
                               "endpoints (outward network; off by default)")
+    p_serve.add_argument("--model-provider", default=None,
+                         help="routing fallback provider: deterministic | "
+                              "ollama[:MODEL] | openai:BASE_URL:MODEL")
+    p_serve.add_argument("--plugin-dir", action="append", default=None,
+                         help="load a plugin directory (repeatable)")
     p_serve.add_argument("--quiet", action="store_true")
     p_serve.add_argument("--host", default="127.0.0.1",
                          help="Bind address (default 127.0.0.1). A "
@@ -818,6 +829,50 @@ def build_parser():
     _pl_common(p_plh)
     p_plh.add_argument("--json", action="store_true")
 
+    # plugin — discover, enable, test and lock plugins
+    p_plugin = sub.add_parser(
+        "plugin", help="Discover, enable, test and lock plugins")
+    plugin_sub = p_plugin.add_subparsers(dest="plugin_cmd")
+
+    p_pgl = plugin_sub.add_parser("list", help="List plugins")
+    p_pgl.add_argument("--instance-dir", default=None)
+    p_pgl.add_argument("--json", action="store_true")
+
+    p_pgi = plugin_sub.add_parser("inspect", help="Show a plugin manifest")
+    p_pgi.add_argument("target")
+
+    p_pge = plugin_sub.add_parser("enable", help="Enable a plugin for an instance")
+    p_pge.add_argument("name")
+    p_pge.add_argument("--instance-dir", required=True)
+    p_pge.add_argument("--path", required=True)
+
+    p_pgd = plugin_sub.add_parser("disable", help="Disable a plugin")
+    p_pgd.add_argument("name")
+    p_pgd.add_argument("--instance-dir", required=True)
+
+    p_pgt = plugin_sub.add_parser("test", help="Load and validate a plugin")
+    p_pgt.add_argument("target")
+
+    p_pgn = plugin_sub.add_parser("new", help="Scaffold a plugin")
+    p_pgn.add_argument("name")
+    p_pgn.add_argument("--out", default=None)
+    p_pgn.add_argument("--kind", default="probes",
+                       choices=["probes", "model_provider"])
+
+    p_pgs = plugin_sub.add_parser("sources", help="List registered sources")
+    p_pgs.add_argument("--instance-dir", default=None)
+
+    plugin_sub.add_parser("providers", help="List model providers")
+
+    p_pgdoc = plugin_sub.add_parser("doctor", help="Check enabled plugins")
+    p_pgdoc.add_argument("--instance-dir", required=True)
+
+    p_pglock = plugin_sub.add_parser("lock", help="Pin plugin versions/digests")
+    p_pglock.add_argument("--instance-dir", required=True)
+
+    p_pgin = plugin_sub.add_parser("install", help="Install a plugin locally")
+    p_pgin.add_argument("target")
+
     # help — detailed catalogue, per command or machine-readable
     p_help = sub.add_parser(
         "help", help="Detailed help for every command, with examples")
@@ -988,6 +1043,9 @@ def main():
     elif a.command == "plasma":
         from ._cmd import plasma as plasma_cmd
         raise SystemExit(plasma_cmd.run(a))
+    elif a.command == "plugin":
+        from ._cmd import plugin as plugin_cmd
+        raise SystemExit(plugin_cmd.run(a))
     elif a.command == "help":
         from . import help as _help
         raise SystemExit(_help.run(a))

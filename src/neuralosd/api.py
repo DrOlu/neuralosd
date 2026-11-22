@@ -1555,7 +1555,7 @@ def serve_api(instance_dirs, host="127.0.0.1", port=9998, api_keys=None,
               timeout=300, max_body=MAX_BODY, max_output=MAX_OUTPUT,
               audit=True, plan_ttl=86400, quiet=False, with_model=False,
               strict=False, allow_mesh=False, mesh_transport=None,
-              states=None):
+              states=None, model_provider=None, plugin_dirs=None):
     """Load the instances and serve the API. Blocks."""
     from ._cmd._common import load_instance
 
@@ -1570,7 +1570,9 @@ def serve_api(instance_dirs, host="127.0.0.1", port=9998, api_keys=None,
                     f"error: two instances share the name {name!r}; "
                     f"use distinct directory names")
             names.add(name)
-            inst = load_instance(path, with_model=with_model)
+            inst = load_instance(path, with_model=with_model,
+                                 model_provider=model_provider,
+                                 plugin_dirs=plugin_dirs)
             if strict:
                 inst.router.strict_discards = True
             states.append(ApiState(name, path, inst))

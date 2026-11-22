@@ -105,6 +105,24 @@ Subcommands: catalog, init, probes, call, plan, apply, pending, health.""",
         safety="`apply` executes a previously recorded plan-gated command.",
         see=["init", "ask", "actuate"]),
 
+    "plugin": _t(
+        "Discover, enable, test and lock plugins.",
+        """A plugin adds capabilities without forking the core: probe packs,
+data sources, model providers (on-device, Ollama, OpenAI-compatible),
+sandbox backends and audit sinks. Plugins are enabled per instance in
+`plugins.json`; the gate, signed envelope and audit chain stay core-owned.
+Subcommands: list, inspect, enable, disable, test, new, sources, providers,
+doctor, lock, install.""",
+        "neuralosd plugin {list|inspect|enable|disable|test|new|sources|"
+        "providers|doctor|lock|install} [options]",
+        ["neuralosd plugin list --instance-dir ./sales",
+         "neuralosd plugin new acme --kind probes --out ./acme",
+         "neuralosd plugin test ./acme",
+         "neuralosd plugin enable acme --instance-dir ./sales --path ./acme"],
+        exits="0 ok; 1 invalid/broken plugin; 2 bad arguments",
+        safety="`enable`, `install` and `lock` write files; serving stays read-only.",
+        see=["ask", "serve", "init"]),
+
     "mesh": _t(
         "Talk to other neuralOSd peers over the Synapse A2A mesh.",
         """Serve an instance's capabilities to peers, discover who can answer a
@@ -945,6 +963,104 @@ PLASMA = {
 }
 
 
+PLUGIN = {
+    "list": _t(
+        "List enabled and installed plugins.",
+        "Shows the plugins enabled for an instance (`plugins.json`) and the "
+        "entry points installed in this Python environment.",
+        "neuralosd plugin list [--instance-dir DIR] [--json]",
+        ["neuralosd plugin list",
+         "neuralosd plugin list --instance-dir ./sales --json"],
+        exits="0 printed",
+        see=["plugin.inspect"]),
+    "inspect": _t(
+        "Show a plugin manifest.",
+        "Validates and prints the manifest of a plugin directory or "
+        "`neuralosd-plugin.json` file.",
+        "neuralosd plugin inspect PATH",
+        ["neuralosd plugin inspect ./acme"],
+        exits="0 printed; 1 invalid manifest",
+        see=["plugin.test"]),
+    "enable": _t(
+        "Enable a plugin for one instance.",
+        "Adds or updates the plugin in the instance's `plugins.json`, with "
+        "its path and config. A broken enabled plugin fails loudly.",
+        "neuralosd plugin enable NAME --instance-dir DIR --path PLUGIN_DIR",
+        ["neuralosd plugin enable acme --instance-dir ./sales --path ./acme"],
+        exits="0 enabled; 1 invalid plugin",
+        safety="Writes the instance plugins.json.",
+        see=["plugin.disable"], mutates=True),
+    "disable": _t(
+        "Disable a plugin for one instance.",
+        "Marks the plugin disabled in `plugins.json` (the ledger of what was "
+        "enabled is preserved).",
+        "neuralosd plugin disable NAME --instance-dir DIR",
+        ["neuralosd plugin disable acme --instance-dir ./sales"],
+        exits="0 disabled; 1 unknown plugin",
+        safety="Writes the instance plugins.json.",
+        see=["plugin.enable"], mutates=True),
+    "test": _t(
+        "Load and validate a plugin.",
+        "Validates the manifest, imports the plugin, runs its registration "
+        "and reports the probes/providers/sources/backends it registered.",
+        "neuralosd plugin test PLUGIN_DIR",
+        ["neuralosd plugin test ./acme"],
+        exits="0 valid; 1 invalid/broken",
+        see=["plugin.inspect"]),
+    "new": _t(
+        "Scaffold a new plugin.",
+        "Creates a manifest and a working `plugin.py` for a probe pack or a "
+        "model provider.",
+        "neuralosd plugin new NAME [--kind probes|model_provider] [--out DIR]",
+        ["neuralosd plugin new acme --kind probes --out ./acme",
+         "neuralosd plugin new local-llm --kind model_provider --out ./local-llm"],
+        exits="0 created; 1 write failure",
+        safety="Writes files in --out.",
+        see=["plugin.test"], mutates=True),
+    "sources": _t(
+        "List registered data sources.",
+        "Lists source plugins enabled for an instance.",
+        "neuralosd plugin sources [--instance-dir DIR]",
+        ["neuralosd plugin sources --instance-dir ./sales"],
+        exits="0 printed",
+        see=["init"]),
+    "providers": _t(
+        "List model providers.",
+        "Lists the built-in routing providers: deterministic, ollama and "
+        "OpenAI-compatible.",
+        "neuralosd plugin providers",
+        ["neuralosd plugin providers"],
+        exits="0 printed",
+        see=["ask"]),
+    "doctor": _t(
+        "Check the plugins enabled for an instance.",
+        "Loads every enabled plugin and reports probes, providers and "
+        "backends, failing on a broken plugin.",
+        "neuralosd plugin doctor --instance-dir DIR",
+        ["neuralosd plugin doctor --instance-dir ./sales"],
+        exits="0 healthy; 1 a plugin failed to load",
+        see=["doctor"]),
+    "lock": _t(
+        "Pin plugin versions and digests.",
+        "Writes `plugins.lock` with each enabled plugin's version and a "
+        "sha256 tree digest; the loader refuses a mismatch.",
+        "neuralosd plugin lock --instance-dir DIR",
+        ["neuralosd plugin lock --instance-dir ./sales"],
+        exits="0 locked; 1 invalid plugin",
+        safety="Writes plugins.lock.",
+        see=["plugin.list"], mutates=True),
+    "install": _t(
+        "Install a plugin into the local plugin directory.",
+        "Copies a plugin directory to ~/.neuralosd/plugins/NAME, verifies the "
+        "manifest integrity when present, and prints the enable command.",
+        "neuralosd plugin install PLUGIN_DIR",
+        ["neuralosd plugin install ./acme"],
+        exits="0 installed; 1 invalid/integrity mismatch",
+        safety="Writes to ~/.neuralosd/plugins.",
+        see=["plugin.enable"], mutates=True),
+}
+
+
 DOORS = {
     "list": _t(
         "List deployed doors.", "Shows every recorded door: name, backend, "
@@ -978,7 +1094,8 @@ def lookup(topic):
         return TOPICS[topic]
     if "." in topic:
         group, name = topic.split(".", 1)
-        table = {"mesh": MESH, "door": DOORS, "plasma": PLASMA}.get(group)
+        table = {"mesh": MESH, "door": DOORS, "plasma": PLASMA,
+                 "plugin": PLUGIN}.get(group)
         if table and name in table:
             return table[name]
     return None
@@ -1057,6 +1174,7 @@ def render_index(stream=None):
                               "badge", "doctor", "audit"]),
         ("Act & watch", ["actuate", "watch", "roles", "scrub"]),
         ("Plasma (EDR)", ["plasma"]),
+        ("Plugins", ["plugin"]),
         ("Mesh (Synapse)", ["mesh"]),
         ("Meta", ["docs", "version", "update", "help"]),
     ]
@@ -1166,7 +1284,7 @@ def catalogue(parser=None):
             item["flags"] = _flags(p)
         doc["commands"][name] = item
     for group, table in (("mesh", MESH), ("door", DOORS),
-                        ("plasma", PLASMA)):
+                        ("plasma", PLASMA), ("plugin", PLUGIN)):
         group_doc = {"summary": TOPICS[group]["summary"], "commands": {}}
         gp = choices.get(group)
         subchoices = {}

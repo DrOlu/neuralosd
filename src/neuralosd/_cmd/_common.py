@@ -3,7 +3,7 @@ import importlib.util
 import json
 import os
 import sys
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 # Every directory an instance was EVER loaded from (this process). A probe
@@ -198,7 +198,9 @@ def _mothballed_names(instance_dir):
 def load_instance(instance_dir: str, with_model: bool = False,
                   router_overrides: Optional[Dict[str, Any]] = None,
                   role: Optional[str] = None,
-                  observations_override=None):
+                  observations_override=None,
+                  model_provider: Optional[str] = None,
+                  plugin_dirs: Optional[List[str]] = None):
     """Load an :class:`~neuralosd.instance.Instance` from a directory.
 
     Resolution order:
@@ -237,7 +239,12 @@ def load_instance(instance_dir: str, with_model: bool = False,
             # instance (the chinook layout), which carries the same declaration
             # in JSON instead of in @probe decorators.
             if os.path.isfile(os.path.join(instance_dir, "needle_menu.json")):
-                return _load_menu_instance(instance_dir, with_model)
+                inst = _load_menu_instance(instance_dir, with_model)
+                from ..plugins.loader import apply_to_instance
+                apply_to_instance(inst, instance_dir,
+                                  model_provider=model_provider,
+                                  plugin_dirs=plugin_dirs)
+                return inst
             raise SystemExit(
                 f"error: no probes.py or needle_menu.json found in {instance_dir}\n"
                 "hint: create one with `neuralosd init --source <file> --name <n>`"
@@ -303,6 +310,10 @@ def load_instance(instance_dir: str, with_model: bool = False,
     for key, value in (router_overrides or {}).items():
         if hasattr(inst.router, key):
             setattr(inst.router, key, value)
+
+    from ..plugins.loader import apply_to_instance
+    apply_to_instance(inst, instance_dir, model_provider=model_provider,
+                      plugin_dirs=plugin_dirs)
     return inst
 
 

@@ -41,6 +41,8 @@ def run(a):
         with_model=bool(getattr(a, "model", False)),
         strict=bool(getattr(a, "strict", False)),
         allow_mesh=bool(getattr(a, "allow_mesh", False)),
+        model_provider=getattr(a, "model_provider", None),
+        plugin_dirs=getattr(a, "plugin_dir", None),
     )
 
 

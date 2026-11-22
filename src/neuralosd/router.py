@@ -280,6 +280,27 @@ REFUSAL_REASONS = frozenset({
 #   serve    — a /ask served over HTTP (multi-instance + service)
 _AUDIT_SOURCE: ContextVar = ContextVar("neuralosd_audit_source", default=None)
 
+# Which plugin a probe/call belongs to. Set around plugin execution so every
+# audit row names the plugin, its version and its digest.
+_PLUGIN_CONTEXT: ContextVar = ContextVar("neuralosd_plugin", default=None)
+
+
+class plugin_context:
+    """Stamp audit rows written inside the block with plugin provenance."""
+
+    def __init__(self, plugin: str, version: str = "", digest: str = ""):
+        self._value = {"plugin": plugin, "plugin_version": version,
+                       "plugin_digest": digest}
+        self._token = None
+
+    def __enter__(self):
+        self._token = _PLUGIN_CONTEXT.set(self._value)
+        return self._value
+
+    def __exit__(self, *exc):
+        _PLUGIN_CONTEXT.reset(self._token)
+        return False
+
 # Which ledger rows are written to. Request-scoped, so a self-test replay in
 # one thread cannot divert a concurrent USER ask into the self-test file.
 _AUDIT_FILE: ContextVar = ContextVar("neuralosd_audit_file", default=None)
@@ -842,6 +863,8 @@ class Router:
         self.confirm_store = None
         self.ttl = ttl
         self.name = name
+        self.config_dir = config_dir
+        self.plugin_provenance = {}
         # When True, an answer that would have dropped a filter the user named
         # is refused instead of returned. Off by default so existing callers
         # keep working; the ledger is still always present in the envelope.
@@ -887,6 +910,41 @@ class Router:
         # item has one) raises the answer above plain execution. Loaded once;
         # a missing/malformed bank simply leaves every answer at `execution`.
         self._load_verification_banks(config_dir)
+
+    def add_probes(self, extra, provenance=None):
+        """Register plugin probes after construction.
+
+        Menus are built once in __init__; plugins arrive after the instance
+        module is imported. The duplicate-name rule still applies, and every
+        derived structure (vocab, action vocab, menu version, filter vocab,
+        verification banks) is recomputed so routing sees a coherent menu.
+        """
+        added = []
+        for fn in extra:
+            meta = getattr(fn, "_probe", None)
+            if meta is None:
+                raise ValueError("plugin object is not a @probe")
+            if meta.name in self.by_name:
+                raise ValueError(f"duplicate probe name from plugin: {meta.name}")
+            self.probes.append(fn)
+            self.metas.append(meta)
+            self.by_name[meta.name] = fn
+            if provenance and meta.name in provenance:
+                self.plugin_provenance[meta.name] = provenance[meta.name]
+            added.append(fn)
+        if not added:
+            return
+        self._vocab = {m.name: m._vocab_tokens() for m in self.metas
+                       if hasattr(m, "_vocab_tokens")}
+        self._menu_vocab = frozenset().union(*self._vocab.values()) \
+            if self._vocab else frozenset()
+        self._action_vocab = frozenset().union(*(
+            tokens(" ".join(m.triggers or []))
+            | tokens(m.name.replace("_", " "))
+            for m in self.metas)) if self.metas else frozenset()
+        self.menu_version = self._menu_version()
+        self._filter_vocab = self._build_filter_vocab()
+        self._load_verification_banks(self.config_dir)
 
     def _load_verification_banks(self, config_dir):
         self.golden_index = {}
@@ -1479,7 +1537,10 @@ class Router:
         # Agent attribution is additive: the row's own keys win, so a caller
         # can never overwrite question/probe/refusal by supplying a field.
         fields = _AUDIT_FIELDS.get() or {}
-        rec = {**fields, **rec, "source": rec.get("source") or src}
+        provenance = (self.plugin_provenance.get(rec.get("probe"))
+                      or _PLUGIN_CONTEXT.get() or {})
+        rec = {**provenance, **fields, **rec,
+               "source": rec.get("source") or src}
         try:
             rec = self._for_storage(rec)
             ledger = _AUDIT_FILE.get() or self.audit_file
