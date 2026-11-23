@@ -3,7 +3,7 @@
   "components": {
     "neuralos": "3.10.2",
     "boxlite": "0.14.1",
-    "microsandbox": "0.7.16",
+    "microsandbox": "0.8.1",
     "pydantic": "2.14.4",
     "pymysql": "1.2.4",
     "openpyxl": "3.1.5",
