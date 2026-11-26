@@ -6,4 +6,4 @@ from .client import (  # noqa: F401
     RefusalError,
     TransportError,
 )
-__version__ = "3.7.3"
+__version__ = "3.7.4"
